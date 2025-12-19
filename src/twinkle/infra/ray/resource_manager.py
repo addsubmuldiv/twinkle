@@ -1,10 +1,10 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
-# Some code borrowed from ROLL: https://github.com/alibaba/ROLL
-import ast
 import math
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
+import ray
+from ray.util.placement_group import PlacementGroup
 
 
 @dataclass
@@ -19,11 +19,7 @@ def get_node_rank():
 
 class ResourceManager:
 
-    possible_keys = ['nproc_per_node', 'nnodes']
-
     def __init__(self, groups: Dict[str, Any]):
-        import ray
-        from ray.util.placement_group import PlacementGroup
         nproc_per_node = int(groups['nproc_per_node'])
         device_types = set([group['device'].upper()
                             for group in groups.values() if hasattr(group, '__getitem__')]) - {'CPU'}

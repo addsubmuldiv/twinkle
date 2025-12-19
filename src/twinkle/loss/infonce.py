@@ -35,7 +35,7 @@ class InfoNCELoss(Loss):
         self.include_dd = include_dd
 
     @staticmethod
-    def _parse_multi_negative_sentences(sentences, labels, hard_negatives=None):
+    def parse_multi_negative_sentences(sentences, labels, hard_negatives=None):
         split_indices = torch.nonzero(labels, as_tuple=False).squeeze().tolist()
         if isinstance(split_indices, int):
             split_indices = [split_indices]
@@ -244,7 +244,7 @@ class InfoNCELoss(Loss):
         # split tensors into single sample
         # Example: batch_size=2 with tensor anchor(1)+positive(1)+negatives(3) + anchor(1)+positive(1)+negatives(2)
         # labels will be [1,0,0,0,1,0,0], meaning 1 positive, 3 negatives, 1 positive, 2 negatives
-        split_tensors = self._parse_multi_negative_sentences(logits, labels, self.hard_negatives)
+        split_tensors = self.parse_multi_negative_sentences(logits, labels, self.hard_negatives)
         can_batched = self.hard_negatives is not None
         if self.hard_negatives is None and len(set([s.shape[0] for s in split_tensors])) == 1:
             # all tensors have the same batch size

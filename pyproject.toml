@@ -28,6 +28,8 @@ sphinx-copybutton = {optional = true}
 sphinx-rtd-theme = {optional = true}
 sphinx_markdown_tables = {optional = true}
 sphinxcontrib-mermaid = {optional = true}
+sklearn = {optional = true}
+scipy = {optional = true}
 
 [tool.poetry.extras]
 transformers = ["accelerate", "peft", "transformers", "safetensors", "torch", "torchvision"]

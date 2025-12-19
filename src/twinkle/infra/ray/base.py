@@ -1,22 +1,14 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
-import argparse
 import functools
 import inspect
 import os
 from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar, Union
 
-import json
 import numpy as np
 
 from .resource_manager import ResourceManager
 
 T = TypeVar('T')
-
-
-def get_args():
-    parser = argparse.ArgumentParser()
-    _, unknown = parser.parse_known_args()
-    return json.dumps(unknown)
 
 
 class RayHelper:
