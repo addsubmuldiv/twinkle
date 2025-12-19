@@ -5,8 +5,7 @@ from ..utils import torch as torch_util, framework as framework_util
 from ..utils import exists
 
 
-kernel_mapping = {
-
+torch_kernel_mapping = {
 }
 
 
@@ -37,8 +36,8 @@ def apply_kernel(module: Any,
 def apply_kernel_torch(module: Any,
                      kernel: "Optional[Union[str, Callable, 'torch.nn.Module']]",
                      target_modules: Union[str, List[str]]):
-    if kernel in kernel_mapping:
-        kernel = kernel_mapping[kernel]
+    if kernel in torch_kernel_mapping:
+        kernel = torch_kernel_mapping[kernel]
 
     kernel_fn = kernel
     import torch

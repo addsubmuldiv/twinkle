@@ -3,12 +3,12 @@ from .utils.import_utils import _LazyModule # noqa
 
 if TYPE_CHECKING:
     from .version import __version__, __release_datetime__
-    from .utils import framework, torch, requires, exists
+    from .utils import framework_util, torch_util, requires, exists
 
 else:
     _import_structure = {
         'version': ['__release_datetime__', '__version__'],
-        'utils': ['framework', 'torch', 'requires'],
+        'utils': ['framework_util', 'torch_util', 'requires'],
     }
 
     import sys
