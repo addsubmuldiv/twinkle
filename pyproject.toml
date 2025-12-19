@@ -1,0 +1,38 @@
+[tool.poetry.dependencies]
+python = "^3.11"
+datasets = "^3.0"
+binpacking = "*"
+importlib_metadata = "*"
+numpy = "*"
+omegaconf = "*"
+accelerate = {optional = true}
+peft = {version = "^0.11.0", optional = true}
+pillow = {optional = true}
+rouge = {optional = true}
+safetensors = {optional = true}
+scipy = {optional = true}
+sentencepiece = {optional = true}
+ray = {optional = true}
+transformers = {optional = true}
+megatron-core = {version = "^0.12.0", optional = true}
+torch = {version = "^2.0.0", optional = true}
+torchvision = {optional = true}
+deepspeed = {optional = true}
+ray = {optional = true}
+sphinx = {version = "^5.3.0", optional = true}
+docutils = {version = "^0.16.0", optional = true}
+myst_parser = {optional = true}
+recommonmark = {optional = true}
+sphinx-book-theme = {optional = true}
+sphinx-copybutton = {optional = true}
+sphinx-rtd-theme = {optional = true}
+sphinx_markdown_tables = {optional = true}
+sphinxcontrib-mermaid = {optional = true}
+
+[tool.poetry.extras]
+transformers = ["accelerate", "peft", "transformers", "safetensors", "torch", "torchvision"]
+megatron = ["megatron-core"]
+ray = ["ray"]
+docs = ["sphinx", "docutils", "myst_parser", "recommonmark", "sphinx-book-theme", "sphinx-copybutton", "sphinx-rtd-theme", "sphinx_markdown_tables", "sphinxcontrib-mermaid"]
+
+
