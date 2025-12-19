@@ -1,0 +1,22 @@
+from typing import TYPE_CHECKING
+from .utils.import_utils import _LazyModule # noqa
+
+if TYPE_CHECKING:
+    from .version import __version__, __release_datetime__
+    from .utils import framework, torch, requires, exists
+
+else:
+    _import_structure = {
+        'version': ['__release_datetime__', '__version__'],
+        'utils': ['framework', 'torch', 'requires'],
+    }
+
+    import sys
+
+    sys.modules[__name__] = _LazyModule(
+        __name__,
+        globals()['__file__'],
+        _import_structure,
+        module_spec=__spec__, # noqa
+        extra_objects={},
+    )
