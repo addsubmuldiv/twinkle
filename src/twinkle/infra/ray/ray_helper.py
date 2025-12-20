@@ -4,6 +4,8 @@ import inspect
 import os
 from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar, Union
 
+from .. import DeviceGroup
+from ...utils import requires
 import numpy as np
 
 from .resource_manager import ResourceManager
@@ -12,6 +14,7 @@ T = TypeVar('T')
 
 
 class RayHelper:
+
     resource_manager: Optional[ResourceManager] = None
 
     worker_cls: Dict = {}
@@ -20,13 +23,12 @@ class RayHelper:
 
     initialized = False
 
-    device_groups: Dict[str, Any] = None
-
     @staticmethod
-    def initialize(device_groups: Dict[str, Any]):
+    def initialize(nproc_per_node: int, device_groups: List[DeviceGroup]):
         """Initialize RayHelper.
 
         Args:
+            nproc_per_node: How many devices in one node.
             device_groups: The device groups to initialize.
 
         Returns:
@@ -34,12 +36,14 @@ class RayHelper:
         """
         if RayHelper.ray_inited():
             return
+
+        requires('ray')
         import ray
         RayHelper.device_groups = device_groups
         ray.init()
         if RayHelper.resource_manager is None:
-            # Resource manager initialize only once in the pipeline process.
-            RayHelper.resource_manager = ResourceManager(device_groups)
+            # Resource manager initializes only once in the pipeline process.
+            RayHelper.resource_manager = ResourceManager(nproc_per_node, device_groups)
 
     @staticmethod
     def teardown():
