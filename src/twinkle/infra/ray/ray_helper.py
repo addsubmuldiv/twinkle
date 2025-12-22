@@ -2,7 +2,7 @@
 import functools
 import inspect
 import os
-from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar, Union, Type
 
 from .. import DeviceGroup
 from ...utils import requires
@@ -50,6 +50,35 @@ class RayHelper:
         if RayHelper.resource_manager is not None:
             RayHelper.resource_manager.destroy_placement_group()
             RayHelper.resource_manager = None
+
+    @staticmethod
+    def wrap(component: Type[T]) -> Type[T]:
+        requires('ray')
+        import ray
+        _component = ray.remote(component)
+
+        class WrappedComponent:
+
+            def __init__(self, *args, **kwargs):
+                self._actor = _component.remote(*args, **kwargs)
+
+            def __getattr__(self, name):
+                attr = getattr(self._actor, name)
+
+                if callable(attr):
+                    @functools.wraps(attr)
+                    def wrapper(*args, **kwargs):
+                        return ray.get(attr.remote(*args, **kwargs))
+
+                    return wrapper
+                return attr
+
+            @property
+            def actor(self):
+                return self._actor
+
+        return WrappedComponent
+
 
     @staticmethod
     def is_called_from_init():
