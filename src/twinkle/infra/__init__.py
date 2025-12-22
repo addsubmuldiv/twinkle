@@ -1,11 +1,17 @@
 import functools
-from typing import Literal, List, Optional
-from typing import Type, TypeVar, Tuple, overload
+import os
+from typing import Literal, List, Optional, Union, Callable
+from typing import TypeVar
+
+import numpy as np
 
 from .device_group import DeviceGroup
-from ..utils import requires
+from ..utils import requires, framework_util
 
 _mode: Optional[Literal['local', 'ray']] = 'local'
+
+if os.environ.get('TWINKLE_MODE', 'local') == 'ray':
+    _mode = 'ray'
 
 _nproc_per_node: Optional[int] = 8
 
@@ -33,67 +39,159 @@ def _get_remote_component(component):
     return _remote_components[component]
 
 
+def get_workers(workers, execute):
+    if execute == 'first':
+        return [workers[0]]
+    elif execute == 'all':
+        return workers
+    elif execute == 'peer':
+
+        def get_peer_index(target_size):
+            rank = framework_util.get_rank()
+            world_size = framework_util.get_world_size()
+
+            k, m = divmod(target_size, world_size)
+            start_idx = rank * k + min(rank, m)
+            end_idx = (rank + 1) * k + min(rank + 1, m)
+            if target_size < world_size:
+                start_idx = rank % target_size
+                end_idx = start_idx + 1
+
+            return slice(start_idx, end_idx)
+        return workers[get_peer_index(len(workers))]
+    else:
+        raise ValueError(f'Unsupported execute method: {execute}')
+
+
+def collect_func(method: Union[Literal['none', 'flatten'], Callable], result):
+    if not result:
+        return result
+    if isinstance(result[0], tuple):
+        output = []
+        for i in range(len(result[0])):
+            _single_result = [r[i] for r in result]
+            output.append(collect_func(method, _single_result))
+        return output
+    if method == 'none':
+        return result
+    elif method == 'flatten':
+        flatten = [item for sublist in result for item in sublist]
+        if isinstance(result[0], np.ndarray):
+            return np.array(flatten)
+        return type(result[0])(flatten)
+    elif isinstance(method, Callable):
+        # Callable
+        return method(result)
+    else:
+        raise ValueError(f'Unsupported collect method: {method}')
+
+
+def dispatch_args(workers, dispatch, execute, args, kwargs):
+
+    length = len(workers)
+    if execute == 'first':
+        return [(workers[0], args, kwargs)]
+    elif dispatch == 'all':
+        return [(worker, args, kwargs) for worker in workers]
+    elif dispatch == 'slice':
+        result = []
+
+        def dispatch_func(arg, n):
+            if isinstance(arg, list):
+                k, m = divmod(len(arg), n)
+                return [arg[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
+            else:
+                return [arg] * n
+
+        args = [dispatch_func(arg, length) for arg in args]
+        kwargs = {k: dispatch_func(v, length) for k, v in kwargs.items()}
+        for i in range(length):
+            sliced_args = tuple(arg[i] for arg in args)
+            sliced_kwargs = {k: v[i] for k, v in kwargs.items()}
+            if (sliced_args and sliced_args[0]) or (kwargs and list(kwargs.values())):
+                result.append((workers[i], sliced_args, sliced_kwargs))
+
+        return result
+    elif isinstance(dispatch, Callable):
+        # dispatch is Callable
+        result = []
+        for i in range(length):
+            sliced_args, sliced_kwargs = dispatch(length, i, *args, **kwargs)
+            result.append((workers[i], sliced_args, sliced_kwargs))
+        return result
+    else:
+        raise ValueError(f'Unsupported dispatch method: {dispatch}')
+
+
 T1 = TypeVar('T1', bound=object)
-T2 = TypeVar('T2', bound=object)
-T3 = TypeVar('T3', bound=object)
-T4 = TypeVar('T4', bound=object)
-T5 = TypeVar('T5', bound=object)
-
-@overload
-def prepare(__c1: Type[T1], /) -> Tuple[Type[T1]]: ...
-
-@overload
-def prepare(__c1: Type[T1], __c2: Type[T2], /) -> Tuple[Type[T1], Type[T2]]: ...
-
-@overload
-def prepare(__c1: Type[T1], __c2: Type[T2], __c3: Type[T3], /) -> Tuple[Type[T1], Type[T2], Type[T3]]: ...
-
-@overload
-def prepare(__c1: Type[T1], __c2: Type[T2], __c3: Type[T3], __c4: Type[T4], /) -> Tuple[Type[T1], Type[T2], Type[T3], Type[T4]]: ...
-
-@overload
-def prepare(__c1: Type[T1], __c2: Type[T2], __c3: Type[T3], __c4: Type[T4], __c5: Type[T5], /) -> Tuple[Type[T1], Type[T2], Type[T3], Type[T4], Type[T5]]: ...
-
-def prepare(*components, group_name: Optional[str]=None):
-    _output = []
-    for component in components:
-        _output.append(prepare_one(component, group_name=group_name))
-    return tuple(_output)
 
 
-def prepare_one(component: Type[T1], group_name: Optional[str]=None) -> Type[T1]:
+def remote_class(group: Optional[str]=None):
 
-    class WrappedComponent:
+    def decorator(cls):
+        if _mode == 'local':
+            return cls
+        elif _mode == 'ray':
+            from .ray import RayHelper
 
-        def __init__(self, *args, **kwargs):
+            cls.decorated = True
+            init_method = cls.__init__
+
+            @functools.wraps(init_method)
+            def new_init(self, *args, **kwargs):
+                if os.environ.get('CLUSTER_NAME') == group:
+                    init_method(self, *args, **kwargs)
+                else:
+                    # Create remote workers
+                    _actors = RayHelper.create_workers(cls, group, *args, **kwargs)
+                    self._actors = _actors
+            cls.__init__ = new_init
+
+            return cls
+        else:
+            raise ValueError(f'Unsupported mode: {_mode}')
+
+    return decorator
+
+
+def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice',
+             execute: Literal['first', 'peer', 'all'] = 'all',
+             collect: Union[Literal['none', 'flatten'], Callable] = 'none'):
+    """Remote execution function.
+
+    Args:
+        dispatch: How to dispatch the arguments.
+            'slice': load balance
+            'all': all processes do the same thing
+            Callable: A callable that handles the dispatching
+        execute: How to execute
+            'first': Only first worker
+            'peer': Only peer workers
+            'all': All processes
+        collect: How to collect the results.
+            'none': Return as-is
+            'flatten': Return a flattened list
+            Callable: A callable that handles the collection
+    Returns:
+        The execution result.
+    """
+
+    def decorator(func: Callable[..., T1]) -> Callable[..., T1]:
+
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs) -> T1:
             if _mode == 'local':
-                self._actor = component(*args, **kwargs)
+                return func(*args, **kwargs)
             elif _mode == 'ray':
                 import ray
                 from .ray import RayHelper
-                RayHelper.initialize(_nproc_per_node, device_groups=_device_group)
-                self._actor = RayHelper.create_workers(_get_remote_component(self._actor), group_name, *args, **kwargs)
+                _workers_and_args = dispatch_args(get_workers(self._actors, execute), dispatch,
+                                                    execute, args, kwargs)
+                result = RayHelper.execute_all_sync(func.__name__, _workers_and_args)
+                return collect_func(collect, result)
             else:
                 raise NotImplementedError(f'Unsupported mode {_mode}')
 
-        def __getattr__(self, name):
-            if _mode == 'local':
-                return getattr(self._actor, name)
-            elif _mode == 'ray':
-                attr = getattr(self._actor[0], name)
-                if callable(attr):
-                    @functools.wraps(attr)
-                    def wrapper(*args, **kwargs):
-                        import ray
-                        from .ray import RayHelper
-                        return RayHelper.execute_all_sync(self._actor, dispatch=, execute=, method_name=name, *args, **kwargs)
-                    return wrapper
-                return attr
-            else:
-                raise NotImplementedError(f'Unsupported mode {_mode}')
+        return wrapper
 
-        @property
-        def actor(self):
-            return self._actor
-
-    return WrappedComponent
+    return decorator
