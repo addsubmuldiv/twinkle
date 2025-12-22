@@ -1,27 +1,32 @@
+import functools
 from typing import Literal, List, Optional
 from typing import Type, TypeVar, Tuple, overload
 
 from .device_group import DeviceGroup
+from .. import requires
 
-_mode: Optional[Literal['local', 'ray', 'remote']] = None
-
-_library: Optional[Literal['transformers', 'megatron', 'other']] = None
+_mode: Optional[Literal['local', 'ray', 'remote']] = 'local'
 
 _device_group: Optional[List[DeviceGroup]] = None
 
-_inited = False
+_remote_components: dict = {}
 
 
 def initialize(mode: Literal['local', 'ray', 'remote'],
-               library: Literal['transformers', 'megatron', 'other'],
                groups: Optional[List[DeviceGroup]] = None,):
-    global _mode, _library, _device_group, _inited
+    global _mode, _device_group
     assert mode in ('local', 'ray', 'remote')
-    assert library in ('transformers', 'megatron', 'other')
     _mode = mode
-    _library = library
+    if _mode == 'ray':
+        requires('ray')
     _device_group = groups
-    _inited = True
+
+
+def _get_remote_component(component):
+    if component not in _remote_components:
+        import ray
+        _remote_components[component] = ray.remote(component)
+    return _remote_components[component]
 
 
 T1 = TypeVar('T1', bound=object)
@@ -45,24 +50,46 @@ def prepare(__c1: Type[T1], __c2: Type[T2], __c3: Type[T3], __c4: Type[T4], /) -
 @overload
 def prepare(__c1: Type[T1], __c2: Type[T2], __c3: Type[T3], __c4: Type[T4], __c5: Type[T5], /) -> Tuple[Type[T1], Type[T2], Type[T3], Type[T4], Type[T5]]: ...
 
-def prepare(*components):
-    if not _inited:
-        raise AssertionError("initialize() must be called before prepare()")
+def prepare(*components, group_name: Optional[str]=None):
     _output = []
     for component in components:
-        _output.append(prepare_one(component))
-    return _output
+        _output.append(prepare_one(component, group_name=group_name))
+    return tuple(_output)
 
 
-def prepare_one(component: Type[T1]) -> Type[T1]:
-    if not _inited:
-        raise AssertionError("initialize() must be called before prepare()")
-    if _mode == 'local':
-        return component
-    elif _mode == 'ray':
-        from .ray import RayHelper
-        return RayHelper.wrap(component)
-    elif _mode == 'remote':
-        raise ValueError(f'Remote mode is not supported with twinkle, use `twinkle-client instead.`')
-    else:
-        raise ValueError(f'Unknown mode "{_mode}"')
+def prepare_one(component: Type[T1], group_name: Optional[str]=None) -> Type[T1]:
+
+    class WrappedComponent:
+
+        def __init__(self, *args, **kwargs):
+            if _mode == 'local':
+                self._actor = component(*args, **kwargs)
+            elif _mode == 'ray':
+                import ray
+                from .ray import RayHelper
+                self._actor = RayHelper.create_workers(self._actor, group_name, *args, **kwargs)
+            else:
+                raise NotImplementedError(f'Unsupported mode {_mode}')
+
+        def __getattr__(self, name):
+            attr = getattr(self._actor, name)
+
+            if callable(attr):
+                @functools.wraps(attr)
+                def wrapper(*args, **kwargs):
+                    if _mode == 'local':
+                        return attr(*args, **kwargs)
+                    elif _mode == 'ray':
+                        import ray
+                        return ray.get(attr.remote(*args, **kwargs))
+                    else:
+                        raise NotImplementedError(f'Unsupported mode {_mode}')
+
+                return wrapper
+            return attr
+
+        @property
+        def actor(self):
+            return self._actor
+
+    return WrappedComponent

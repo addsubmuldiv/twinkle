@@ -109,7 +109,17 @@ class ResourceManager:
                     global_cpu_proc_idx += 1
                 self.device_groups[group.name] = local_device_groups
 
-        self.groups = groups
+        self.group_configs = groups
+
+    def get_config(self, group: str):
+        for config in self.group_configs:
+            if config.name == group:
+                return config
+        assert False, f'No group {group} found in group list: {[group.name for group in self.group_configs]}'
+
+    def get_group(self, group: str):
+        assert group in self.device_groups, f'No group {group} found in group list: {[group.name for group in self.group_configs]}'
+        return self.device_groups[group]
 
     def destroy_placement_group(self):
         import ray

@@ -1,11 +1,26 @@
 import twinkle
+from twinkle.infra import DeviceGroup
 
-twinkle.initialize(mode='local',
-                   library='transformers')
+device_groups = [
+    DeviceGroup(
+        name='actor',
+        ranks=list(range(0, 4)),
+        device_type='GPU',
+    ),
+    DeviceGroup(
+        name='rollout',
+        ranks=list(range(4, 6)),
+        device_type='GPU',
+    ),
+    DeviceGroup(
+        name='ref',
+        ranks=list(range(6, 8)),
+        device_type='GPU',
+    ),
+]
 
 
-def create_sampler():
-    rollout = twinkle.sampler.create()
+twinkle.initialize(mode='local', groups=device_groups)
 
 
 def create_model(model_id):
@@ -15,3 +30,5 @@ def create_model(model_id):
 
 
 def train():
+    dataset =
+    rollout = twinkle.sampler.create()

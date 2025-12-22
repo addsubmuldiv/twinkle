@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Literal, Union
 from functools import lru_cache
 
+from .platform import Platform
+
 
 class Framework(ABC):
 
@@ -161,9 +163,11 @@ class Torch(Framework):
             local_rank = max(0, Torch.get_local_rank())
         local_rank = str(local_rank)
         if Torch.is_gpu_available():
-            device = 'cuda:{}'.format(local_rank)
+            from .platform import GPU
+            device = f'{GPU.device_prefix()}:{local_rank}'
         elif Torch.is_npu_available():
-            device = 'npu:{}'.format(local_rank)
+            from .platform import NPU
+            device = f'{NPU.device_prefix()}:{local_rank}'
         else:
             device = 'cpu'
         return device
