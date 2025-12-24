@@ -8,7 +8,7 @@ from ..template import Template
 
 class VLLMSampler(Sampler):
 
-    def __init__(self, engine_args: Dict[str, Any], template: Type[Template], remote_group):
+    def __init__(self, model_id: str, engine_args: Dict[str, Any], template: Type[Template], remote_group):
         super().__init__()
         requires('vllm')
         from vllm import LLMEngine, EngineArgs
@@ -17,12 +17,12 @@ class VLLMSampler(Sampler):
         self.engine = LLMEngine.from_vllm_config(
             vllm_config=vllm_config,
         )
-        self.template = template_type()
+        self.template = template(model_id)
 
     def sample(self, trajectories: List[Trajectory]) -> List[Trajectory]:
         request_ids = []
         for trajectory in trajectories:
-            input_ids = self.template(trajectory)
+            input_ids = self.template.encode(trajectory)
             request_id = str(uuid.uuid4().hex)
             request_ids.append(request_id)
             llm_inputs = {'prompt_token_ids': input_ids}

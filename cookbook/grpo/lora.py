@@ -1,7 +1,8 @@
 import twinkle
 from twinkle.infra import DeviceGroup
 from twinkle.model import TransformersModel
-from twinkle.dataset import Dataset
+from twinkle.dataset import Dataset, DatasetMeta
+from twinkle.processor import CompetitionMathProcessor
 from twinkle.sampler import VLLMSampler
 from twinkle.dataloader import DataLoader
 from twinkle.template import Qwen3Template
@@ -30,13 +31,9 @@ device_groups = [
 twinkle.initialize(mode='local', groups=device_groups)
 
 
-def preprocess(row):
-    return row
-
-
 def create_dataset():
-    dataset = Dataset('ms://swift/self-cognition')
-    dataset.map(preprocess)
+    dataset = Dataset(DatasetMeta('ms://modelscope/competition_math'))
+    dataset.map(CompetitionMathProcessor)
     return dataset
 
 
