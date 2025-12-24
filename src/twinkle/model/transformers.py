@@ -77,10 +77,14 @@ class TransformersModel(PreTrainedModel):
 
     @remote_function()
     def set_optimizer(self, optimizer_cls: Union[Type[Optimizer], str]):
+        if isinstance(optimizer_cls, str):
+            optimizer_cls = Plugin.load_plugin(optimizer_cls, Optimizer)
         self.optimizer = optimizer_cls()
 
     @remote_function()
     def set_lr_scheduler(self, scheduler_cls: Union[Type[LRScheduler], str]):
+        if isinstance(scheduler_cls, str):
+            scheduler_cls = Plugin.load_plugin(scheduler_cls, LRScheduler)
         self.lr_scheduler = scheduler_cls()
 
     def save_state(self):
