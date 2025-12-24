@@ -1,23 +1,30 @@
-from typing import Literal
+from typing import overload, Type, Optional
 
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, PretrainedConfig
 
 from twinkle import remote_class
 
 
-class Transformers:
-
-
 @remote_class()
-class AutoModelForCausalLM:
+class TransformersModel(PreTrainedModel):
 
-    def __init__(self, *, task_type: Literal['causal_lm'] = 'causal_lm', pretrained_model_name_or_path, **kwargs):
-        from transformers import AutoModelForCausalLM as AutoModelForCausalLMTF
-        self.model = AutoModelForCausalLMTF.from_pretrained(**kwargs)
+    @overload
+    def __init__(self, *, model_cls: Type[PreTrainedModel], config: PretrainedConfig, remote_group, **kwargs) -> None:
+        ...
 
-    def __getattr__(self, name):
-        return getattr(self._model, name)
+    @overload
+    def __init__(self, *, pretrained_model_name_or_path: str, config: Optional[PretrainedConfig] = None, **kwargs) -> None:
+        ...
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs) -> PreTrainedModel:
-        raise NotImplementedError('Transformers does not implement from_pretrained')
+    def __init__(self, # noqa
+                 model_cls: Optional[Type[PreTrainedModel]] = None,
+                 pretrained_model_name_or_path: Optional[str] = None,
+                 config: Optional[PretrainedConfig] = None,
+                 **kwargs):
+        if pretrained_model_name_or_path is None:
+            self.model = model_cls(config, **kwargs)
+        elif model_cls :
+            self.model = model_cls.from_pretrained(pretrained_model_name_or_path, config=config, **kwargs)
+
+    def forward(self, *, input_ids, **kwargs):
+        self.model(input_ids, **kwargs)

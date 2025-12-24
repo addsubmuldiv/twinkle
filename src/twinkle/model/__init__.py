@@ -1,2 +1,2 @@
 
-from .transformers import Transformers
+from .transformers import TransformersModel

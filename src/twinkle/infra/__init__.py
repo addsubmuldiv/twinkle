@@ -184,34 +184,34 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
     return decorator
 
 
-def remote_cls_constructor():
-
-    def decorator(func: Callable[..., T1]) -> Callable[..., T1]:
-
-        @functools.wraps(func)
-        def wrapper(cls, *args, **kwargs) -> T1:
-            if _mode == 'local':
-                return func(*args, **kwargs)
-            elif _mode == 'ray':
-                from .ray import RayHelper
-                frame = inspect.currentframe().f_back
-                caller_file = frame.f_code.co_filename
-                caller_line = frame.f_lineno
-                instance_id = f"{caller_file}:{caller_line}"
-                remote_group = kwargs.pop('remote_group', None)
-                if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
-                    self = func(*args, **kwargs)
-                else:
-                    # Create remote workers
-                    _actors = RayHelper.create_workers(func, remote_group, 'peer', instance_id=instance_id, *args, **kwargs) # noqa
-                    self = cls.__new__(cls)
-                    self._actors = _actors
-                self.remote_group = remote_group
-                self._instance_id = instance_id
-                return self
-            else:
-                raise NotImplementedError(f'Unsupported mode {_mode}')
-
-        return wrapper
-
-    return decorator
+# def remote_class_constructor():
+#
+#     def decorator(func: Callable[..., T1]) -> Callable[..., T1]:
+#
+#         @functools.wraps(func)
+#         def wrapper(cls, *args, **kwargs) -> T1:
+#             if _mode == 'local':
+#                 return func(*args, **kwargs)
+#             elif _mode == 'ray':
+#                 from .ray import RayHelper
+#                 frame = inspect.currentframe().f_back
+#                 caller_file = frame.f_code.co_filename
+#                 caller_line = frame.f_lineno
+#                 instance_id = f"{caller_file}:{caller_line}"
+#                 remote_group = kwargs.pop('remote_group', None)
+#                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
+#                     self = func(*args, **kwargs)
+#                 else:
+#                     # Create remote workers
+#                     _actors = RayHelper.create_workers(func, remote_group, 'peer', instance_id=instance_id, *args, **kwargs) # noqa
+#                     self = cls.__new__(cls)
+#                     self._actors = _actors
+#                 self.remote_group = remote_group
+#                 self._instance_id = instance_id
+#                 return self
+#             else:
+#                 raise NotImplementedError(f'Unsupported mode {_mode}')
+#
+#         return wrapper
+#
+#     return decorator
