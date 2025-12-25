@@ -5,9 +5,10 @@ from datasets import interleave_datasets, concatenate_datasets
 from torch.utils.data import Dataset as TorchDataset
 from typing import Callable, Type, Union
 from collections.abc import Iterable
-from ..hub import MSHub, HFHub
-from ..infra import remote_class, remote_function
-from ..preprocessor import DataProcessor, DataFilter
+import twinkle
+from twinkle.hub import MSHub, HFHub
+from twinkle.infra import remote_class, remote_function
+from twinkle.preprocessor import Preprocessor, DataFilter
 
 
 @dataclass
@@ -25,7 +26,7 @@ class DatasetMeta:
 @remote_class()
 class Dataset(TorchDataset):
 
-    def __init__(self, dataset_meta: DatasetMeta, remote_group, **kwargs):
+    def __init__(self, dataset_meta: DatasetMeta, **kwargs):
         dataset = self._load_dataset(dataset_meta, **kwargs)
         self.datasets = {
             dataset_meta.get_id(): dataset
@@ -53,13 +54,12 @@ class Dataset(TorchDataset):
         return dataset
 
     @remote_function(dispatch='all')
-    def map(self, preprocess_func: Union[Callable, str, Type[Preprocessor]], dataset_meta: DatasetMeta = None) -> None:
-        if isinstance(preprocess_func, DataProcessor):
+    def map(self, preprocess_func: Union[Callable, str, Type[Preprocessor]], dataset_meta: DatasetMeta = None, **kwargs) -> None:
+        if isinstance(preprocess_func, Preprocessor):
             preprocess_func = preprocess_func()
         elif isinstance(preprocess_func, str):
-            processor_module = Preprocessor.__module__
-            if hasattr(processor_module, preprocess_func):
-                preprocess_func = getattr(processor_module, preprocess_func)
+            if hasattr(twinkle.preprocessor, preprocess_func):
+                preprocess_func = getattr(twinkle.preprocessor, preprocess_func)()
             else:
                 raise ValueError(f'Preprocessor {preprocess_func} not found.')
         if dataset_meta is None:
@@ -67,16 +67,15 @@ class Dataset(TorchDataset):
             key = next(iter(self.datasets.keys()))
         else:
             key = dataset_meta.get_id()
-        self.datasets[key] = self.datasets[key].map(preprocess_func)
+        self.datasets[key] = self.datasets[key].map(preprocess_func, **kwargs)
 
     @remote_function(dispatch='all')
-    def filter(self, filter_func: Union[Callable, str, Type[DataFilter]], dataset_meta: DatasetMeta = None) -> None:
+    def filter(self, filter_func: Union[Callable, str, Type[DataFilter]], dataset_meta: DatasetMeta = None, **kwargs) -> None:
         if isinstance(filter_func, DataFilter):
             filter_func = filter_func()
         elif isinstance(filter_func, str):
-            processor_module = DataProcessor.__module__
-            if hasattr(processor_module, filter_func):
-                filter_func = getattr(processor_module, filter_func)
+            if hasattr(twinkle.preprocessor, filter_func):
+                filter_func = getattr(twinkle.preprocessor, filter_func)
             else:
                 raise ValueError(f'Filter {filter_func} not found.')
         if dataset_meta is None:
@@ -84,7 +83,7 @@ class Dataset(TorchDataset):
             key = next(iter(self.datasets.keys()))
         else:
             key = dataset_meta.get_id()
-        self.datasets[key] = self.datasets[key].filter(filter_func)
+        self.datasets[key] = self.datasets[key].filter(filter_func, **kwargs)
 
     @remote_function(dispatch='all')
     def add_dataset(self,

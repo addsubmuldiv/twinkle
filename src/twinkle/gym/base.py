@@ -1,8 +1,8 @@
 
 
-class Env:
+class Gym:
 
-    def __init__(self, dataset_id):
+    def __init__(self):
         pass
 
     def step(self):

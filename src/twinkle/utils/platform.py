@@ -1,7 +1,7 @@
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
 from typing import Type, Optional
-
+from typing import Union, List
 import numpy
 
 
@@ -38,6 +38,14 @@ class DeviceMesh:
     @property
     def ep_rank(self) -> int:
         return 0
+
+
+@dataclass
+class DeviceGroup:
+
+    name: str
+    ranks: Union[List[int], int]
+    device_type: str
 
 
 class Platform(ABC):

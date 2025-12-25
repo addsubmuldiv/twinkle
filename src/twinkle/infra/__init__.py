@@ -6,10 +6,10 @@ from typing import TypeVar
 
 import numpy as np
 
-from .device_group import DeviceGroup
+from twinkle import DeviceGroup
 from .ray import RayHelper
-from ..utils import requires, framework_util
-from ..utils.unsafe import check_unsafe
+from twinkle import requires, framework_util
+from twinkle import check_unsafe
 
 T1 = TypeVar('T1', bound=object)
 
@@ -219,10 +219,11 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                 return func(*args, **kwargs)
             elif _mode == 'ray':
                 from .ray import RayHelper
+                args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
                 _workers_and_args = dispatch_args(get_workers(self._actors, execute), dispatch,
                                                     execute, args, kwargs)
-                result = RayHelper.execute_all_sync(func.__name__, _workers_and_args)
-                return collect_func(collect, result)
+                result = RayHelper.execute_all_async(func.__name__, _workers_and_args)
+                return RayHelper.do_get_and_collect_func(collect_func, collect, result)
             else:
                 raise NotImplementedError(f'Unsupported mode {_mode}')
 

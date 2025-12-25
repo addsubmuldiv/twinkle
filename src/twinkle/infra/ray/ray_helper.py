@@ -1,11 +1,13 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 import os
-from typing import Dict, List, Optional, TypeVar, Type, Tuple, Any, Literal
+from typing import Dict, List, Optional, TypeVar, Type, Tuple, Any, Literal, Callable, Union
+
+import ray
 
 from .resource_manager import ResourceManager
-from .. import DeviceGroup
-from ...utils import Platform, find_node_ip, find_free_port
-from ...utils import requires, framework_util
+from twinkle import DeviceGroup
+from twinkle import Platform, find_node_ip, find_free_port
+from twinkle import requires, framework_util
 
 T = TypeVar('T')
 
@@ -156,6 +158,37 @@ class RayHelper:
         ip, port = ray.get(
             get_node_address.options(placement_group=placement_group).remote())
         return ip, port
+
+    @staticmethod
+    def do_get_and_collect_func(collect_func: Callable, method: Union[Literal['none', 'flatten'], Callable], futures):
+
+        def do_collect():
+            result = []
+            for future in futures:
+                if isinstance(future, ray.ObjectRef):
+                    result.append(ray.get(future))
+                else:
+                    result.append(future)
+            return collect_func(method, result)
+
+        do_collect._is_lazy_collect = True
+        return do_collect
+
+    @staticmethod
+    def do_get_and_collect(args, kwargs):
+        new_args = []
+        for arg in args:
+            if isinstance(arg, Callable) and getattr(arg, '_is_lazy_collect', False):
+                arg = arg()
+            new_args.append(arg)
+
+        new_kwargs = {}
+        for key in kwargs.keys().copy():
+            value = kwargs[key]
+            if isinstance(value, Callable) and getattr(arg, '_is_lazy_collect', False):
+                value = value()
+            new_kwargs[key] = value
+        return new_args, new_kwargs
 
     @staticmethod
     def create_workers(worker_cls: Type[T], group: str, execute:Literal['all', 'peer'], instance_id, seed=42, full_determinism=False, *args, **kwargs) -> List[T]:
