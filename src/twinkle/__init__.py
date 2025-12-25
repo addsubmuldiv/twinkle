@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from .infra import initialize, remote_class, remote_function
     from .reward import Reward, MathReward
     from .dataset import Dataset
+    from .processor import InputProcessor
 
 else:
     _import_structure = {
@@ -15,6 +16,7 @@ else:
         'infra': ['initialize', 'remote_class', 'remote_function'],
         'dataset': ['Dataset'],
         'reward': ['Reward', 'MathReward'],
+        'processor': ['InputProcessor'],
     }
 
     import sys

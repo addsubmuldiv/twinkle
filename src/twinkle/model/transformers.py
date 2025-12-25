@@ -5,7 +5,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedModel, PretrainedConfig
 import twinkle
-from twinkle import remote_class, remote_function
+from twinkle import remote_class, remote_function, InputProcessor
 from twinkle.loss.base import Loss
 from twinkle.plugin.plugin import Plugin
 
@@ -36,20 +36,12 @@ class TransformersModel(PreTrainedModel):
         self.outputs = None
         self.optimizer = None
         self.lr_scheduler = None
+        self.processor = None
 
     @remote_function()
     def forward(self, *, inputs: Dict[str, Any], adapter_name: str = None):
-        self.inputs = inputs
+        self.inputs = self.processor(inputs)
         self.outputs = self.model(**self.inputs)
-
-    @remote_function()
-    def set_loss(self, loss: Union[Type[Loss], str]):
-        if isinstance(loss, str):
-            if hasattr(twinkle.loss, loss):
-                loss = getattr(twinkle.loss, loss)
-            else:
-                loss = Plugin.load_plugin(loss, Loss)
-        self.loss_instance = loss()
 
     @remote_function()
     def calculate_loss(self, **kwargs):
@@ -77,6 +69,33 @@ class TransformersModel(PreTrainedModel):
     @remote_function()
     def lr_step(self):
         self.lr_scheduler.step()
+
+    @remote_function()
+    def set_input_processor(self, processor: Union[Type[Loss], str]):
+        if isinstance(processor, str):
+            if hasattr(twinkle.processor, processor):
+                processor = getattr(twinkle.processor, processor)
+            else:
+                processor = Plugin.load_plugin(processor, InputProcessor)
+        self.processor = processor()
+
+    @remote_function()
+    def set_loss(self, loss: Union[Type[Loss], str]):
+        if isinstance(loss, str):
+            if hasattr(twinkle.loss, loss):
+                loss = getattr(twinkle.loss, loss)
+            else:
+                loss = Plugin.load_plugin(loss, Loss)
+        self.loss_instance = loss()
+
+    @remote_function()
+    def set_loss(self, loss: Union[Type[Loss], str]):
+        if isinstance(loss, str):
+            if hasattr(twinkle.loss, loss):
+                loss = getattr(twinkle.loss, loss)
+            else:
+                loss = Plugin.load_plugin(loss, Loss)
+        self.loss_instance = loss()
 
     @remote_function()
     def set_optimizer(self, optimizer_cls: Union[Type[Optimizer], str], **kwargs):

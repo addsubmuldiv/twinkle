@@ -5,7 +5,7 @@ from twinkle.trajectory import Trajectory
 
 class Template:
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, **kwargs):
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def encode(self, trajectory: Trajectory):

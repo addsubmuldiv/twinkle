@@ -8,12 +8,8 @@ def any_callable(args):
         return any(any_callable(arg) for arg in args.values())
     elif isinstance(args, Iterable):
         return any(any_callable(arg) for arg in args)
-    elif isinstance(args, Callable):
-        return True
-    elif isinstance(args, type):
-        return True
     else:
-        return False
+        return isinstance(args, (Callable, type))
 
 
 def check_unsafe(*args, **kwargs):

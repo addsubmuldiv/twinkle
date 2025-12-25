@@ -1,7 +1,8 @@
-from typing import Dict, Optional, Tuple, Literal
+from typing import Dict, Optional, Tuple, Literal, List
 import torch
 
 from twinkle.loss.base import Loss
+from twinkle.trajectory import Trajectory
 
 
 class GRPOLoss(Loss):
@@ -127,17 +128,45 @@ class GRPOLoss(Loss):
         
         return advantages / (std + 1e-8)
 
+    @staticmethod
+    def selective_log_softmax(logits, index) -> torch.Tensor:
+        if logits.dtype in [torch.float32, torch.float64]:
+            selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+            # loop to reduce peak mem consumption
+            logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
+            per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
+        else:
+            # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
+            per_token_logps = []
+            for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
+                row_logps = torch.nn.functional.log_softmax(row_logits, dim=-1)
+                row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
+                per_token_logps.append(row_per_token_logps)
+            per_token_logps = torch.stack(per_token_logps)
+        return per_token_logps
+
+    def _get_per_token_logps(self, logits, input_ids, logits_to_keep) -> torch.Tensor:
+        batch_size = input_ids.size(0)
+        all_logps = []
+        for i in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[i : i + batch_size]
+            logits = logits[:, :-1, :]
+            input_ids_batch = input_ids_batch[:, -logits_to_keep:]
+            logits = logits / self.temperature
+            logps = GRPOLoss.selective_log_softmax(logits, input_ids_batch)
+            all_logps.append(logps)
+        return torch.cat(all_logps, dim=0)
+
     def __call__(
         self,
         inputs,
         outputs,
-        per_token_logps: torch.Tensor,
-        old_per_token_logps: torch.Tensor,
-        completion_mask: torch.Tensor,
-        rewards: torch.Tensor,
-        ref_per_token_logps: Optional[torch.Tensor] = None,
-        num_items_in_batch: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, Dict]:
+        *,
+        old_logits: torch.Tensor,
+        trajectories: List[Trajectory],
+        ref_logits: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
         """
         Compute GRPO loss.
 
@@ -152,9 +181,17 @@ class GRPOLoss(Loss):
 
         Returns:
             loss: Scalar loss value
-            metrics: Dictionary containing metrics for logging
         """
-
+        logits = outputs['logits']
+        input_ids = inputs['input_ids']
+        labels = inputs['labels']
+        logits_to_keep = (labels.shape[-1] - (torch.ne(labels, -100).int().argmax(-1))).max().item()
+        per_token_logps = self._get_per_token_logps(logits, input_ids, 0)
+        old_per_token_logps = self._get_per_token_logps(old_logits, input_ids, 0)
+        ref_per_token_logps = self._get_per_token_logps(ref_logits, input_ids, 0)
+        completion_mask = labels[:, -logits_to_keep:] != -100
+        completion_mask = completion_mask.bool()
+        rewards = [t.rewards for t in trajectories]
         # Compute advantages from rewards
         advantages = self.compute_advantages(rewards)
         
@@ -185,11 +222,10 @@ class GRPOLoss(Loss):
         loss = self._aggregate_loss(per_token_loss, completion_mask, num_items_in_batch)
         
         # Compute metrics
-        metrics = self._compute_metrics(
-            coef_1, advantages, completion_mask, per_token_kl
-        )
-        
-        return loss, metrics
+        # metrics = self._compute_metrics(
+        #     coef_1, advantages, completion_mask, per_token_kl
+        # )
+        return loss
 
     def _compute_log_importance_weights(
         self,

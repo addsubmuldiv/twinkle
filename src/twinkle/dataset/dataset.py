@@ -7,7 +7,7 @@ from typing import Callable, Type, Union
 from collections.abc import Iterable
 from ..hub import MSHub, HFHub
 from ..infra import remote_class, remote_function
-from ..processor import DataProcessor, DataFilter
+from ..preprocessor import DataProcessor, DataFilter
 
 
 @dataclass

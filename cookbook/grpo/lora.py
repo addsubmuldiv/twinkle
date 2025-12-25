@@ -2,11 +2,9 @@ import twinkle
 from twinkle.infra import DeviceGroup
 from twinkle.model import TransformersModel
 from twinkle.dataset import Dataset, DatasetMeta
-from twinkle.processor import CompetitionMathProcessor
 from twinkle.sampler import VLLMSampler
 from twinkle.dataloader import DataLoader
 from twinkle.template import Qwen3Template
-from twinkle.loss import GRPOLoss
 from twinkle.reward import MathReward
 
 device_groups = [
@@ -48,15 +46,16 @@ def train():
     model.set_loss('GRPOLoss')
     model.set_optimizer('AdamW')
     model.set_lr_scheduler('LinearDecay')
-    template = Qwen3Template('qwen2.5')
+    model.set_input_processor('GRPOInputProcessor')
+    template = Qwen3Template('qwen2.5', remote_group='actor')
     reward = MathReward()
     for batch in dataloader:
         trajectories = sampler.sample(batch)
         inputs = template.encode(trajectories)
         logits = ref_model.forward(inputs)
-        rewards = reward.calculate(trajectories)
+        trajectories = reward.calculate(trajectories)
         model.forward(inputs)
-        model.calculate_loss(ref_logits=logits, reward=rewards)
+        model.calculate_loss(ref_logits=logits, trajectories=trajectories)
         model.backward()
         model.step()
         model.zero_grad()
