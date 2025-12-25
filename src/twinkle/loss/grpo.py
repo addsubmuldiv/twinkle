@@ -129,6 +129,8 @@ class GRPOLoss(Loss):
 
     def __call__(
         self,
+        inputs,
+        outputs,
         per_token_logps: torch.Tensor,
         old_per_token_logps: torch.Tensor,
         completion_mask: torch.Tensor,
@@ -152,6 +154,7 @@ class GRPOLoss(Loss):
             loss: Scalar loss value
             metrics: Dictionary containing metrics for logging
         """
+
         # Compute advantages from rewards
         advantages = self.compute_advantages(rewards)
         

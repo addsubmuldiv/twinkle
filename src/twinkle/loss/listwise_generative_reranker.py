@@ -12,7 +12,7 @@ class ListwiseGenerativeRerankerLoss(Loss):
         self.temperature = temperature
         self.min_group_size = min_group_size
 
-    def __call__(self, logits, labels, last_valid_indices, **kwargs):
+    def __call__(self, inputs, outputs, last_valid_indices, **kwargs):
         """
         List-wise generative reranker loss function.
 
@@ -41,6 +41,8 @@ class ListwiseGenerativeRerankerLoss(Loss):
         Returns:
             torch.Tensor: Cross entropy loss for ranking classification based on token probabilities
         """
+        logits = outputs['logits']
+        labels = inputs['labels']
         # Get token IDs for positive and negative tokens
         try:
             positive_token_id = self.tokenizer.convert_tokens_to_ids(self.positive_token)

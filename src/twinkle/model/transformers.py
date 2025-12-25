@@ -4,7 +4,7 @@ from peft import PeftConfig, get_peft_model, PeftModel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedModel, PretrainedConfig
-
+import twinkle
 from twinkle import remote_class, remote_function
 from twinkle.loss.base import Loss
 from twinkle.plugin.plugin import Plugin
@@ -45,7 +45,10 @@ class TransformersModel(PreTrainedModel):
     @remote_function()
     def set_loss(self, loss: Union[Type[Loss], str]):
         if isinstance(loss, str):
-            loss = Plugin.load_plugin(loss, Loss)
+            if hasattr(twinkle.loss, loss):
+                loss = getattr(twinkle.loss, loss)
+            else:
+                loss = Plugin.load_plugin(loss, Loss)
         self.loss_instance = loss()
 
     @remote_function()
@@ -76,18 +79,26 @@ class TransformersModel(PreTrainedModel):
         self.lr_scheduler.step()
 
     @remote_function()
-    def set_optimizer(self, optimizer_cls: Union[Type[Optimizer], str]):
+    def set_optimizer(self, optimizer_cls: Union[Type[Optimizer], str], **kwargs):
         if isinstance(optimizer_cls, str):
-            optimizer_cls = Plugin.load_plugin(optimizer_cls, Optimizer)
-        self.optimizer = optimizer_cls()
+            import torch
+            if hasattr(torch.optim, optimizer_cls):
+                optimizer_cls = getattr(torch.optim, optimizer_cls)
+            else:
+                optimizer_cls = Plugin.load_plugin(optimizer_cls, Optimizer)
+        self.optimizer = optimizer_cls(self.model.parameters(), **kwargs)
 
     @remote_function()
-    def set_lr_scheduler(self, scheduler_cls: Union[Type[LRScheduler], str]):
+    def set_lr_scheduler(self, scheduler_cls: Union[Type[LRScheduler], str], **kwargs):
         if isinstance(scheduler_cls, str):
-            scheduler_cls = Plugin.load_plugin(scheduler_cls, LRScheduler)
-        self.lr_scheduler = scheduler_cls()
+            import torch
+            if hasattr(torch.optim.lr_scheduler, scheduler_cls):
+                scheduler_cls = getattr(torch.optim.lr_scheduler, scheduler_cls)
+            else:
+                scheduler_cls = Plugin.load_plugin(scheduler_cls, LRScheduler)
+        self.lr_scheduler = scheduler_cls(self.optimizer, **kwargs)
 
-    def save_state(self):
+    def save_state(self, adapter_name: str):
         pass
 
     def add_adapter_to_model(self, adapter_name: str, config: Union[PeftConfig, Callable]):

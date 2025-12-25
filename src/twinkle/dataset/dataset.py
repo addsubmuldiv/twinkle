@@ -53,9 +53,15 @@ class Dataset(TorchDataset):
         return dataset
 
     @remote_function(dispatch='all')
-    def map(self, processe_func: Union[Callable, Type[DataProcessor]], dataset_meta: DatasetMeta = None) -> None:
+    def map(self, processe_func: Union[Callable, str, Type[DataProcessor]], dataset_meta: DatasetMeta = None) -> None:
         if isinstance(processe_func, DataProcessor):
             processe_func = processe_func()
+        elif isinstance(processe_func, str):
+            processor_module = DataProcessor.__module__
+            if hasattr(processor_module, processe_func):
+                processe_func = getattr(processor_module, processe_func)
+            else:
+                raise ValueError(f'Processor {processe_func} not found.')
         if dataset_meta is None:
             assert len(self.datasets) == 1
             key = next(iter(self.datasets.keys()))
@@ -64,9 +70,15 @@ class Dataset(TorchDataset):
         self.datasets[key] = self.datasets[key].map(processe_func)
 
     @remote_function(dispatch='all')
-    def filter(self, filter_func: Union[Callable, Type[DataFilter]], dataset_meta: DatasetMeta = None) -> None:
+    def filter(self, filter_func: Union[Callable, str, Type[DataFilter]], dataset_meta: DatasetMeta = None) -> None:
         if isinstance(filter_func, DataFilter):
             filter_func = filter_func()
+        elif isinstance(filter_func, str):
+            processor_module = DataProcessor.__module__
+            if hasattr(processor_module, filter_func):
+                filter_func = getattr(processor_module, filter_func)
+            else:
+                raise ValueError(f'Filter {filter_func} not found.')
         if dataset_meta is None:
             assert len(self.datasets) == 1
             key = next(iter(self.datasets.keys()))

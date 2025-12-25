@@ -3,3 +3,4 @@ from .framework import Framework as framework_util
 from .import_utils import requires, exists
 from .platform import Platform, GPU, NPU
 from .network import find_node_ip, find_free_port
+from .unsafe import trust_remote_code, check_unsafe

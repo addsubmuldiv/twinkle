@@ -223,7 +223,7 @@ class InfoNCELoss(Loss):
         loss /= len(split_tensors)
         return loss
 
-    def __call__(self, logits: 'torch.Tensor', labels: 'torch.Tensor', **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
         """Calculate loss
 
         Args:
@@ -237,6 +237,8 @@ class InfoNCELoss(Loss):
         Returns:
             The loss tensor
         """
+        logits = outputs['logits']
+        labels = inputs['labels']
         world_size = torch_util.get_world_size()
         if world_size > 1 and self.cross_batch:
             logits, labels = self._gather_data(logits, labels)

@@ -4,7 +4,10 @@ import torch
 
 class CosineSimilarityLoss(Loss):
 
-    def __call__(self, sentence1, sentence2, labels, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
+        sentence1 = outputs['sentence1']
+        sentence2 = outputs['sentence2']
+        labels = inputs['labels']
         cos_score_transformation = torch.nn.Identity()
         loss_fct = torch.MSELoss()
         output = cos_score_transformation(torch.cosine_similarity(sentence1, sentence2))

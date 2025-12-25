@@ -2,5 +2,5 @@
 
 class Loss:
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
         ...

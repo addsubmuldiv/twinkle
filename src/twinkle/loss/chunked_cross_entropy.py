@@ -51,5 +51,7 @@ class ChunkedCrossEntropyLoss(Loss):
     def __init__(self, chunk_size):
         self.chunk_size = chunk_size
 
-    def __call__(self, logits, labels, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
+        logits = outputs['logits']
+        labels = inputs['labels']
         return ChunkedCrossEntropyLossFunc.apply(logits, labels, self.chunk_size)

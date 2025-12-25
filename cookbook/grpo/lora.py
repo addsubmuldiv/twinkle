@@ -33,7 +33,7 @@ twinkle.initialize(mode='local', groups=device_groups)
 
 def create_dataset():
     dataset = Dataset(DatasetMeta('ms://modelscope/competition_math'))
-    dataset.map(CompetitionMathProcessor)
+    dataset.map('CompetitionMathProcessor')
     return dataset
 
 
@@ -45,7 +45,7 @@ def train():
     sampler = VLLMSampler(engine_args, template=Qwen3Template, remote_group='rollout')
     model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='actor')
     ref_model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='ref')
-    model.set_loss(GRPOLoss)
+    model.set_loss('GRPOLoss')
     model.set_optimizer('AdamW')
     model.set_lr_scheduler('LinearDecay')
     template = Qwen3Template('qwen2.5')

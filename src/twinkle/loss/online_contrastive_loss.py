@@ -6,7 +6,10 @@ from .contrastive_loss import SiameseDistanceMetric
 
 class OnlineContrastiveLoss(Loss):
 
-    def __call__(self, sentence1, sentence2, labels, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
+        sentence1 = outputs['sentence1']
+        sentence2 = outputs['sentence2']
+        labels = inputs['labels']
         distance_metric = SiameseDistanceMetric.COSINE_DISTANCE
         distance_matrix = distance_metric(sentence1, sentence2)
         negs = distance_matrix[labels == 0]

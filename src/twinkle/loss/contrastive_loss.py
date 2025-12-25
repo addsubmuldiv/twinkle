@@ -14,7 +14,10 @@ class SiameseDistanceMetric(Enum):
 
 class ContrastiveLoss(Loss):
 
-    def __call__(self, sentence1, sentence2, labels, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
+        sentence1 = outputs['sentence1']
+        sentence2 = outputs['sentence2']
+        labels = inputs['labels']
         distance_metric = SiameseDistanceMetric.COSINE_DISTANCE
         distances = distance_metric(sentence1, sentence2)
         margin = 0.5

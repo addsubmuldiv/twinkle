@@ -8,7 +8,7 @@ class ListwiseRerankerLoss(Loss):
         self.temperature = temperature
         self.min_group_size = min_group_size
 
-    def __call__(self, logits, labels, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
         """
             List-wise reranker loss function.
 
@@ -34,6 +34,9 @@ class ListwiseRerankerLoss(Loss):
             Returns:
                 torch.Tensor: Cross entropy loss for ranking classification
             """
+        logits = outputs['logits']
+        labels = inputs['labels']
+
         # Find positive sample indices to determine group boundaries
         positive_indices = torch.nonzero(labels == 1, as_tuple=False).squeeze(-1)
 

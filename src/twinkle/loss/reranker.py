@@ -4,7 +4,9 @@ import torch
 
 class RerankerLoss(Loss):
 
-    def __call__(self, logits, labels, **kwargs):
+    def __call__(self, inputs, outputs, **kwargs):
+        logits = outputs['logits']
+        labels = inputs['labels']
         logits = logits.squeeze(1)
         labels = labels.to(logits.dtype)
         loss_fct = torch.nn.BCEWithLogitsLoss()

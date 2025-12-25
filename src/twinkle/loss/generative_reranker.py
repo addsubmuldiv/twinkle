@@ -9,7 +9,7 @@ class GenerativeRerankerLoss(Loss):
         self.positive_token = positive_token
         self.negative_token = negative_token
 
-    def __call__(self, logits, labels, last_valid_indices, **kwargs):
+    def __call__(self, inputs, outputs, last_valid_indices, **kwargs):
         """
             Generative reranker loss function.
 
@@ -25,6 +25,8 @@ class GenerativeRerankerLoss(Loss):
             Returns:
                 torch.Tensor: Cross entropy loss for yes/no classification
             """
+        logits = outputs['logits']
+        labels = inputs['labels']
         # Get token IDs for positive and negative tokens
         # Default to "yes"/"no", but can be configured via environment variables
         try:

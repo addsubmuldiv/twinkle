@@ -5,6 +5,7 @@ import sys
 from typing import Type, TypeVar
 
 from ..hub import MSHub, HFHub
+from ..utils import trust_remote_code
 
 T = TypeVar('T')
 
@@ -19,6 +20,11 @@ class Plugin:
             plugin_dir = MSHub.download_model(plugin_id[len('ms://'):], **kwargs)
         else:
             raise ValueError(f'Unknown plugin id {plugin_id}, please use hf:// or ms://')
+
+        if not trust_remote_code():
+            raise ValueError(
+                "Twinkle does not support plugin in safe mode."
+            )
 
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
