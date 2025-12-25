@@ -9,6 +9,7 @@ import numpy as np
 from .device_group import DeviceGroup
 from .ray import RayHelper
 from ..utils import requires, framework_util
+from ..utils.unsafe import check_unsafe
 
 T1 = TypeVar('T1', bound=object)
 
@@ -125,6 +126,7 @@ def remote_class():
                 caller_line = frame.f_lineno
                 instance_id = f"{caller_file}:{caller_line}"
                 remote_group = kwargs.pop('remote_group', None)
+                check_unsafe(*args, **kwargs)
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     init_method(self, *args, **kwargs)
 
@@ -195,6 +197,7 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
 
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs) -> T1:
+            check_unsafe(*args, **kwargs)
             if _mode == 'local':
                 return func(*args, **kwargs)
             elif _mode == 'ray':
