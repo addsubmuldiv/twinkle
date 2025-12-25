@@ -1,4 +1,4 @@
-from typing import overload, Type, Optional, Union, Callable, Dict, Any
+from typing import overload, Type, Optional, Union, Callable, Dict, Any, List
 
 from peft import PeftConfig, get_peft_model, PeftModel
 from torch.optim import Optimizer
@@ -40,16 +40,16 @@ class TransformersModel(PreTrainedModel, DataProcessorMixin):
         self.processor = None
 
     @remote_function()
-    def forward(self, *, inputs: Dict[str, Any], adapter_name: str = None):
+    def forward(self, *, inputs: Dict[str, Any], adapter_names: List[str] = None):
         self.inputs: Dict[str, Any] = self.processor(inputs)
-        self.outputs = self.model(**self.inputs)
+        self.outputs = self.model(**self.inputs, adapter_names=adapter_names)
 
     @remote_function()
-    def forward_only(self, *, inputs: Dict[str, Any], adapter_name: str = None):
+    def forward_only(self, *, inputs: Dict[str, Any], adapter_names: List[str] = None):
         import torch
         with torch.no_grad():
             self.inputs: Dict[str, Any] = self.processor(inputs)
-            self.outputs = self.model(**self.inputs)
+            self.outputs = self.model(**self.inputs, adapter_names=adapter_names)
 
     @remote_function()
     def calculate_loss(self, **kwargs):
@@ -61,8 +61,8 @@ class TransformersModel(PreTrainedModel, DataProcessorMixin):
         self.loss_value.backward()
 
     @remote_function()
-    def forward_backward(self, *, inputs: Dict[str, Any], adapter_name: str, **kwargs):
-        self.forward(inputs, adapter_name=adapter_name)
+    def forward_backward(self, *, inputs: Dict[str, Any], adapter_names: List[str] = None, **kwargs):
+        self.forward(inputs, adapter_names=adapter_names)
         self.calculate_loss(**kwargs)
         self.backward()
 
