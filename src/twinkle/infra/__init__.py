@@ -6,7 +6,7 @@ from typing import TypeVar
 
 import numpy as np
 
-from twinkle import DeviceGroup
+from twinkle import DeviceGroup, DeviceMesh
 from .ray import RayHelper
 from twinkle import requires, framework_util
 from twinkle import check_unsafe
@@ -81,20 +81,27 @@ def collect_func(method: Union[Literal['none', 'flatten'], Callable], result):
         raise ValueError(f'Unsupported collect method: {method}')
 
 
-def dispatch_args(workers, dispatch, execute, args, kwargs):
-
-    length = len(workers)
+def dispatch_args(workers, dispatch, execute, device_mesh: DeviceMesh, args, kwargs):
     if execute == 'first':
         return [(workers[0], args, kwargs)]
     elif dispatch == 'all':
         return [(worker, args, kwargs) for worker in workers]
     elif dispatch == 'slice':
         result = []
+        if device_mesh is not None:
+            # TODO this may occurs error when remote calls remote
+            assert device_mesh.world_size == len(workers)
+        length = len(workers) if not device_mesh else device_mesh.dp_world_size
+        dp_repeat = len(workers) // length
 
         def dispatch_func(arg, n):
             if isinstance(arg, list):
+                _args = []
                 k, m = divmod(len(arg), n)
-                return [arg[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
+                for i in range(n):
+                    for j in range(dp_repeat):
+                        _args.append(arg[i * k + min(i, m):(i + 1) * k + min(i + 1, m)])
+                return _args
             else:
                 return [arg] * n
 
@@ -109,6 +116,7 @@ def dispatch_args(workers, dispatch, execute, args, kwargs):
         return result
     elif isinstance(dispatch, Callable):
         # dispatch is Callable
+        length = len(workers)
         result = []
         for i in range(length):
             sliced_args, sliced_kwargs = dispatch(length, i, *args, **kwargs)
@@ -116,6 +124,34 @@ def dispatch_args(workers, dispatch, execute, args, kwargs):
         return result
     else:
         raise ValueError(f'Unsupported dispatch method: {dispatch}')
+
+
+def dispatch(self, inputs):
+    if self.device_mesh is None:
+        return inputs
+
+    dp_rank = self.device_mesh.dp_rank
+    dp_world_size = self.device_mesh.dp_world_size
+
+    total_items = len(inputs)
+    if total_items < dp_world_size:
+        last_item = inputs[-1] if inputs else None
+        inputs = inputs + [last_item] * (dp_world_size - total_items)
+        total_items = dp_world_size
+
+    # Calculate data slice for current rank
+    items_per_rank = total_items // dp_world_size
+    remainder = total_items % dp_world_size
+
+    # Distribute remainder items to first 'remainder' ranks
+    if dp_rank < remainder:
+        start_idx = dp_rank * (items_per_rank + 1)
+        end_idx = start_idx + items_per_rank + 1
+    else:
+        start_idx = remainder * (items_per_rank + 1) + (dp_rank - remainder) * items_per_rank
+        end_idx = start_idx + items_per_rank
+
+    return inputs[start_idx:end_idx]
 
 
 def remote_class():
@@ -147,14 +183,14 @@ def remote_class():
                             assert not hasattr(cls, '__next__')
 
                             def __iter__(self):
-                                _iter = self.__iter_self__()
+                                _iter = self.__iter_origin__()
                                 assert _iter is not self
                                 self._iter = _iter
 
                             def __next__(self):
                                 return next(self._iter)
 
-                            cls.__iter_self__ = cls.__iter__
+                            cls.__iter_origin__ = cls.__iter__
                             cls.__iter__ = remote_function()(__iter__)
                             cls.__next__ = remote_function()(__next__)
                 else:
@@ -167,11 +203,15 @@ def remote_class():
                                                        full_determinism=_full_determinism,
                                                        *args, **kwargs)
                     self._actors = _actors
+                    for arg in (list(args) + list(kwargs.values())):
+                        if isinstance(arg, DeviceMesh):
+                            self.device_mesh = arg
+                            break
                     if hasattr(cls, '__iter__'):
 
                         def __iter__(self):
                             _workers_and_args = dispatch_args(get_workers(self._actors, 'all'), 'all',
-                                                              'all', (), {})
+                                                              'all', None, (), {})
                             RayHelper.execute_all_sync('__iter__', _workers_and_args)
                             return self
 
@@ -215,51 +255,22 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs) -> T1:
             check_unsafe(*args, **kwargs)
+            device_mesh = getattr(self, 'device_mesh', None)
             if _mode == 'local':
                 return func(*args, **kwargs)
             elif _mode == 'ray':
-                from .ray import RayHelper
-                args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
-                _workers_and_args = dispatch_args(get_workers(self._actors, execute), dispatch,
-                                                    execute, args, kwargs)
-                result = RayHelper.execute_all_async(func.__name__, _workers_and_args)
-                return RayHelper.do_get_and_collect_func(collect_func, collect, result)
+                if not hasattr(self, '_actors'):
+                    return func(self, *args, **kwargs)
+                else:
+                    from .ray import RayHelper
+                    args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
+                    _workers_and_args = dispatch_args(get_workers(self._actors, execute), dispatch,
+                                                        execute, device_mesh, args, kwargs)
+                    result = RayHelper.execute_all_async(func.__name__, _workers_and_args)
+                    return RayHelper.do_get_and_collect_func(collect_func, collect, result)
             else:
                 raise NotImplementedError(f'Unsupported mode {_mode}')
 
         return wrapper
 
     return decorator
-
-
-# def remote_class_constructor():
-#
-#     def decorator(func: Callable[..., T1]) -> Callable[..., T1]:
-#
-#         @functools.wraps(func)
-#         def wrapper(cls, *args, **kwargs) -> T1:
-#             if _mode == 'local':
-#                 return func(*args, **kwargs)
-#             elif _mode == 'ray':
-#                 from .ray import RayHelper
-#                 frame = inspect.currentframe().f_back
-#                 caller_file = frame.f_code.co_filename
-#                 caller_line = frame.f_lineno
-#                 instance_id = f"{caller_file}:{caller_line}"
-#                 remote_group = kwargs.pop('remote_group', None)
-#                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
-#                     self = func(*args, **kwargs)
-#                 else:
-#                     # Create remote workers
-#                     _actors = RayHelper.create_workers(func, remote_group, 'peer', instance_id=instance_id, *args, **kwargs) # noqa
-#                     self = cls.__new__(cls)
-#                     self._actors = _actors
-#                 self.remote_group = remote_group
-#                 self._instance_id = instance_id
-#                 return self
-#             else:
-#                 raise NotImplementedError(f'Unsupported mode {_mode}')
-#
-#         return wrapper
-#
-#     return decorator

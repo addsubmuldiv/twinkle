@@ -5,7 +5,7 @@ from twinkle.trajectory import Trajectory
 
 class Preprocessor:
 
-    def __call__(self, rows) -> List[Trajectory]:
+    def __call__(self, row) -> Trajectory:
         ...
 
 

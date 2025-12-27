@@ -13,6 +13,8 @@ class Trajectory:
 
     generation_config: Dict[str, Any] = field(default_factory=dict)
 
-    experts: Dict[str, Any] = field(default_factory=dict)
+    experts: Any = None
 
     rewards: List[float] = field(default_factory=list)
+
+    issues: List[str] = field(default_factory=list)

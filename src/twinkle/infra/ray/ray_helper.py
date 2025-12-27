@@ -192,7 +192,9 @@ class RayHelper:
 
     @staticmethod
     def create_workers(worker_cls: Type[T], group: str, execute:Literal['all', 'peer'], instance_id, seed=42, full_determinism=False, *args, **kwargs) -> List[T]:
-        import ray
+        # TODO when will remote create remote?
+        # Should it peer create peer? or peer create all?
+        # Whether the input data of each remote is independent, or they are a part of the whole device mesh?
         from ray.runtime_env import RuntimeEnv
         from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
         workers = []
