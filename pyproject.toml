@@ -10,7 +10,6 @@ peft = {version = "^0.11.0", optional = true}
 pillow = {optional = true}
 rouge = {optional = true}
 safetensors = {optional = true}
-scipy = {optional = true}
 sentencepiece = {optional = true}
 ray = {optional = true}
 transformers = {optional = true}
@@ -18,7 +17,6 @@ megatron-core = {version = "^0.12.0", optional = true}
 torch = {version = "^2.0.0", optional = true}
 torchvision = {optional = true}
 deepspeed = {optional = true}
-ray = {optional = true}
 sphinx = {version = "^5.3.0", optional = true}
 docutils = {version = "^0.16.0", optional = true}
 myst_parser = {optional = true}

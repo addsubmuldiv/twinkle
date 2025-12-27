@@ -5,9 +5,7 @@ from typing import Dict, List, Optional, TypeVar, Type, Tuple, Any, Literal, Cal
 import ray
 
 from .resource_manager import ResourceManager
-from twinkle import DeviceGroup
-from twinkle import Platform, find_node_ip, find_free_port
-from twinkle import requires, framework_util
+from ...utils import DeviceGroup, Platform, find_node_ip, find_free_port, requires, framework_util
 
 T = TypeVar('T')
 

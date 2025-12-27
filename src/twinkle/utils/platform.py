@@ -1,8 +1,8 @@
 import os
 import shutil
 from abc import abstractmethod, ABC
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Dict
 from typing import Type
 from typing import Union, List
 
@@ -101,6 +101,10 @@ class DeviceMesh:
     def mp_world_size(self) -> int:
         return self._get_world_size_for_dim("tp")
 
+    @property
+    def world_size(self) -> int:
+        return Platform.get_world_size()
+
     def get_slice(self, total_length):
         length = self.dp_world_size
         dp_rank = self.dp_rank
@@ -114,6 +118,7 @@ class DeviceGroup:
     name: str
     ranks: Union[List[int], int]
     device_type: str
+    _device_mesh: Dict[str, DeviceMesh] = field(default_factory=dict)
 
 
 class Platform(ABC):
@@ -136,7 +141,7 @@ class Platform(ABC):
             elif shutil.which("npu-smi"):
                 return NPU
             else:
-                raise ValueError(f"Unsupported platform.")
+                return GPU
         elif platform.upper() == "GPU":
             return GPU
         elif platform.upper() == "NPU":

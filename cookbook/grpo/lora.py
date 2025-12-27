@@ -44,11 +44,11 @@ twinkle.initialize(mode='local', groups=device_groups)
 class ActorGroup:
 
     def __init__(self, engine_args, lora_config=None, adapter_name=None, device_mesh=None):
-        self.sampler = VLLMSampler(engine_args, device_mesh=device_mesh)
+        self.sampler = VLLMSampler(engine_args, device_mesh=sampler_device_Mesh)
         self.sampler.set_processor('GRPOInputProcessor')
         self.sampler.set_template('Qwen3Template')
 
-        self.model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='actor', device_mesh=device_mesh)
+        self.model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='actor', device_mesh=actor_device_mesh)
         self.model.set_loss('GRPOLoss')
         self.model.set_optimizer('AdamW')
         self.model.set_lr_scheduler('LinearDecay')
@@ -96,7 +96,7 @@ def train():
     engine_args = {
 
     }
-    actor_group = ActorGroup(engine_args, remote_group='actor', device_mesh=actor_device_mesh)
+    actor_group = ActorGroup(engine_args, remote_group='actor')
     ref_model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='ref')
     ref_model.set_processor('GRPOInputProcessor')
     ref_model.set_template('Qwen3Template', 'Qwen/Qwen2.5-7B-Instruct')

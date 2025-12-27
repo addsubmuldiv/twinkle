@@ -6,10 +6,9 @@ from typing import TypeVar
 
 import numpy as np
 
-from twinkle import DeviceGroup, DeviceMesh, Platform
+from ..utils import DeviceGroup, DeviceMesh, Platform
 from .ray import RayHelper
-from twinkle import requires, framework_util
-from twinkle import check_unsafe
+from ..utils import requires, framework_util, check_unsafe
 
 T1 = TypeVar('T1', bound=object)
 
@@ -24,7 +23,13 @@ _seed = 42
 
 _full_determinism = False
 
-_device_group: Optional[List[DeviceGroup]] = None
+_device_group: Optional[List[DeviceGroup]] = [
+    DeviceGroup(
+        name='local',
+        ranks=list(range(Platform.get_world_size())),
+        device_type=Platform.get_platform().__name__,
+    )
+]
 
 _remote_components: dict = {}
 
@@ -47,13 +52,133 @@ def initialize(mode: Literal['local', 'ray'],
         _nproc_per_node = nproc_per_node
 
 
+def get_device_placement(device_group = None) -> str:
+    global _device_group
+    if device_group is None:
+        device_group = _device_group
+
+    lines = []
+    lines.append("=" * 80)
+    lines.append("                        DEVICE PLACEMENT TOPOLOGY")
+    lines.append("=" * 80)
+
+    for group_idx, group in enumerate(device_group):
+        lines.append("")
+        lines.append(f"┌{'─' * 76}┐")
+        lines.append(f"│ DeviceGroup: {group.name:<61} │")
+        lines.append(f"│ Device Type: {group.device_type:<61} │")
+
+        if isinstance(group.ranks, list):
+            ranks_str = str(group.ranks) if len(group.ranks) <= 16 else f"{group.ranks[:8]} ... {group.ranks[-4:]}"
+        else:
+            ranks_str = str(group.ranks)
+        lines.append(f"│ Ranks: {ranks_str:<67} │")
+        lines.append(f"├{'─' * 76}┤")
+
+        if not group._device_mesh:
+            lines.append(f"│ {'(No device meshes configured)':<74} │")
+        else:
+            for mesh_name, mesh in group._device_mesh.items():
+                lines.append(f"│                                                                            │")
+                lines.append(f"│  ◆ DeviceMesh: {mesh_name:<59} │")
+
+                if mesh.mesh_dim_names:
+                    dim_info = " × ".join(
+                        f"{name}={size}"
+                        for name, size in zip(mesh.mesh_dim_names, mesh.mesh.shape)
+                    )
+                    lines.append(f"│    Dimensions: {dim_info:<59} │")
+
+                world_sizes = []
+                for dim_name in ['pp', 'dp', 'tp', 'ep', 'sp', 'cp']:
+                    ws = mesh._get_world_size_for_dim(dim_name)
+                    if ws > 1:
+                        world_sizes.append(f"{dim_name.upper()}={ws}")
+                if world_sizes:
+                    lines.append(f"│    Active Parallelism: {', '.join(world_sizes):<51} │")
+
+                lines.append(f"│                                                                            │")
+                lines.append(f"│    Mesh Layout:                                                            │")
+
+                mesh_array = mesh.mesh
+                if mesh_array.ndim == 1:
+                    mesh_array = mesh_array.reshape(1, -1)
+
+                if mesh_array.ndim == 2:
+                    rows, cols = mesh_array.shape
+
+                    if mesh.mesh_dim_names and len(mesh.mesh_dim_names) >= 2:
+                        col_label = mesh.mesh_dim_names[-1].upper()
+                    else:
+                        col_label = "COL"
+
+                    if mesh.mesh_dim_names and len(mesh.mesh_dim_names) >= 1:
+                        row_label = mesh.mesh_dim_names[0].upper() if mesh_array.ndim == 2 and len(
+                            mesh.mesh_dim_names) >= 2 else mesh.mesh_dim_names[0].upper()
+                    else:
+                        row_label = "ROW"
+
+                    max_val = mesh_array.max()
+                    cell_width = max(3, len(str(max_val)) + 2)
+
+                    header = "│    " + " " * 4
+                    for c in range(min(cols, 12)):
+                        header += f"{c:^{cell_width}}"
+                    if cols > 12:
+                        header += " ..."
+                    header = header.ljust(75) + "│"
+                    lines.append(header)
+
+                    sep_line = "│    " + " " * 4 + "┌" + ("─" * cell_width + "┬") * (
+                                min(cols, 12) - 1) + "─" * cell_width + "┐"
+                    sep_line = sep_line.ljust(75) + "│"
+                    lines.append(sep_line)
+
+                    for r in range(min(rows, 8)):
+                        row_str = f"│    {r:>3} │"
+                        for c in range(min(cols, 12)):
+                            val = mesh_array[r, c]
+                            row_str += f"{val:^{cell_width}}│"
+                        if cols > 12:
+                            row_str += " ..."
+                        row_str = row_str.ljust(75) + "│"
+                        lines.append(row_str)
+
+                        if r < min(rows, 8) - 1:
+                            mid_line = "│    " + " " * 4 + "├" + ("─" * cell_width + "┼") * (
+                                        min(cols, 12) - 1) + "─" * cell_width + "┤"
+                            mid_line = mid_line.ljust(75) + "│"
+                            lines.append(mid_line)
+
+                    if rows > 8:
+                        lines.append(f"│    {'...':<71} │")
+
+                    bottom_line = "│    " + " " * 4 + "└" + ("─" * cell_width + "┴") * (
+                                min(cols, 12) - 1) + "─" * cell_width + "┘"
+                    bottom_line = bottom_line.ljust(75) + "│"
+                    lines.append(bottom_line)
+
+                elif mesh_array.ndim > 2:
+                    lines.append(f"│    (High-dimensional mesh: shape={mesh_array.shape})                      │")
+
+                lines.append(f"│                                                                            │")
+
+        lines.append(f"└{'─' * 76}┘")
+
+    lines.append("")
+    lines.append("=" * 80)
+
+    return "\n".join(lines)
+
+
+
 def get_workers(workers, execute):
     if execute == 'first':
         return [workers[0]]
     elif execute == 'all':
         return workers
     elif execute == 'peer':
-        return workers[framework_util.get_peer_index(len(workers))]
+        return workers[Platform.get_peer_index(len(workers))]
     else:
         raise ValueError(f'Unsupported execute method: {execute}')
 
@@ -148,20 +273,22 @@ def _get_device_mesh_param(args, kwargs):
 def remote_class():
 
     def decorator(cls):
-        device_mesh_name = _get_device_mesh_param_name(cls.init_method)
+        device_mesh_name = _get_device_mesh_param_name(cls.__init__)
         if _mode == 'local':
             init_method = cls.__init__
 
             @functools.wraps(init_method)
             def new_init(self, *args, **kwargs):
                 device_mesh = _get_device_mesh_param(args, kwargs)
-                if device_mesh is None and device_mesh_name:
-                    device_mesh = DeviceMesh(
-                        device_type=Platform.get_platform().device_prefix(),
-                        mesh=np.array([framework_util.get_world_size()]),
-                        mesh_dim_names=('data',)
-                    )
-                    kwargs[device_mesh_name] = device_mesh
+                if device_mesh_name:
+                    if device_mesh is None:
+                        device_mesh = DeviceMesh(
+                            device_type=Platform.get_platform().device_prefix(),
+                            mesh=np.array([Platform.get_world_size()]),
+                            mesh_dim_names=('data',)
+                        )
+                        kwargs[device_mesh_name] = device_mesh
+                    _device_group[0]._device_mesh[self.__class__.__name__] = device_mesh
                     init_method(*args, **kwargs)
                 else:
                     init_method(*args, **kwargs)
@@ -190,6 +317,10 @@ def remote_class():
                         mesh_dim_names=('data',)
                     )
                     kwargs[device_mesh_name] = device_mesh
+
+                if remote_group and device_mesh_name:
+                    device_group = [dg for dg in _device_group if dg.name == remote_group][0]
+                    device_group._device_mesh[self.__class__.__name__] = device_mesh
 
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     init_method(self, *args, **kwargs)

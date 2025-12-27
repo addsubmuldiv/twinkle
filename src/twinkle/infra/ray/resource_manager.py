@@ -5,7 +5,7 @@ from typing import Dict, List
 import ray
 from ray.util.placement_group import PlacementGroup
 
-from ..device_group import DeviceGroup
+from .. import DeviceGroup
 from ...utils import framework_util
 
 
