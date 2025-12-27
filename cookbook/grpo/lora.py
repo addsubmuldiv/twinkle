@@ -36,12 +36,6 @@ sampler_device_Mesh = DeviceMesh(
     mesh_dim_names=('data',)
 )
 
-ref_device_mesh = DeviceMesh(
-    device_type='cuda',
-    mesh=np.array([2]),
-    mesh_dim_names=('data',)
-)
-
 
 twinkle.initialize(mode='local', groups=device_groups)
 
