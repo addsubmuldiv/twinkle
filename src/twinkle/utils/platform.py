@@ -1,3 +1,4 @@
+import shutil
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
 from typing import Type, Optional
@@ -95,13 +96,20 @@ class Platform(ABC):
         ...
 
     @staticmethod
-    def get_platform(platform: str) -> Type['Platform']:
-        if platform.upper() == "GPU":
+    def get_platform(platform: str = None) -> Type['Platform']:
+        if platform is None:
+            if shutil.which("nvidia-smi"):
+                return GPU
+            elif shutil.which("npu-smi"):
+                return NPU
+            else:
+                raise ValueError(f"Unsupported platform.")
+        elif platform.upper() == "GPU":
             return GPU
         elif platform.upper() == "NPU":
             return NPU
         else:
-            raise ValueError(f"Unsupported platform: {platform}")
+            raise ValueError(f"Unsupported platform: {platform}.")
 
 
 class GPU(Platform):

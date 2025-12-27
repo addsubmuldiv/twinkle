@@ -6,7 +6,7 @@ from typing import TypeVar
 
 import numpy as np
 
-from twinkle import DeviceGroup, DeviceMesh
+from twinkle import DeviceGroup, DeviceMesh, Platform
 from .ray import RayHelper
 from twinkle import requires, framework_util
 from twinkle import check_unsafe
@@ -126,10 +126,46 @@ def dispatch_args(workers, dispatch, execute, device_mesh: DeviceMesh, args, kwa
         raise ValueError(f'Unsupported dispatch method: {dispatch}')
 
 
+def _get_device_mesh_param_name(init_method) -> str:
+    sig = inspect.signature(init_method)
+    for param in sig.parameters.values():
+        ann = param.annotation
+        if ann != inspect.Parameter.empty:
+            if hasattr(ann, '__name__') and ann.__name__ == 'DeviceMesh':
+                return param.name
+            if 'DeviceMesh' in str(ann):
+                return param.name
+    return ''
+
+
+def _get_device_mesh_param(args, kwargs):
+    for arg in (list(args) + list(kwargs.values())):
+        if isinstance(arg, DeviceMesh):
+            return arg
+    return None
+
+
 def remote_class():
 
     def decorator(cls):
+        device_mesh_name = _get_device_mesh_param_name(cls.init_method)
         if _mode == 'local':
+            init_method = cls.__init__
+
+            @functools.wraps(init_method)
+            def new_init(self, *args, **kwargs):
+                device_mesh = _get_device_mesh_param(args, kwargs)
+                if device_mesh is None and device_mesh_name:
+                    device_mesh = DeviceMesh(
+                        device_type=Platform.get_platform().device_prefix(),
+                        mesh=np.array([framework_util.get_world_size()]),
+                        mesh_dim_names=('data',)
+                    )
+                    kwargs[device_mesh_name] = device_mesh
+                    init_method(*args, **kwargs)
+                else:
+                    init_method(*args, **kwargs)
+            cls.__init__ = new_init
             return cls
         elif _mode == 'ray':
             from .ray import RayHelper
@@ -145,6 +181,16 @@ def remote_class():
                 instance_id = f"{caller_file}:{caller_line}"
                 remote_group = kwargs.pop('remote_group', None)
                 check_unsafe(*args, **kwargs)
+
+                device_mesh = _get_device_mesh_param(args, kwargs)
+                if device_mesh is None and device_mesh_name:
+                    device_mesh = DeviceMesh(
+                        device_type=Platform.get_platform().device_prefix(),
+                        mesh=np.array([framework_util.get_world_size()]),
+                        mesh_dim_names=('data',)
+                    )
+                    kwargs[device_mesh_name] = device_mesh
+
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     init_method(self, *args, **kwargs)
 
