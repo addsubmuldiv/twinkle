@@ -47,7 +47,10 @@ class Dataset(TorchDataset):
 
     @remote_function(execute='first')
     def encode(self, template_cls: Union[Type[template.Template], str], **kwargs):
-        self.dataset = self.dataset.map(self.template.encode, **kwargs).filter(lambda x: x is not None, **kwargs)
+        if kwargs.get('batched', True):
+            self.dataset = self.dataset.map(self.template.batch_encode, **kwargs).filter(lambda x: x is not None, **kwargs)
+        else:
+            self.dataset = self.dataset.map(self.template.encode, **kwargs).filter(lambda x: x is not None, **kwargs)
 
     @remote_function(execute='first')
     def check(self, template_cls: Union[Type[template.Template], str], **kwargs):

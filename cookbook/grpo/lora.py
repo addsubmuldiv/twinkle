@@ -1,10 +1,13 @@
+import numpy as np
+
 import twinkle
+from twinkle import DeviceMesh
+from twinkle.dataloader import DataLoader
+from twinkle.dataset import Dataset, DatasetMeta
 from twinkle.infra import DeviceGroup, remote_function, remote_class
 from twinkle.model import TransformersModel
-from twinkle.dataset import Dataset, DatasetMeta
-from twinkle.sampler import VLLMSampler
-from twinkle.dataloader import DataLoader
 from twinkle.reward import MathReward
+from twinkle.sampler import VLLMSampler
 from twinkle.weight_syncronizer.vanilla_synchronizer import VanillaSynchronizer
 
 device_groups = [
@@ -21,18 +24,37 @@ device_groups = [
 ]
 
 
+actor_device_mesh = DeviceMesh(
+    device_type='cuda',
+    mesh=np.array([4]),
+    mesh_dim_names=('data',)
+)
+
+sampler_device_Mesh = DeviceMesh(
+    device_type='cuda',
+    mesh=np.array([2]),
+    mesh_dim_names=('data',)
+)
+
+ref_device_mesh = DeviceMesh(
+    device_type='cuda',
+    mesh=np.array([2]),
+    mesh_dim_names=('data',)
+)
+
+
 twinkle.initialize(mode='local', groups=device_groups)
 
 
 @remote_class()
 class ActorGroup:
 
-    def __init__(self, engine_args, lora_config=None, adapter_name=None):
-        self.sampler = VLLMSampler(engine_args)
+    def __init__(self, engine_args, lora_config=None, adapter_name=None, device_mesh=None):
+        self.sampler = VLLMSampler(engine_args, device_mesh=device_mesh)
         self.sampler.set_processor('GRPOInputProcessor')
         self.sampler.set_template('Qwen3Template')
 
-        self.model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='actor')
+        self.model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='actor', device_mesh=device_mesh)
         self.model.set_loss('GRPOLoss')
         self.model.set_optimizer('AdamW')
         self.model.set_lr_scheduler('LinearDecay')
@@ -70,17 +92,17 @@ class ActorGroup:
 
 def create_dataset():
     dataset = Dataset(DatasetMeta('ms://modelscope/competition_math'))
+    dataset.set_template('Qwen3Template')
     dataset.map('CompetitionMathProcessor')
     return dataset
 
 
 def train():
-    dataloader = DataLoader(create_dataset, remote_group='rollout')
-    dataloader.set_processor('GRPOInputProcessor')
+    dataloader = DataLoader(create_dataset, remote_group='actor', device_mesh=actor_device_mesh)
     engine_args = {
 
     }
-    actor_group = ActorGroup(engine_args, remote_group='rollout')
+    actor_group = ActorGroup(engine_args, remote_group='actor', device_mesh=actor_device_mesh)
     ref_model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='ref')
     ref_model.set_processor('GRPOInputProcessor')
     ref_model.set_template('Qwen3Template', 'Qwen/Qwen2.5-7B-Instruct')
