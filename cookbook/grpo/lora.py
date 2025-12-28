@@ -7,6 +7,7 @@ from twinkle.dataloader import DataLoader
 from twinkle.dataset import Dataset, DatasetMeta
 from twinkle.infra import DeviceGroup, remote_function, remote_class
 from twinkle.model import TransformersModel
+from twinkle.processor import GRPOLossProcessor
 from twinkle.reward import MathReward
 from twinkle.sampler import VLLMSampler
 from twinkle.weight_syncronizer.vanilla_synchronizer import VanillaSynchronizer
@@ -45,21 +46,40 @@ twinkle.initialize(mode='ray', groups=device_groups)
 class ActorGroup:
 
     def __init__(self, engine_args, lora_config=None, adapter_name=None, **kwargs):
-        self.sampler = VLLMSampler('Qwen/Qwen2.5-7B-Instruct', engine_args, device_mesh=actor_device_mesh)
-        self.sampler.set_processor('GRPOInputProcessor', adapter_name=adapter_name)
+        self.sampler = VLLMSampler(
+            'Qwen/Qwen2.5-7B-Instruct', 
+            engine_args, 
+            device_mesh=actor_device_mesh
+        )
         self.sampler.set_template('Qwen3Template', adapter_name=adapter_name)
 
-        self.model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='actor', device_mesh=actor_device_mesh)
-        self.model.set_loss('GRPOLoss', adapter_name=adapter_name)
+        self.model = TransformersModel(
+            pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', 
+            remote_group='actor', 
+            device_mesh=actor_device_mesh
+        )
+        
+        self.model.set_loss(
+            'GRPOLoss', 
+            adapter_name=adapter_name,
+            loss_type='grpo',
+            epsilon=0.2,
+            beta=0.04,
+            num_generations=8,
+            scale_rewards='group',
+        )
         self.model.set_optimizer('AdamW', lr=1e-6, adapter_name=adapter_name)
         self.model.set_lr_scheduler('LinearLR', adapter_name=adapter_name)
         self.model.set_template('Qwen3Template', adapter_name=adapter_name)
-        self.model.set_processor('GRPOInputProcessor', adapter_name=adapter_name)
+        self.model.set_processor('InputProcessor', adapter_name=adapter_name)
         self.model.add_adapter_to_model(adapter_name, lora_config)
         self.sampler.add_adapter_to_sampler(adapter_name, lora_config)
         self.weight_sync = VanillaSynchronizer()
         self.adapter_name = adapter_name
         self.lora_config = lora_config
+        
+        # Loss processor for preparing GRPO-specific fields
+        self.loss_processor = GRPOLossProcessor()
 
     @remote_function()
     def sample(self, batch):
@@ -71,6 +91,8 @@ class ActorGroup:
 
     @remote_function()
     def forward_backward(self, inputs, trajectories, ref_logits, **kwargs):
+        # Process inputs to add GRPO-specific fields (completion_mask, logits_to_keep, num_items_in_batch)
+        inputs = self.loss_processor(inputs)
         return self.model.forward_backward(inputs, trajectories, ref_logits, **kwargs)
 
     @remote_function()
@@ -98,7 +120,12 @@ def create_dataset():
 
 
 def train():
-    dataloader = DataLoader(create_dataset, remote_group='actor', device_mesh=actor_device_mesh)
+    dataloader = DataLoader(
+        create_dataset, 
+        remote_group='actor', 
+        device_mesh=actor_device_mesh
+    )
+    
     engine_args = {
 
     }
@@ -106,16 +133,24 @@ def train():
         target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj']
     )
 
-    actor_group = ActorGroup(engine_args,
-                             remote_group='actor',
-                             lora_config=lora_config,
-                             adapter_name='default',
-                             )
-    ref_model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', remote_group='ref', device_mesh=ref_device_mesh)
-    ref_model.set_processor('GRPOInputProcessor')
+    actor_group = ActorGroup(
+        engine_args,
+        remote_group='actor',
+        lora_config=lora_config,
+        adapter_name='default',
+    )
+    
+    ref_model = TransformersModel(
+        pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct', 
+        remote_group='ref', 
+        device_mesh=ref_device_mesh
+    )
+    ref_model.set_processor('InputProcessor')
     ref_model.set_template('Qwen3Template')
     reward = MathReward()
-    print(get_device_placement())
+    
+    print("Device placement:", get_device_placement())
+    
     for batch in dataloader:
         trajectories = actor_group.sample(batch)
         old_logits = actor_group.forward(trajectories)
