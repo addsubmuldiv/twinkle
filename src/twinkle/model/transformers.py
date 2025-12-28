@@ -36,6 +36,16 @@ class OptimizerGroup:
 
 @remote_class()
 class TransformersModel(TwinkleModel, PreTrainedModel):
+    """The transformers model wrapper.
+
+    Args:
+        model_cls: The PreTrainedModel model class, only needed when creating a blank(not pretrained) model.
+        config: The config of the model.
+        pretrained_model_name_or_path: The model id or path, this argument will be used in `from_pretrained`.
+        kwargs: Any kwargs used in `from_pretrained` or `__init__`.
+
+    If pretrained_model_name_or_path is passed in, `from_pretrained` will be used, else `__init__` will be used.
+    """
 
     _default_adapter_name = ''
 
@@ -62,6 +72,15 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
     @remote_function()
     def forward(self, *, inputs: Any, **kwargs):
+        """Call forward function and record the inputs and outputs.
+
+        Args:
+            inputs: The inputs
+            **kwargs:
+
+        Returns:
+
+        """
         adapter_name = kwargs.pop("adapter_name", '')
         assert adapter_name in self.optimizer_group, f'Add {adapter_name} first before training.'
         processor: InputProcessor = self.optimizer_group[adapter_name].processor

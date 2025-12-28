@@ -39,6 +39,17 @@ def initialize(mode: Literal['local', 'ray'],
                seed: int = 42,
                full_determinism: bool = False,
                groups: Optional[List[DeviceGroup]] = None,):
+    """Initialize the twinkle infrastructure.
+
+    Args:
+        mode: The mode of twinkle works in.
+            'local': Run with a single GPU, or torchrun.
+            'ray': Run in ray cluster.
+        nproc_per_node: The GPU count per node.
+        seed: Seed everything with this.
+        full_determinism: Freeze the random, use determinism kernels, default `False`.
+        groups: The device groups of the training.
+    """
     global _mode, _device_group, _nproc_per_node, _seed, _full_determinism
     assert mode in ('local', 'ray')
     _mode = mode
@@ -53,6 +64,14 @@ def initialize(mode: Literal['local', 'ray'],
 
 
 def get_device_placement(device_group = None) -> str:
+    """Get the device placement graph, can be used to show the training topology.
+
+    Args:
+        device_group: The device group of the training, default will use the global `device_group`.
+
+    Returns:
+        A string containing the training topology.
+    """
     global _device_group
     if device_group is None:
         device_group = _device_group
@@ -266,6 +285,7 @@ def _get_device_mesh_param(args, kwargs):
 
 
 def remote_class():
+    """Patch each class used in remote clusters with this decorator."""
 
     def decorator(cls):
         # Get device mesh parameter name
@@ -386,7 +406,7 @@ def remote_class():
 def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice',
              execute: Literal['first', 'peer', 'all'] = 'all',
              collect: Union[Literal['none', 'flatten'], Callable] = 'none'):
-    """Remote execution function.
+    """Patch each method called from remote(which class should be decorated with `remote_class`) with this decorator.
 
     Args:
         dispatch: How to dispatch the arguments.
@@ -401,8 +421,6 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
             'none': Return as-is
             'flatten': Return a flattened list
             Callable: A callable that handles the collection
-    Returns:
-        The execution result.
     """
 
     def decorator(func: Callable[..., T1]) -> Callable[..., T1]:
