@@ -66,8 +66,12 @@ class ActorGroup:
         return self.sampler.sample(batch)
 
     @remote_function()
-    def forward_backward(self, inputs, trajectories, ref_logits):
-        return self.model.forward_backward(inputs, trajectories, ref_logits)
+    def forward(self, inputs, **kwargs):
+        return self.model.forward(inputs, **kwargs)
+
+    @remote_function()
+    def forward_backward(self, inputs, trajectories, ref_logits, **kwargs):
+        return self.model.forward_backward(inputs, trajectories, ref_logits, **kwargs)
 
     @remote_function()
     def step(self):
@@ -117,7 +121,7 @@ def train():
         old_logits = actor_group.forward(trajectories)
         ref_logits = ref_model.forward(trajectories)
         trajectories = reward.calculate(trajectories, batch)
-        actor_group.forward_backward(batch, trajectories, ref_logits)
+        actor_group.forward_backward(batch, trajectories, ref_logits, adapter_name='default')
         actor_group.step()
         actor_group.zero_grad()
         actor_group.lr_step()
