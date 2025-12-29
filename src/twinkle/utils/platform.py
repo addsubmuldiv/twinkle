@@ -11,18 +11,64 @@ import numpy as np
 
 @dataclass
 class DeviceMesh:
+    """
+    - dp: Data Parallel
+    - fsdp: Fully Sharded Data Parallel
+    - tp: Tensor Parallel
+    - pp: Pipeline Parallel
+    - sp: Sequence Parallel
+    - cp: Context Parallel
+    - ep: Expert Parallel
+
+    Examples:
+        # 8 GPUs: fsdp=4, tp=2
+        mesh = DeviceMesh(
+            device_type="cuda",
+            mesh=np.array([[0, 1], [2, 3], [4, 5], [6, 7]]),
+            mesh_dim_names=("fsdp", "tp"),
+        )
+
+        # 16 GPUs: dp=2, fsdp=2, tp=2, pp=2
+        mesh = DeviceMesh(
+            device_type="cuda",
+            mesh=np.arange(16).reshape(2, 2, 2, 2),
+            mesh_dim_names=("dp", "fsdp", "tp", "pp"),
+        )
+    """
     device_type: str
     mesh: np.ndarray
-    mesh_dim_names: Optional[tuple[str, ...]]
+    mesh_dim_names: Optional[tuple[str, ...]] = None
+
+    def __post_init__(self):
+        if not isinstance(self.mesh, np.ndarray):
+            self.mesh = np.array(self.mesh)
+
+        if self.mesh_dim_names is not None:
+            if len(self.mesh_dim_names) != len(self.mesh.shape):
+                raise ValueError(
+                    f"The shape of mesh_dim_names:({len(self.mesh_dim_names)}) "
+                    f"does not match the shape of mesh: ({len(self.mesh.shape)})"
+                )
 
     def to_torch_device_mesh(self):
         import torch
-        return torch.distributed.DeviceMesh(self.device_type, self.mesh, mesh_dim_names=self.mesh_dim_names)
+        return torch.distributed.DeviceMesh(
+            self.device_type,
+            self.mesh,
+            mesh_dim_names=self.mesh_dim_names
+        )
 
     def _get_coord(self) -> tuple[int, ...]:
-        coords = np.argwhere(self.mesh == Platform.get_rank())
+        rank = Platform.get_rank()
+        coords = np.argwhere(self.mesh == rank)
         if len(coords) == 0:
-            raise ValueError(f"Rank {Platform.get_rank()} not found in mesh")
+            raise ValueError(f"Rank {rank} not found in mesh")
+        return tuple(coords[0])
+
+    def _get_coord_for_rank(self, rank: int) -> tuple[int, ...]:
+        coords = np.argwhere(self.mesh == rank)
+        if len(coords) == 0:
+            raise ValueError(f"Rank {rank} not found in mesh")
         return tuple(coords[0])
 
     def _get_dim_index(self, dim_name: str) -> Optional[int]:
@@ -31,6 +77,9 @@ class DeviceMesh:
         if dim_name not in self.mesh_dim_names:
             return None
         return self.mesh_dim_names.index(dim_name)
+
+    def _has_dim(self, dim_name: str) -> bool:
+        return self._get_dim_index(dim_name) is not None
 
     def _get_rank_for_dim(self, dim_name: str) -> int:
         dim_idx = self._get_dim_index(dim_name)
@@ -47,69 +96,304 @@ class DeviceMesh:
 
     @property
     def dp_rank(self) -> int:
+        """Data Parallel rank"""
         return self._get_rank_for_dim("dp")
 
     @property
-    def sp_rank(self) -> int:
-        return self._get_rank_for_dim("sp")
-
-    @property
-    def cp_rank(self) -> int:
-        return self._get_rank_for_dim("cp")
+    def fsdp_rank(self) -> int:
+        """Fully Sharded Data Parallel rank"""
+        return self._get_rank_for_dim("fsdp")
 
     @property
     def tp_rank(self) -> int:
+        """Tensor Parallel rank"""
         return self._get_rank_for_dim("tp")
 
     @property
     def pp_rank(self) -> int:
+        """Pipeline Parallel rank"""
         return self._get_rank_for_dim("pp")
 
     @property
+    def sp_rank(self) -> int:
+        """Sequence Parallel rank"""
+        return self._get_rank_for_dim("sp")
+
+    @property
+    def cp_rank(self) -> int:
+        """Context Parallel rank"""
+        return self._get_rank_for_dim("cp")
+
+    @property
     def ep_rank(self) -> int:
+        """Expert Parallel rank"""
         return self._get_rank_for_dim("ep")
 
     @property
-    def mp_rank(self) -> int:
-        return self._get_rank_for_dim("tp")
-
-    @property
     def dp_world_size(self) -> int:
+        """Data Parallel world size"""
         return self._get_world_size_for_dim("dp")
 
     @property
-    def sp_world_size(self) -> int:
-        return self._get_world_size_for_dim("sp")
-
-    @property
-    def cp_world_size(self) -> int:
-        return self._get_world_size_for_dim("cp")
+    def fsdp_world_size(self) -> int:
+        """Fully Sharded Data Parallel world size"""
+        return self._get_world_size_for_dim("fsdp")
 
     @property
     def tp_world_size(self) -> int:
+        """Tensor Parallel world size"""
         return self._get_world_size_for_dim("tp")
 
     @property
     def pp_world_size(self) -> int:
+        """Pipeline Parallel world size"""
         return self._get_world_size_for_dim("pp")
 
     @property
+    def sp_world_size(self) -> int:
+        """Sequence Parallel world size"""
+        return self._get_world_size_for_dim("sp")
+
+    @property
+    def cp_world_size(self) -> int:
+        """Context Parallel world size"""
+        return self._get_world_size_for_dim("cp")
+
+    @property
     def ep_world_size(self) -> int:
+        """Expert Parallel world size"""
         return self._get_world_size_for_dim("ep")
 
     @property
-    def mp_world_size(self) -> int:
-        return self._get_world_size_for_dim("tp")
-
-    @property
     def world_size(self) -> int:
+        """总的 world size"""
         return Platform.get_world_size()
 
-    def get_slice(self, total_length):
-        length = self.dp_world_size
+    @property
+    def mp_rank(self) -> int:
+        return self.tp_rank
+
+    @property
+    def mp_world_size(self) -> int:
+        return self.tp_world_size
+
+    @property
+    def data_parallel_rank(self) -> int:
         dp_rank = self.dp_rank
-        k, m = divmod(total_length, length)
-        return slice(dp_rank * k + min(dp_rank, m), (dp_rank + 1) * k + min(dp_rank + 1, m))
+        fsdp_rank = self.fsdp_rank
+        fsdp_world_size = self.fsdp_world_size
+
+        return dp_rank * fsdp_world_size + fsdp_rank
+
+    @property
+    def data_parallel_world_size(self) -> int:
+        return self.dp_world_size * self.fsdp_world_size
+
+    def get_slice(self, total_length: int) -> slice:
+        world_size = self.data_parallel_world_size
+        rank = self.data_parallel_rank
+
+        k, m = divmod(total_length, world_size)
+        start = rank * k + min(rank, m)
+        end = (rank + 1) * k + min(rank + 1, m)
+        return slice(start, end)
+
+    def get_slice_for_dim(self, dim_name: str, total_length: int) -> slice:
+        world_size = self._get_world_size_for_dim(dim_name)
+        rank = self._get_rank_for_dim(dim_name)
+
+        k, m = divmod(total_length, world_size)
+        start = rank * k + min(rank, m)
+        end = (rank + 1) * k + min(rank + 1, m)
+        return slice(start, end)
+
+    @property
+    def is_first_pp_stage(self) -> bool:
+        return self.pp_rank == 0
+
+    @property
+    def is_last_pp_stage(self) -> bool:
+        return self.pp_rank == self.pp_world_size - 1
+
+    def get_pp_prev_rank(self) -> Optional[int]:
+        if self.is_first_pp_stage:
+            return None
+
+        pp_idx = self._get_dim_index("pp")
+        if pp_idx is None:
+            return None
+
+        coord = list(self._get_coord())
+        coord[pp_idx] -= 1
+        return int(self.mesh[tuple(coord)])
+
+    def get_pp_next_rank(self) -> Optional[int]:
+        if self.is_last_pp_stage:
+            return None
+
+        pp_idx = self._get_dim_index("pp")
+        if pp_idx is None:
+            return None
+
+        coord = list(self._get_coord())
+        coord[pp_idx] += 1
+        return int(self.mesh[tuple(coord)])
+
+    def get_pp_group_ranks(self) -> list[int]:
+        pp_idx = self._get_dim_index("pp")
+        if pp_idx is None:
+            return [Platform.get_rank()]
+
+        coord = list(self._get_coord())
+        ranks = []
+        for i in range(self.pp_world_size):
+            coord[pp_idx] = i
+            ranks.append(int(self.mesh[tuple(coord)]))
+        return ranks
+
+    def get_pp_layer_range(self, total_layers: int) -> tuple[int, int]:
+        pp_rank = self.pp_rank
+        pp_world_size = self.pp_world_size
+
+        layers_per_stage = total_layers // pp_world_size
+        remainder = total_layers % pp_world_size
+
+        # 前 remainder 个 stage 多分一层
+        if pp_rank < remainder:
+            start = pp_rank * (layers_per_stage + 1)
+            end = start + layers_per_stage + 1
+        else:
+            start = remainder * (layers_per_stage + 1) + (pp_rank - remainder) * layers_per_stage
+            end = start + layers_per_stage
+
+        return (start, end)
+
+    def get_ranks_in_dim(self, dim_name: str) -> list[int]:
+        dim_idx = self._get_dim_index(dim_name)
+        if dim_idx is None:
+            return [Platform.get_rank()]
+
+        coord = list(self._get_coord())
+        ranks = []
+        for i in range(self.mesh.shape[dim_idx]):
+            coord[dim_idx] = i
+            ranks.append(int(self.mesh[tuple(coord)]))
+        return ranks
+
+    def get_fsdp_group_ranks(self) -> list[int]:
+        return self.get_ranks_in_dim("fsdp")
+
+    def get_tp_group_ranks(self) -> list[int]:
+        return self.get_ranks_in_dim("tp")
+
+    def get_dp_group_ranks(self) -> list[int]:
+        return self.get_ranks_in_dim("dp")
+
+    def get_sp_group_ranks(self) -> list[int]:
+        return self.get_ranks_in_dim("sp")
+
+    def get_cp_group_ranks(self) -> list[int]:
+        return self.get_ranks_in_dim("cp")
+
+    def get_ep_group_ranks(self) -> list[int]:
+        return self.get_ranks_in_dim("ep")
+
+    def get_submesh(self, dim_name: str) -> "DeviceMesh":
+        dim_idx = self._get_dim_index(dim_name)
+        if dim_idx is None:
+            raise ValueError(f"Dimension '{dim_name}' not found in mesh_dim_names")
+
+        coord = self._get_coord()
+
+        # 构建索引，固定其他维度，只保留目标维度
+        indices = []
+        for i, c in enumerate(coord):
+            if i == dim_idx:
+                indices.append(slice(None))
+            else:
+                indices.append(c)
+
+        sub_mesh = self.mesh[tuple(indices)]
+        return DeviceMesh(
+            device_type=self.device_type,
+            mesh=sub_mesh,
+            mesh_dim_names=(dim_name,),
+        )
+
+    def __getitem__(self, dim_name: str) -> "DeviceMesh":
+        return self.get_submesh(dim_name)
+
+    def get_process_group(self, dim_name: str):
+        torch_mesh = self.to_torch_device_mesh()
+        return torch_mesh.get_group(dim_name)
+
+    def shares_data_with(self, other_rank: int) -> bool:
+        other_coord = self._get_coord_for_rank(other_rank)
+
+        dp_idx = self._get_dim_index("dp")
+        fsdp_idx = self._get_dim_index("fsdp")
+
+        other_dp_rank = other_coord[dp_idx] if dp_idx is not None else 0
+        other_fsdp_rank = other_coord[fsdp_idx] if fsdp_idx is not None else 0
+        other_fsdp_world_size = self.fsdp_world_size
+
+        other_data_parallel_rank = other_dp_rank * other_fsdp_world_size + other_fsdp_rank
+
+        return self.data_parallel_rank == other_data_parallel_rank
+
+    def has_dim(self, dim_name: str) -> bool:
+        return dim_name in self.dim_names
+
+    def get_dim_size(self, dim_name: str) -> int:
+        if not self.has_dim(dim_name):
+            raise ValueError(f"Dimension '{dim_name}' not found in mesh. Available: {self.dim_names}")
+
+        dim_idx = self.dim_names.index(dim_name)
+        return self.shape[dim_idx]
+
+    def get_dim_group(self, dim_name: str):
+        """获取指定维度的进程组"""
+        if not self.has_dim(dim_name):
+            return None
+        return self.mesh.get_group(dim_name)
+
+    def get_local_rank_in_dim(self, dim_name: str) -> int:
+        return self._get_rank_for_dim(dim_name)
+
+    def __repr__(self) -> str:
+        return (
+            f"DeviceMesh(\n"
+            f"  device_type='{self.device_type}',\n"
+            f"  mesh=\n{self.mesh},\n"
+            f"  mesh_dim_names={self.mesh_dim_names}\n"
+            f")"
+        )
+
+    def summary(self) -> str:
+        lines = [f"DeviceMesh Summary for Rank {Platform.get_rank()}:"]
+        lines.append(f"  Global World Size: {self.world_size}")
+        lines.append(f"  Mesh Shape: {self.mesh.shape}")
+        lines.append(f"  Mesh Dims: {self.mesh_dim_names}")
+        lines.append(f"  Coordinate: {self._get_coord()}")
+        lines.append("")
+
+        if self.mesh_dim_names:
+            for dim_name in self.mesh_dim_names:
+                rank = self._get_rank_for_dim(dim_name)
+                ws = self._get_world_size_for_dim(dim_name)
+                lines.append(f"  {dim_name}: rank={rank}, world_size={ws}")
+
+        lines.append("")
+        lines.append(f"  Data Parallel Rank: {self.data_parallel_rank}")
+        lines.append(f"  Data Parallel World Size: {self.data_parallel_world_size}")
+
+        if self._has_dim("pp"):
+            lines.append("")
+            lines.append(f"  PP Stage: {self.pp_rank + 1}/{self.pp_world_size}")
+            lines.append(f"  Is First PP Stage: {self.is_first_pp_stage}")
+            lines.append(f"  Is Last PP Stage: {self.is_last_pp_stage}")
+
+        return "\n".join(lines)
 
 
 @dataclass

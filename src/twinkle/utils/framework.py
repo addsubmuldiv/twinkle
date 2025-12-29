@@ -7,6 +7,8 @@ from functools import lru_cache
 
 import numpy as np
 
+from twinkle import Platform
+
 
 class Framework(ABC):
 
@@ -116,7 +118,7 @@ class Torch(Framework):
     @staticmethod
     def get_device(local_rank) -> str:
         if local_rank is None:
-            local_rank = max(0, Torch.get_local_rank())
+            local_rank = max(0, Platform.get_local_rank())
         local_rank = str(local_rank)
         if Torch.is_gpu_available():
             from .platform import GPU
@@ -132,7 +134,7 @@ class Torch(Framework):
     def set_device(local_rank: Union[int, str]) -> None:
         import torch
         if local_rank is None:
-            local_rank = max(0, Torch.get_local_rank())
+            local_rank = max(0, Platform.get_local_rank())
         if Torch.is_gpu_available():
             torch.cuda.set_device(local_rank)
         elif Torch.is_npu_available():

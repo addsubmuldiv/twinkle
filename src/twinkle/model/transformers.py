@@ -1,3 +1,4 @@
+import contextlib
 import re
 from dataclasses import dataclass
 from typing import Dict, Any, List
@@ -5,6 +6,8 @@ from typing import overload, Type, Optional, Union
 
 from peft import PeftConfig
 from peft import get_peft_model, PeftModel
+import torch
+from torch import GradScaler
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedModel, PretrainedConfig
@@ -18,6 +21,7 @@ from twinkle.patch import MultiAdapter
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
 from twinkle.utils.plugin import Plugin
+from .strategy import AccelerateStrategy
 from ..data_format import InputFeature, Trajectory
 
 
@@ -33,6 +37,8 @@ class OptimizerGroup:
     loss_value: Any = None
     template: Template = None
     processor: InputProcessor = None
+    scaler: GradScaler = None
+    scaler_has_nan: bool = False
 
 
 @remote_class()
@@ -63,6 +69,10 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                  pretrained_model_name_or_path: Optional[str] = None,
                  config: Optional[PretrainedConfig] = None,
                  device_mesh: DeviceMesh = None,
+                 mixed_precision: str = None,
+                 ddp_config: Dict[str, Any] = None,
+                 fsdp_config: Dict[str, Any] = None,
+                 grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
         if pretrained_model_name_or_path is None:
             self.model = model_cls(config, **kwargs)
@@ -71,7 +81,12 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.model_id = pretrained_model_name_or_path
         self.device_mesh = device_mesh
         self.model: PreTrainedModel = MultiAdapter()(self.model) # patch multiple loras
+        self.mixed_precision = mixed_precision
+        self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, ddp_config=ddp_config,
+                                           fsdp_config=fsdp_config)
+        self.grad_scaler_config = grad_scaler_config
         self.optimizer_group: Dict[str, OptimizerGroup] = {self._default_adapter_name: OptimizerGroup()}
+        self.model = self.strategy.wrap_model(self.model)
 
     @remote_function()
     def forward(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
@@ -141,7 +156,19 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         assert loss_value is not None, 'Forward and calculate loss before backward pass.'
         if adapter_name:
             self.model.set_current_adapter_name(adapter_name)
-        loss_value.backward()
+
+        scaler = self.optimizer_group[adapter_name].scaler
+        loss_value = loss_value / self.gradient_accumulation_steps
+        if scaler is not None:
+            scaler.scale(loss_value).backward(**kwargs)
+        else:
+            loss_value.backward(**kwargs)
+
+        if adapter_name:
+            import torch.distributed as dist
+            for p in self._get_trainable_parameters(adapter_name):
+                if p.grad is not None:
+                    dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
 
     @remote_function()
     def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature]], **kwargs):
@@ -149,13 +176,52 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.calculate_loss(**kwargs)
         self.backward(**kwargs)
 
+    def clip_grad_norm(self, max_grad_norm: float=1.0, norm_type=2, **kwargs):
+        adapter_name = kwargs.pop("adapter_name", None) or ''
+        assert adapter_name in self.optimizer_group, f'Add {adapter_name} first before training.'
+        optimizer = self.optimizer_group[adapter_name].optimizer
+        scaler = self.optimizer_group[adapter_name].scaler
+
+        context = contextlib.nullcontext
+        if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
+            from torch.distributed._tensor.experimental import implicit_replication
+            context = implicit_replication
+
+        with context():
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+
+            parameters = self._get_trainable_parameters(adapter_name=adapter_name)
+            if self.device_mesh.fsdp_world_size > 1:
+                if not self.is_fsdp2:
+                    return self.model.clip_grad_norm_(max_grad_norm, norm_type)
+                else:
+                    return torch.nn.utils.clip_grad_norm_(
+                        parameters, max_grad_norm, norm_type=norm_type
+                    )
+            else:
+                return torch.nn.utils.clip_grad_norm_(parameters, max_norm, norm_type=norm_type)
+
     @remote_function()
     def step(self, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         assert adapter_name in self.optimizer_group, f'Add {adapter_name} first before training.'
         optimizer = self.optimizer_group[adapter_name].optimizer
+        scaler = self.optimizer_group[adapter_name].scaler
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before forwarding'
-        optimizer.step()
+
+        context = contextlib.nullcontext
+        if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
+            from torch.distributed._tensor.experimental import implicit_replication
+            context = implicit_replication
+
+        with context():
+            if scaler is not None:
+                scaler.step(optimizer, **kwargs)
+                scaler.update()
+                self.optimizer_group[adapter_name].scaler_has_nan = sum(v.item() for v in scaler._found_inf_per_device(optimizer).values()) > 0
+            else:
+                optimizer.step(**kwargs)
 
     @remote_function()
     def zero_grad(self, **kwargs):
@@ -163,15 +229,17 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         assert adapter_name in self.optimizer_group, f'Add {adapter_name} first before training.'
         optimizer = self.optimizer_group[adapter_name].optimizer
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before forwarding'
-        optimizer.zero_grad()
+        optimizer.zero_grad(**kwargs)
 
     @remote_function()
     def lr_step(self, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         assert adapter_name in self.optimizer_group, f'Add {adapter_name} first before training.'
+        if self.optimizer_group[adapter_name].scaler_has_nan:
+            return
         lr_scheduler = self.optimizer_group[adapter_name].lr_scheduler
         assert isinstance(lr_scheduler, LRScheduler), 'Set lr_scheduler correctly before forwarding'
-        lr_scheduler.step()
+        lr_scheduler.step(**kwargs)
 
     @remote_function()
     def set_loss(self, loss_cls: Union[Type[Loss], str], **kwargs):
@@ -202,7 +270,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         is_default = adapter_name == self._default_adapter_name
         pattern = re.compile(rf'\.lora_\w+\.{re.escape(adapter_name)}\.')
         params = {}
-        for name, param in self.model.named_parameters():
+        model = self.strategy.unwrap_model(self.model)
+        for name, param in model.named_parameters():
             if param.requires_grad and (pattern.search(name) or is_default):
                 params[name] = param
         return params
@@ -268,3 +337,12 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             else:
                 processor_cls = Plugin.load_plugin(processor_cls, InputProcessor)
         self.optimizer_group[adapter_name].processor = processor_cls(**kwargs)
+
+    @remote_function()
+    def set_grad_scaler(self, **kwargs):
+        adapter_name = kwargs.pop("adapter_name", None) or ''
+        assert adapter_name in self.optimizer_group, f'Add {adapter_name} first before training.'
+        from torch.amp.grad_scaler import GradScaler
+        grad_scaler_config = self.grad_scaler_config.copy()
+        grad_scaler_config.update(kwargs)
+        self.optimizer_group[adapter_name].scaler = GradScaler(**grad_scaler_config)
