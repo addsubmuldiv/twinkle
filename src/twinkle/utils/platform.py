@@ -46,8 +46,8 @@ class DeviceMesh:
         if self.mesh_dim_names is not None:
             if len(self.mesh_dim_names) != len(self.mesh.shape):
                 raise ValueError(
-                    f"The shape of mesh_dim_names:({len(self.mesh_dim_names)}) "
-                    f"does not match the shape of mesh: ({len(self.mesh.shape)})"
+                    f"The shape of `mesh_dim_names`:({len(self.mesh_dim_names)}) "
+                    f"does not match the shape of `mesh`: ({len(self.mesh.shape)})"
                 )
 
     def to_torch_device_mesh(self):
@@ -96,77 +96,62 @@ class DeviceMesh:
 
     @property
     def dp_rank(self) -> int:
-        """Data Parallel rank"""
         return self._get_rank_for_dim("dp")
 
     @property
     def fsdp_rank(self) -> int:
-        """Fully Sharded Data Parallel rank"""
         return self._get_rank_for_dim("fsdp")
 
     @property
     def tp_rank(self) -> int:
-        """Tensor Parallel rank"""
         return self._get_rank_for_dim("tp")
 
     @property
     def pp_rank(self) -> int:
-        """Pipeline Parallel rank"""
         return self._get_rank_for_dim("pp")
 
     @property
     def sp_rank(self) -> int:
-        """Sequence Parallel rank"""
         return self._get_rank_for_dim("sp")
 
     @property
     def cp_rank(self) -> int:
-        """Context Parallel rank"""
         return self._get_rank_for_dim("cp")
 
     @property
     def ep_rank(self) -> int:
-        """Expert Parallel rank"""
         return self._get_rank_for_dim("ep")
 
     @property
     def dp_world_size(self) -> int:
-        """Data Parallel world size"""
         return self._get_world_size_for_dim("dp")
 
     @property
     def fsdp_world_size(self) -> int:
-        """Fully Sharded Data Parallel world size"""
         return self._get_world_size_for_dim("fsdp")
 
     @property
     def tp_world_size(self) -> int:
-        """Tensor Parallel world size"""
         return self._get_world_size_for_dim("tp")
 
     @property
     def pp_world_size(self) -> int:
-        """Pipeline Parallel world size"""
         return self._get_world_size_for_dim("pp")
 
     @property
     def sp_world_size(self) -> int:
-        """Sequence Parallel world size"""
         return self._get_world_size_for_dim("sp")
 
     @property
     def cp_world_size(self) -> int:
-        """Context Parallel world size"""
         return self._get_world_size_for_dim("cp")
 
     @property
     def ep_world_size(self) -> int:
-        """Expert Parallel world size"""
         return self._get_world_size_for_dim("ep")
 
     @property
     def world_size(self) -> int:
-        """总的 world size"""
         return Platform.get_world_size()
 
     @property
@@ -258,7 +243,6 @@ class DeviceMesh:
         layers_per_stage = total_layers // pp_world_size
         remainder = total_layers % pp_world_size
 
-        # 前 remainder 个 stage 多分一层
         if pp_rank < remainder:
             start = pp_rank * (layers_per_stage + 1)
             end = start + layers_per_stage + 1
@@ -266,7 +250,7 @@ class DeviceMesh:
             start = remainder * (layers_per_stage + 1) + (pp_rank - remainder) * layers_per_stage
             end = start + layers_per_stage
 
-        return (start, end)
+        return start, end
 
     def get_ranks_in_dim(self, dim_name: str) -> list[int]:
         dim_idx = self._get_dim_index(dim_name)
@@ -304,8 +288,6 @@ class DeviceMesh:
             raise ValueError(f"Dimension '{dim_name}' not found in mesh_dim_names")
 
         coord = self._get_coord()
-
-        # 构建索引，固定其他维度，只保留目标维度
         indices = []
         for i, c in enumerate(coord):
             if i == dim_idx:
@@ -342,58 +324,25 @@ class DeviceMesh:
         return self.data_parallel_rank == other_data_parallel_rank
 
     def has_dim(self, dim_name: str) -> bool:
-        return dim_name in self.dim_names
+        if self.mesh_dim_names is None:
+            return False
+        return dim_name in self.mesh_dim_names
 
     def get_dim_size(self, dim_name: str) -> int:
         if not self.has_dim(dim_name):
-            raise ValueError(f"Dimension '{dim_name}' not found in mesh. Available: {self.dim_names}")
+            raise ValueError(f"Dimension '{dim_name}' not found in mesh. Available: {self.mesh_dim_names}")
 
-        dim_idx = self.dim_names.index(dim_name)
-        return self.shape[dim_idx]
+        dim_idx = self.mesh_dim_names.index(dim_name)
+        return self.mesh.shape[dim_idx]
 
     def get_dim_group(self, dim_name: str):
-        """获取指定维度的进程组"""
         if not self.has_dim(dim_name):
             return None
-        return self.mesh.get_group(dim_name)
+        torch_mesh = self.to_torch_device_mesh()
+        return torch_mesh.get_group(dim_name)
 
     def get_local_rank_in_dim(self, dim_name: str) -> int:
         return self._get_rank_for_dim(dim_name)
-
-    def __repr__(self) -> str:
-        return (
-            f"DeviceMesh(\n"
-            f"  device_type='{self.device_type}',\n"
-            f"  mesh=\n{self.mesh},\n"
-            f"  mesh_dim_names={self.mesh_dim_names}\n"
-            f")"
-        )
-
-    def summary(self) -> str:
-        lines = [f"DeviceMesh Summary for Rank {Platform.get_rank()}:"]
-        lines.append(f"  Global World Size: {self.world_size}")
-        lines.append(f"  Mesh Shape: {self.mesh.shape}")
-        lines.append(f"  Mesh Dims: {self.mesh_dim_names}")
-        lines.append(f"  Coordinate: {self._get_coord()}")
-        lines.append("")
-
-        if self.mesh_dim_names:
-            for dim_name in self.mesh_dim_names:
-                rank = self._get_rank_for_dim(dim_name)
-                ws = self._get_world_size_for_dim(dim_name)
-                lines.append(f"  {dim_name}: rank={rank}, world_size={ws}")
-
-        lines.append("")
-        lines.append(f"  Data Parallel Rank: {self.data_parallel_rank}")
-        lines.append(f"  Data Parallel World Size: {self.data_parallel_world_size}")
-
-        if self._has_dim("pp"):
-            lines.append("")
-            lines.append(f"  PP Stage: {self.pp_rank + 1}/{self.pp_world_size}")
-            lines.append(f"  Is First PP Stage: {self.is_first_pp_stage}")
-            lines.append(f"  Is Last PP Stage: {self.is_last_pp_stage}")
-
-        return "\n".join(lines)
 
 
 @dataclass

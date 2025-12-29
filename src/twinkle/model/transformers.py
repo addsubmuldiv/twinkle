@@ -184,7 +184,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
         context = contextlib.nullcontext
         if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
-            from torch.distributed._tensor.experimental import implicit_replication
+            from torch.distributed.tensor.experimental import implicit_replication
             context = implicit_replication
 
         with context():
@@ -200,7 +200,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                         parameters, max_grad_norm, norm_type=norm_type
                     )
             else:
-                return torch.nn.utils.clip_grad_norm_(parameters, max_norm, norm_type=norm_type)
+                return torch.nn.utils.clip_grad_norm_(parameters, max_grad_norm, norm_type=norm_type)
 
     @remote_function()
     def step(self, **kwargs):
@@ -212,7 +212,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
         context = contextlib.nullcontext
         if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
-            from torch.distributed._tensor.experimental import implicit_replication
+            from torch.distributed.tensor.experimental import implicit_replication
             context = implicit_replication
 
         with context():

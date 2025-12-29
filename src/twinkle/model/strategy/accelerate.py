@@ -8,7 +8,7 @@ class AccelerateStrategy(TrainStrategy):
 
     def __init__(self,
                  device_mesh: DeviceMesh = None,
-                 mixed_precision: str = None,
+                 mixed_precision: str = 'bf16',
                  ddp_config: Dict[str, Any] = None,
                  fsdp_config: Dict[str, Any] = None,
                  ):
@@ -44,7 +44,7 @@ class AccelerateStrategy(TrainStrategy):
         cp_size = device_mesh.get_dim_size("cp") if device_mesh.has_dim("cp") else 1
         sp_size = device_mesh.get_dim_size("sp") if device_mesh.has_dim("sp") else 1
 
-        if dp_size > 1 and fsdp_size == 1 and tp_size == 1 and cp_size == 1 and sp_size == 1 and dp_size == 1:
+        if dp_size > 1 and fsdp_size == 1 and tp_size == 1 and cp_size == 1 and sp_size == 1:
             # Only ddp
             return None
 
