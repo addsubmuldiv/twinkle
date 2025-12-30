@@ -21,6 +21,8 @@ _nproc_per_node: Optional[int] = 8
 
 _seed = 42
 
+_lazy_collect = True
+
 _full_determinism = False
 
 _device_group: Optional[List[DeviceGroup]] = [
@@ -38,7 +40,8 @@ def initialize(mode: Literal['local', 'ray'],
                nproc_per_node: Optional[int] = 8,
                seed: int = 42,
                full_determinism: bool = False,
-               groups: Optional[List[DeviceGroup]] = None,):
+               groups: Optional[List[DeviceGroup]] = None,
+               lazy_collect: bool = True):
     """Initialize the twinkle infrastructure.
 
     Args:
@@ -49,11 +52,13 @@ def initialize(mode: Literal['local', 'ray'],
         seed: Seed everything with this.
         full_determinism: Freeze the random, use determinism kernels, default `False`.
         groups: The device groups of the training.
+        lazy_collect: Lazy collect all outputs in workers, default `True`.
     """
-    global _mode, _device_group, _nproc_per_node, _seed, _full_determinism
+    global _mode, _device_group, _nproc_per_node, _seed, _full_determinism, _lazy_collect
     assert mode in ('local', 'ray')
     _mode = mode
     _full_determinism = full_determinism
+    _lazy_collect = lazy_collect
     if seed is not None:
         _seed = seed
         framework_util.seed_everything(seed, full_determinism)
@@ -440,7 +445,8 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                     _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), dispatch,
                                                         execute, device_mesh, args, kwargs)
                     result = RayHelper.execute_all_async(func.__name__, _workers_and_args)
-                    return RayHelper.do_get_and_collect_func(_collect_func, collect, result)
+                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
+                    return result_func if _lazy_collect else result_func()
             else:
                 raise NotImplementedError(f'Unsupported mode {_mode}')
 

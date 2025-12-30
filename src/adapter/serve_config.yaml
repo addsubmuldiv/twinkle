@@ -1,0 +1,62 @@
+applications:
+  # Qwen3-7B Model
+  - name: models-qwen3-7B
+    route_prefix: /models/Qwen/Qwen3-7B
+    import_path: main:build_model_app
+    args:
+      model_id: "Qwen/Qwen3-7B"
+      device_group:
+        name: vllm_sampler
+        ranks: [ 0,1,2,3,4,5,6,7 ]
+        device_type: cuda
+      device_mesh:
+        device_type: cuda
+        mesh: [ 0,1,2,3,4,5,6,7 ]
+        mesh_dim_names: ['fsdp']
+    deployments:
+      - name: ModelManagement
+        autoscaling_config:
+          min_replicas: 1
+          max_replicas: 4
+          target_ongoing_requests: 16
+        ray_actor_options:
+          num_cpus: 0.1
+
+  # Qwen3-7B Sampler
+  - name: sampler-qwen3-7B
+    route_prefix: /samplers/Qwen/Qwen3-7B
+    import_path: main:build_sampler_app
+    args:
+      model_id: "Qwen/Qwen3-7B"
+      device_group:
+        name: vllm_sampler
+        ranks: [0,1,2,3,4,5,6,7]
+        device_type: cuda
+      device_mesh:
+        device_type: cuda
+        mesh: [0,1,2,3,4,5,6,7]
+        mesh_dim_names: ['tp']
+      engine_args:
+
+    deployments:
+      - name: SamplerManagement
+        autoscaling_config:
+          min_replicas: 1
+          max_replicas: 4
+          target_ongoing_requests: 16
+        ray_actor_options:
+          num_cpus: 0.1
+
+  # Processors
+  - name: processor
+    route_prefix: /processors
+    import_path: main:build_processor_app
+    args:
+    deployments:
+      - name: ProcessorManagement
+        autoscaling_config:
+          min_replicas: 1
+          max_replicas: 4
+          target_ongoing_requests: 128
+        ray_actor_options:
+          num_cpus: 0.1

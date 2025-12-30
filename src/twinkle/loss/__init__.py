@@ -10,6 +10,7 @@ from .reranker import RerankerLoss
 from .listwise_reranker import ListwiseRerankerLoss
 from .listwise_generative_reranker import ListwiseGenerativeRerankerLoss
 from .grpo import GRPOLoss
+from .base import Loss
 
 torch_loss_mapping = {
     'mse': MSELoss,
