@@ -353,3 +353,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         grad_scaler_config = self.grad_scaler_config.copy()
         grad_scaler_config.update(kwargs)
         self.optimizer_group[adapter_name].scaler = GradScaler(**grad_scaler_config)
+
+    def remove_adapter(self, adapter_name: str):
+        if adapter_name in self.optimizer_group:
+            self.optimizer_group.pop(adapter_name)
+        if isinstance(self.model, PeftModel):
+            self.model.delete_adapter(adapter_name)

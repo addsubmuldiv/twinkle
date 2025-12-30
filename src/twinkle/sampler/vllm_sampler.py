@@ -128,3 +128,7 @@ class VLLMSampler(Sampler):
                 lora_tensors=state_dict,
             )
             self.engine.engine.add_lora(lora_request)
+
+    def remove_adapter(self, adapter_name: str):
+        if adapter_name in self.sample_group:
+            self.sample_group.pop(adapter_name)

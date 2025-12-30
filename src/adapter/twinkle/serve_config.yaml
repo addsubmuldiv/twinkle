@@ -52,6 +52,14 @@ applications:
     route_prefix: /processors
     import_path: main:build_processor_app
     args:
+      device_group:
+        name: processor
+        ranks: [ 0 ]
+        device_type: cpu
+      device_mesh:
+        device_type: cpu
+        mesh: [ 0 ]
+        mesh_dim_names: [ 'data' ]
     deployments:
       - name: ProcessorManagement
         autoscaling_config:
