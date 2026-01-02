@@ -3,12 +3,11 @@ from typing import Dict, Any, List
 
 from fastapi import FastAPI
 from fastapi import Request
-from fastapi.responses import JSONResponse
 from peft import LoraConfig
 from ray import serve
 
 import twinkle
-from adapter.twinkle.validation import is_token_valid, verify_request_token
+from adapter.twinkle.validation import verify_request_token
 from twinkle import DeviceGroup, DeviceMesh
 from twinkle.data_format import Trajectory
 from twinkle.sampler import VLLMSampler, Sampler

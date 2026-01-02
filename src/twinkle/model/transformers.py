@@ -63,7 +63,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         ...
 
     def __init__(self, # noqa
-                 model_cls: Optional[Type[PreTrainedModel]] = None,
+                 model_cls: Optional[Union[Type[PreTrainedModel], str]] = None,
                  pretrained_model_name_or_path: Optional[str] = None,
                  config: Optional[PretrainedConfig] = None,
                  device_mesh: Optional[DeviceMesh] = None,
@@ -72,6 +72,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                  fsdp_config: Dict[str, Any] = None,
                  grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
+        if isinstance(model_cls, str):
+            import transformers
+            model_cls = getattr(transformers, model_cls)
         if pretrained_model_name_or_path is None:
             self.model = model_cls(config, **kwargs)
         elif model_cls:
