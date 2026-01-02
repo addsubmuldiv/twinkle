@@ -6,7 +6,7 @@ from typing import Iterable, Callable
 def any_callable(args):
     if isinstance(args, Mapping):
         return any(any_callable(arg) for arg in args.values())
-    elif isinstance(args, Iterable):
+    elif isinstance(args, (tuple, list, set)):
         return any(any_callable(arg) for arg in args)
     else:
         return isinstance(args, (Callable, type))
@@ -14,7 +14,7 @@ def any_callable(args):
 
 def check_unsafe(*args, **kwargs):
     if not trust_remote_code():
-        if any_callable(*args) or any_callable(**kwargs):
+        if any_callable(args) or any_callable(kwargs):
             raise ValueError(
                 "Twinkle does not support Callable or Type inputs in safe mode."
             )

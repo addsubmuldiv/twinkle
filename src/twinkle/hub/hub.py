@@ -14,6 +14,27 @@ class HubOperation:
     @contextmanager
     def patch_hub(cls):
         yield
+    
+    @staticmethod
+    def source_type(resource_name: str):
+        if not resource_name:
+            return 'hf'
+        if resource_name.startswith('hf://'):
+            return 'hf'
+        elif resource_name.startswith('ms://'):
+            return 'ms'
+        else:
+            return 'hf'
+    
+    @staticmethod
+    def remove_source_type(resource_name: str):
+        if not resource_name:
+            return resource_name
+        parts = resource_name.split('://')
+        if len(parts) == 1:
+            return parts[0]
+        else:
+            return parts[-1]
 
     @classmethod
     def try_login(cls, token: Optional[str] = None) -> bool:
@@ -25,7 +46,12 @@ class HubOperation:
         Returns:
             bool: Whether login is successful
         """
-        raise NotImplementedError
+        if cls.source_type(token) == 'hf':
+            return HFHub.try_login(cls.remove_source_type(token))
+        elif cls.source_type(token) == 'ms':
+            return MSHub.try_login(cls.remove_source_type(token))
+        else:
+            raise NotImplementedError
 
     @classmethod
     def create_model_repo(cls, repo_id: str, token: Optional[str] = None, private: bool = False):
@@ -36,7 +62,12 @@ class HubOperation:
             token: The hub token to use
             private: If is a private repo
         """
-        raise NotImplementedError
+        if cls.source_type(repo_id) == 'hf':
+            return HFHub.create_model_repo(cls.remove_source_type(repo_id), token, private)
+        elif cls.source_type(repo_id) == 'ms':
+            return MSHub.create_model_repo(cls.remove_source_type(repo_id), token, private)
+        else:
+            raise NotImplementedError
 
     @classmethod
     def push_to_hub(cls,
@@ -63,7 +94,14 @@ class HubOperation:
             revision: The revision to push to
             ignore_patterns: The ignore file patterns
         """
-        raise NotImplementedError
+        if cls.source_type(repo_id) == 'hf':
+            return HFHub.push_to_hub(cls.remove_source_type(repo_id), folder_path, path_in_repo, commit_message,
+                                commit_description, token, private, revision, ignore_patterns, **kwargs)
+        elif cls.source_type(repo_id) == 'ms':
+            return MSHub.push_to_hub(cls.remove_source_type(repo_id), folder_path, path_in_repo, commit_message,
+                                commit_description, token, private, revision, ignore_patterns, **kwargs)
+        else:
+            raise NotImplementedError
 
     @classmethod
     def load_dataset(cls,
@@ -84,7 +122,12 @@ class HubOperation:
         Returns:
             The Dataset instance
         """
-        raise NotImplementedError
+        if cls.source_type(dataset_id) == 'hf':
+            return HFHub.load_dataset(cls.remove_source_type(dataset_id), subset_name, split, streaming, revision)
+        elif cls.source_type(dataset_id) == 'ms':
+            return MSHub.load_dataset(cls.remove_source_type(dataset_id), subset_name, split, streaming, revision)
+        else:
+            raise NotImplementedError
 
     @classmethod
     def download_model(cls,
@@ -106,7 +149,14 @@ class HubOperation:
         Returns:
             The local dir
         """
-        raise NotImplementedError
+        if os.path.exists(model_id_or_path):
+            return model_id_or_path
+        if cls.source_type(model_id_or_path) == 'hf':
+            return HFHub.download_model(cls.remove_source_type(model_id_or_path), revision, ignore_patterns, **kwargs)
+        elif cls.source_type(model_id_or_path) == 'ms':
+            return MSHub.download_model(cls.remove_source_type(model_id_or_path), revision, ignore_patterns, **kwargs)
+        else:
+            raise NotImplementedError
 
 
 class MSHub(HubOperation):

@@ -12,12 +12,12 @@ from twinkle.processor import InputProcessor
 
 
 def train():
-    dataset = Dataset(DatasetMeta('ms://modelscope/competition_math'))
-    dataset.set_template('Qwen3Template', model_id='Qwen/Qwen2.5-7B-Instruct')
+    dataset = Dataset(dataset_meta=DatasetMeta('ms://modelscope/competition_math'))
+    dataset.set_template('Qwen3Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
     dataset.map('CompetitionMathProcessor')
     dataset.encode(batched=True)
     dataloader = DataLoader(dataset)
-    model = TransformersModel(pretrained_model_name_or_path='Qwen/Qwen2.5-7B-Instruct')
+    model = TransformersModel(pretrained_model_name_or_path='ms://Qwen/Qwen2.5-7B-Instruct')
 
     lora_config = LoraConfig(
         target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj']
@@ -39,3 +39,5 @@ def train():
             model.save('./output')
 
 
+if __name__ == '__main__':
+    train()

@@ -313,9 +313,9 @@ def remote_class():
                         kwargs[device_mesh_name] = device_mesh
                     assert len(_device_group) == 1
                     _device_group[0]._device_mesh[self.__class__.__name__] = device_mesh
-                    init_method(*args, **kwargs)
+                    init_method(self, *args, **kwargs)
                 else:
-                    init_method(*args, **kwargs)
+                    init_method(self, *args, **kwargs)
             cls.__init__ = new_init
             return cls
         elif _mode == 'ray':
@@ -435,7 +435,7 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
             check_unsafe(*args, **kwargs)
             device_mesh = getattr(self, 'device_mesh', None)
             if _mode == 'local':
-                return func(*args, **kwargs)
+                return func(self, *args, **kwargs)
             elif _mode == 'ray':
                 if not hasattr(self, '_actors'):
                     return func(self, *args, **kwargs)

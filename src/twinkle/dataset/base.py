@@ -9,7 +9,7 @@ from torch.utils.data import Dataset as TorchDataset
 import twinkle
 from twinkle import template, Plugin, preprocessor
 from twinkle.template import Template
-from twinkle.hub import MSHub, HFHub
+from twinkle.hub import MSHub, HFHub, HubOperation
 from twinkle.infra import remote_class, remote_function
 from twinkle.preprocessor import Preprocessor, DataFilter
 
@@ -23,7 +23,7 @@ class DatasetMeta:
     # The split
     split: str = 'train'
     # Pick a data slice
-    data_slice: Union[slice, Iterable] = field(default_factory=lambda: slice(None))
+    data_slice: Iterable = None
 
     def get_id(self):
         return self.dataset_id + ':' + self.subset_name + ':' + self.split
@@ -90,18 +90,9 @@ class Dataset(TorchDataset):
         dataset_id = dataset_meta.dataset_id
         subset_name = dataset_meta.subset_name
         split = dataset_meta.split
-        if dataset_id.startswith('hf://'):
-            dataset = HFHub.load_dataset(dataset_id[len('hf://'):], subset_name, split, **kwargs)
-        elif dataset_id.startswith('ms://'):
-            dataset = MSHub.load_dataset(dataset_id, subset_name, split, **kwargs)
-        elif os.path.exists(dataset_id):
-            dataset = MSHub.load_dataset(dataset_id, subset_name, split, **kwargs)
-        else:
-            raise FileNotFoundError(f'Dataset {dataset_id} not found.')
+        dataset = HubOperation.load_dataset(dataset_id, subset_name, split, **kwargs)
 
-        if isinstance(dataset_meta.data_slice, slice):
-            dataset = dataset[dataset_meta.data_slice]
-        elif isinstance(dataset_meta.data_slice, Iterable):
+        if isinstance(dataset_meta.data_slice, Iterable):
             dataset = dataset.select(dataset_meta.data_slice)
         return dataset
 

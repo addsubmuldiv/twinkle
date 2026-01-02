@@ -1,12 +1,14 @@
 from typing import List, Optional
 from transformers import AutoTokenizer, PreTrainedTokenizer
 import numpy as np
+from twinkle.hub import HubOperation
 from twinkle.data_format import Trajectory, InputFeature
 
 
 class Template:
 
     def __init__(self, model_id: str, **kwargs):
+        model_id = HubOperation.download_model(model_id)
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def encode(self, trajectory: Trajectory) -> InputFeature:
