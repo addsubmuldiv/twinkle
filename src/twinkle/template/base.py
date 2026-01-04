@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import List, Optional, Dict, Any
 from transformers import AutoTokenizer, PreTrainedTokenizer
 import numpy as np
+from collections.abc import Mapping
 from twinkle.hub import HubOperation
 from twinkle.data_format import Trajectory, InputFeature
 from .utils import tokenize_with_assistant_labels
@@ -63,7 +64,7 @@ class Template:
         _transfer = False
         if isinstance(trajectories, Mapping):
             _transfer = True
-            trajectories = self.map_row_to_col(trajectories)
+            trajectories = self.map_col_to_row(trajectories)
         for trajectory in trajectories:
             output.append(self.encode(trajectory))
         if _transfer:
