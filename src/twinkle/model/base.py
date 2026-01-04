@@ -21,7 +21,7 @@ class TwinkleModel:
     def backward(self, **kwargs):
         ...
 
-    def forward_backward(self, *, inputs: Dict[str, Any], **kwargs):
+    def forward_backward(self, *, inputs: Dict[str, Any], gradient_accumulation_steps: int = 1, **kwargs):
         ...
 
     def step(self, **kwargs):

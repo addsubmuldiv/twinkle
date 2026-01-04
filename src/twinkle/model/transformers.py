@@ -177,7 +177,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         return loss_value
 
     @remote_function()
-    def backward(self, **kwargs):
+    def backward(self, gradient_accumulation_steps: int = 1, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
         loss_value = self.optimizer_group[adapter_name].loss_value
@@ -189,23 +189,25 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if scaler is None and self.mixed_precision == 'fp16':
             self.set_grad_scaler(adapter_name=adapter_name)
             scaler = self.optimizer_group[adapter_name].scaler
-        loss_value = loss_value / self.gradient_accumulation_steps
+        loss_value = loss_value / gradient_accumulation_steps
         if scaler is not None:
             scaler.scale(loss_value).backward(**kwargs)
         else:
             loss_value.backward(**kwargs)
+        self._reduce_adapter_grad(adapter_name=adapter_name)
 
-        if adapter_name:
+    def _reduce_adapter_grad(self, adapter_name: str):
+        if adapter_name and self.device_mesh.fsdp_world_size > 1:
             import torch.distributed as dist
             for p in self._get_trainable_parameters(adapter_name):
                 if p.grad is not None:
                     dist.all_reduce(p.grad, op=dist.ReduceOp.AVG, group=self.device_mesh.ddp_group)
 
     @remote_function()
-    def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
+    def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], gradient_accumulation_steps: int = 1, **kwargs):
         self.forward(inputs=inputs, **kwargs)
         self.calculate_loss(**kwargs)
-        self.backward(**kwargs)
+        self.backward(gradient_accumulation_steps=gradient_accumulation_steps, **kwargs)
 
     def clip_grad_norm(self, max_grad_norm: float=1.0, norm_type=2, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
