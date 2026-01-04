@@ -1,20 +1,11 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Any
-
+from typing import List, Dict, Any, TypedDict, Optional
 from .message import Message, Tool
 
 
-@dataclass
-class Trajectory:
-
-    messages: List[Message] = field(default_factory=list)
-
-    tools: List[Tool] = field(default_factory=list)
-
-    generation_config: Dict[str, Any] = field(default_factory=dict)
-
-    experts: Any = None
-
-    rewards: List[float] = field(default_factory=list)
-
-    user_data: Dict[str, Any] = field(default_factory=list)
+class Trajectory(TypedDict, total=False):
+    messages: List[Message]
+    tools: List[Tool]
+    generation_config: Dict[str, Any]
+    experts: Any
+    rewards: List[float]
+    user_data: Dict[str, Any]

@@ -116,7 +116,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             inputs = self.self.optimizer_group[adapter_name].template.batch_encode(inputs)
         processor: InputProcessor = self.optimizer_group[adapter_name].processor
         assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
-        inputs: Dict[str, Any] = processor(inputs).to_transformers_dict()
+        inputs: Dict[str, Any] = to_transformers_dict(processor(inputs))
         if adapter_name:
             self.model.set_current_adapter_name(adapter_name)
         outputs = self.model(**inputs)

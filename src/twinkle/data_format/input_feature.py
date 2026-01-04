@@ -1,34 +1,27 @@
-from dataclasses import dataclass
-from typing import List, Union, Optional
+from typing import List, Union, Optional, TypedDict
 
 import numpy as np
 
 InputType = Union[List[List[int]], List[int], np.ndarray, 'torch.Tensor']
 
 
-@dataclass
-class InputFeature:
-
+class InputFeature(TypedDict, total=False):
     input_ids: InputType
+    attention_mask: InputType
+    position_ids: InputType
+    labels: InputType
+    completion_mask: InputType
+    logits_to_keep: Optional[int]
+    num_items_in_batch: Optional[int]
 
-    attention_mask: InputType = None
 
-    position_ids: InputType = None
+def to_transformers_dict(feature: InputFeature) -> dict:
+    return {
+        'input_ids': feature.get('input_ids'),
+        'attention_mask': feature.get('attention_mask'),
+        'position_ids': feature.get('position_ids'),
+    }
 
-    labels: InputType = None
 
-    completion_mask: InputType = None
-
-    logits_to_keep: Optional[int] = None
-
-    num_items_in_batch: Optional[int] = None
-
-    def to_transformers_dict(self):
-        return {
-            'input_ids': self.input_ids,
-            'attention_mask': self.attention_mask,
-            'position_ids': self.position_ids,
-        }
-
-    def to_megatron_dict(self):
-        raise NotImplementedError()
+def to_megatron_dict(feature: InputFeature) -> dict:
+    raise NotImplementedError()

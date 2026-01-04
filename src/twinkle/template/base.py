@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from transformers import AutoTokenizer, PreTrainedTokenizer
 import numpy as np
 from twinkle.hub import HubOperation
@@ -12,8 +12,8 @@ class Template:
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_id)
 
     def encode(self, trajectory: Trajectory) -> InputFeature:
-        conversation = [message.to_dict_clean() for message in trajectory.messages]
-        tools = [dict(tool) for tool in trajectory.tools]
+        conversation = [dict(message) for message in trajectory['messages']]
+        tools = [dict(tool) for tool in trajectory['tools']]
         templated = self.tokenizer.apply_chat_template(conversation=conversation, tools=tools)
         encoded = self.tokenizer(templated, return_tensors="np")
         return InputFeature(
@@ -22,8 +22,21 @@ class Template:
             position_ids=np.arange(0, len(encoded['input_ids'])),
         )
 
-    def batch_encode(self, trajectories: List[Trajectory]) -> List[InputFeature]:
+    @staticmethod
+    def map_col_to_row(trajectories: Dict[str, Any]):
+        rows = []
+        total_count = trajectories[next(iter(trajectories.keys()))]
+        for i in range(total_count):
+            row = {}
+            for key in trajectories:
+                row[key] = trajectories[key][i]
+            rows.append(row)
+        return rows
+
+
+    def batch_encode(self, trajectories: Dict[str, Any]) -> List[InputFeature]:
         output = []
+        trajectories = self.map_col_to_row(trajectories)
         for trajectory in trajectories:
             output.append(self.encode(trajectory))
         return output
