@@ -17,7 +17,7 @@ class InputProcessor:
 
     def __init__(self, device_mesh: Optional[DeviceMesh] = None, **kwargs):
         self.device_mesh = device_mesh
-        self.padding_side = kwargs.get('padding_side', 'left')
+        self.padding_side = kwargs.get('padding_side', 'right')
 
     def __call__(self, inputs: Union[InputFeature, List[InputFeature]]):
         if isinstance(inputs, list):
