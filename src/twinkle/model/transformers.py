@@ -1,15 +1,19 @@
 import contextlib
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from typing import Dict, Any, List, Literal, Callable
 from typing import overload, Type, Optional, Union
+
+from datasets.utils import filelock
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from peft import PeftConfig, LoraConfig
 from peft import get_peft_model, PeftModel
 import torch
 from torch import GradScaler
-from torch.optim import Optimizer
+from torch.optim import Optimizer, AdamW
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedModel, PretrainedConfig, AutoModelForCausalLM
 import transformers
@@ -103,7 +107,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         _gas_default = kwargs.get('gradient_accumulation_steps', 1)
         self.optimizer_group: Dict[str, OptimizerGroup] = {
             self._default_adapter_name: OptimizerGroup(gradient_accumulation_steps=_gas_default)}
-        self.model = self.strategy.wrap_model(self.model)
+        self._model_wrapped = False
 
     def _check_adapter_valid(self, adapter_name: str):
         assert adapter_name in self.optimizer_group, f'Use a valid {adapter_name} first, current is: {adapter_name}'
@@ -112,6 +116,24 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def _not_encoded(inputs):
         assert isinstance(inputs, dict)
         return not 'input_ids' not in inputs and 'input_embedding' not in inputs
+
+    def _lazy_wrap_model(self):
+        if not self._model_wrapped:
+            try:
+                with filelock.FileLock('.twinkle.lock'):
+                    if not self._model_wrapped:
+                        if self.optimizer_group[self._default_adapter_name].optimizer is None:
+                            optimizer = AdamW(self._get_trainable_parameters(self._default_adapter_name).values(), lr=1e-5)
+                            self.optimizer_group[self._default_adapter_name].optimizer=optimizer
+                        optimizer = self.optimizer_group[self._default_adapter_name].optimizer
+                        self.model, optimizer = self.strategy.wrap_model(self.model, optimizer)
+                        self.optimizer_group[self._default_adapter_name].optimizer = optimizer
+            finally:
+                if os.path.exists('.twinkle.lock'):
+                    try:
+                        os.remove('.twinkle.lock')
+                    except: # noqa
+                        pass
 
     @remote_function()
     def forward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):

@@ -100,8 +100,8 @@ class AccelerateStrategy(TrainStrategy):
         )
         return fsdp_plugin
 
-    def wrap_model(self, model):
-        return self.accelerator.prepare(model)
+    def wrap_model(self, model, *args):
+        return self.accelerator.prepare(model, *args)
 
     def unwrap_model(self, model):
         return self.accelerator.unwrap_model(model, keep_torch_compile=False)
