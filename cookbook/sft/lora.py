@@ -33,7 +33,7 @@ def train():
     model.set_lr_scheduler(LinearLR, adapter_name='default')
     logger.info(get_device_placement())
     for step, batch in enumerate(dataloader):
-        output = model.forward_backward(inputs=batch, adapter_name='default', grad_acc_steps=16)
+        output = model.forward_backward(inputs=batch, adapter_name='default')
         logger.info(f'Current is step {gas}/{step}, loss: {output["loss"]}')
         if step % 16 == 0 and step > 0:
             model.step(adapter_name='default')

@@ -123,11 +123,10 @@ def build_model_app(model_id: str,
                              *,
                              inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]],
                              adapter_name: str,
-                             grad_acc_steps: int = 1,
                              **kwargs):
             self.assert_adapter_exists(adapter_name=adapter_name)
             adapter_name = self.get_adapter_name(request, adapter_name=adapter_name)
-            return self.model.forward_backward(inputs=inputs, adapter_name=adapter_name, grad_acc_steps=grad_acc_steps, **kwargs)
+            return self.model.forward_backward(inputs=inputs, adapter_name=adapter_name, **kwargs)
 
         @app.post("/step")
         def step(self, request, *, adapter_name: str, **kwargs):
@@ -172,12 +171,12 @@ def build_model_app(model_id: str,
             return self.model.save(output_dir, adapter_name=adapter_name, **kwargs)
 
         @app.post("/add_adapter")
-        def add_adapter_to_model(self, request, *, adapter_name: str, config: Dict[str, Any]):
+        def add_adapter_to_model(self, request, *, adapter_name: str, config: Dict[str, Any], **kwargs):
             assert adapter_name, 'You need to specify a valid `adapter_name`'
             adapter_name = self.get_adapter_name(request, adapter_name=adapter_name)
             self.handle_adapter_count(request.state.token, True)
             config = LoraConfig(**config)
-            self.model.add_adapter_to_model(adapter_name, config)
+            self.model.add_adapter_to_model(adapter_name, config, **kwargs)
             self.adapter_records[adapter_name] = 0
             self.key_token_dict[adapter_name] = request.state.token
 

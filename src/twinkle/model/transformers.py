@@ -38,6 +38,13 @@ class OptimizerGroup:
     processor: InputProcessor = None
     scaler: GradScaler = None
     scaler_has_nan: bool = False
+    gradient_accumulation_steps: int = 1
+    cur_step: int = 0
+
+    def do_grad_sync(self, gradient_accumulation_steps: Optional[int] = None) -> bool:
+        if gradient_accumulation_steps is None:
+            gradient_accumulation_steps = self.gradient_accumulation_steps
+        return self.cur_step % gradient_accumulation_steps == 0 and self.cur_step > 0
 
 
 @remote_class()
@@ -92,7 +99,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, ddp_config=ddp_config,
                                            fsdp_config=fsdp_config)
         self.grad_scaler_config = grad_scaler_config
-        self.optimizer_group: Dict[str, OptimizerGroup] = {self._default_adapter_name: OptimizerGroup()}
+        _gas_default = kwargs.get('gradient_accumulation_steps', 1)
+        self.optimizer_group: Dict[str, OptimizerGroup] = {
+            self._default_adapter_name: OptimizerGroup(gradient_accumulation_steps=_gas_default)}
         self.model = self.strategy.wrap_model(self.model)
 
     def _check_adapter_valid(self, adapter_name: str):
@@ -177,7 +186,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         return loss_value
 
     @remote_function()
-    def backward(self, grad_acc_steps: int = 1, **kwargs):
+    def backward(self, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
         loss_value = self.optimizer_group[adapter_name].loss_value
@@ -186,14 +195,18 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             self.strategy.unwrap_model(self.model).set_current_adapter_name(adapter_name)
 
         scaler = self.optimizer_group[adapter_name].scaler
+        _gas = self.optimizer_group[adapter_name].gradient_accumulation_steps
+        if 'gradient_accumulation_steps' in kwargs:
+            _gas = kwargs['gradient_accumulation_steps']
         if scaler is None and self.mixed_precision == 'fp16':
             self.set_grad_scaler(adapter_name=adapter_name)
             scaler = self.optimizer_group[adapter_name].scaler
-        loss_value = loss_value / grad_acc_steps
+        loss_value = loss_value / _gas
         if scaler is not None:
             scaler.scale(loss_value).backward(**kwargs)
         else:
             loss_value.backward(**kwargs)
+        self.optimizer_group[adapter_name].cur_step += 1
         self._reduce_adapter_grad(adapter_name=adapter_name)
 
     def _reduce_adapter_grad(self, adapter_name: str):
@@ -204,11 +217,11 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                     dist.all_reduce(p.grad, op=dist.ReduceOp.AVG, group=self.device_mesh.ddp_group)
 
     @remote_function()
-    def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], grad_acc_steps: int = 1, **kwargs):
+    def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
         output = self.forward(inputs=inputs, **kwargs)
         loss = self.calculate_loss(**kwargs)
         output['loss'] = loss
-        self.backward(grad_acc_steps=grad_acc_steps, **kwargs)
+        self.backward(**kwargs)
         return output
 
     def clip_grad_norm(self, max_grad_norm: float=1.0, norm_type=2, **kwargs):
@@ -233,6 +246,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def step(self, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
+        if not self.optimizer_group[adapter_name].do_grad_sync(kwargs.get('gradient_accumulation_steps')):
+            return
         optimizer = self.optimizer_group[adapter_name].optimizer
         scaler = self.optimizer_group[adapter_name].scaler
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before forwarding'
@@ -254,6 +269,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def zero_grad(self, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
+        if not self.optimizer_group[adapter_name].do_grad_sync(kwargs.get('gradient_accumulation_steps')):
+            return
         optimizer = self.optimizer_group[adapter_name].optimizer
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before forwarding'
         optimizer.zero_grad(**kwargs)
@@ -262,6 +279,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def lr_step(self, **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
+        if not self.optimizer_group[adapter_name].do_grad_sync(kwargs.get('gradient_accumulation_steps')):
+            return
         if self.optimizer_group[adapter_name].scaler_has_nan:
             return
         lr_scheduler = self.optimizer_group[adapter_name].lr_scheduler
@@ -349,12 +368,14 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         return self._get_trainable_parameters(adapter_name=adapter_name)
 
     @remote_function()
-    def add_adapter_to_model(self, adapter_name: str, config: PeftConfig):
+    def add_adapter_to_model(self, adapter_name: str, config: PeftConfig, **kwargs):
         assert adapter_name not in self.optimizer_group, f'{adapter_name} already exists.'
         assert adapter_name, 'Use a different adapter_name, current is empty.'
         self.optimizer_group[adapter_name] = OptimizerGroup()
         self.optimizer_group[adapter_name].adapter_name = adapter_name
         self.optimizer_group[adapter_name].adapter_config = config
+        _gas_default = kwargs.get('gradient_accumulation_steps', 1)
+        self.optimizer_group[adapter_name].gradient_accumulation_steps = _gas_default
         self.strategy.unwrap_model(self.model).add_adapter(adapter_name, config)
         self._activate_adapter_grad(adapter_name)
 

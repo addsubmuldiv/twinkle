@@ -21,7 +21,7 @@ class TwinkleModel:
     def backward(self, **kwargs):
         ...
 
-    def forward_backward(self, *, inputs: Dict[str, Any], grad_acc_steps: int = 1, **kwargs):
+    def forward_backward(self, *, inputs: Dict[str, Any], **kwargs):
         ...
 
     def step(self, **kwargs):
@@ -48,7 +48,7 @@ class TwinkleModel:
     def get_state_dict(self, **kwargs):
         ...
 
-    def add_adapter_to_model(self, adapter_name: str, config):
+    def add_adapter_to_model(self, adapter_name: str, config, **kwargs):
         ...
 
     def set_template(self, template_cls: Union[Type[template.Template], str], **kwargs):
