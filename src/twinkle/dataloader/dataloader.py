@@ -1,4 +1,5 @@
 from functools import partial
+from types import MethodType
 from typing import Callable, Union, Optional
 from torch.utils.data import DataLoader as TorchDataLoader
 
@@ -48,7 +49,11 @@ class DataLoader(TorchDataLoader):
             if 'collate_fn' not in self.dataloader_params:
                 self.dataloader_params['collate_fn'] = lambda x: x
             self.dataloader = TorchDataLoader(self.dataset, **self.dataloader_params)
+
+            self.dataloader.__initialized = False
             self._repeat_sample_and_shard()
+            self.dataloader.__initialized = True
+
         return self.dataloader.__iter__()
 
     def _repeat_sample_and_shard(self):

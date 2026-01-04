@@ -24,14 +24,15 @@ def train():
     )
 
     model.add_adapter_to_model('default', lora_config)
-    model.set_processor(InputProcessor)
-    model.set_loss(CrossEntropyLoss)
-    model.set_optimizer(AdamW, lr=1e-4)
-    model.set_lr_scheduler(LinearLR)
+    model.set_template('Qwen3Template', adapter_name='default')
+    model.set_processor(InputProcessor, adapter_name='default')
+    model.set_loss(CrossEntropyLoss, adapter_name='default')
+    model.set_optimizer(AdamW, lr=1e-4, adapter_name='default')
+    model.set_lr_scheduler(LinearLR, adapter_name='default')
     print(get_device_placement())
     for step, batch in enumerate(dataloader):
         for gas in range(16):
-            model.forward_backward(batch, adapter_name='default')
+            model.forward_backward(inputs=batch, adapter_name='default')
         model.step()
         model.zero_grad()
         model.lr_step()

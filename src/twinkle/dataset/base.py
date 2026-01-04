@@ -69,9 +69,9 @@ class Dataset(TorchDataset):
             **kwargs: The mapping and filter kwargs of the `datasets.map`.
         """
         if kwargs.get('batched', True):
-            self.dataset = self.dataset.map(self.template.batch_encode, **kwargs).filter(lambda x: x is not None, **kwargs)
+            self.dataset = self.dataset.map(self.template.batch_encode, **kwargs).filter(lambda batch: [len(x) > 0 for x in batch['input_ids']], **kwargs)
         else:
-            self.dataset = self.dataset.map(self.template.encode, **kwargs).filter(lambda x: x is not None, **kwargs)
+            self.dataset = self.dataset.map(self.template.encode, **kwargs).filter(lambda x: len(x['input_ids']) > 0, **kwargs)
 
     @remote_function(execute='first')
     def check(self, **kwargs):

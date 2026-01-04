@@ -432,11 +432,11 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
 
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs) -> T1:
-            check_unsafe(*args, **kwargs)
             device_mesh = getattr(self, 'device_mesh', None)
             if _mode == 'local':
                 return func(self, *args, **kwargs)
             elif _mode == 'ray':
+                check_unsafe(*args, **kwargs)
                 if not hasattr(self, '_actors'):
                     return func(self, *args, **kwargs)
                 else:

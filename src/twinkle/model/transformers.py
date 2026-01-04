@@ -3,24 +3,25 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Any, List, Literal
 from typing import overload, Type, Optional, Union
-
+from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from peft import PeftConfig
 from peft import get_peft_model, PeftModel
 import torch
 from torch import GradScaler
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
-from transformers import PreTrainedModel, PretrainedConfig
-
+from transformers import PreTrainedModel, PretrainedConfig, AutoModelForCausalLM
+import transformers
 import twinkle
 from twinkle import remote_class, remote_function, template, DeviceMesh
 from twinkle.loss import Loss
+from twinkle.hub import HubOperation
 from .base import TwinkleModel
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
 from twinkle.utils.plugin import Plugin
 from .strategy import AccelerateStrategy
-from twinkle.data_format import InputFeature, Trajectory
+from twinkle.data_format import InputFeature, Trajectory, to_transformers_dict
 
 
 @dataclass
@@ -63,7 +64,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         ...
 
     def __init__(self, # noqa
-                 model_cls: Optional[Union[Type[PreTrainedModel], str]] = None,
+                 model_cls: Optional[Union[Type[PreTrainedModel], str, Type[_BaseAutoModelClass]]] = AutoModelForCausalLM,
                  pretrained_model_name_or_path: Optional[str] = None,
                  config: Optional[PretrainedConfig] = None,
                  device_mesh: Optional[DeviceMesh] = None,
@@ -72,12 +73,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                  fsdp_config: Dict[str, Any] = None,
                  grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
+        super(PreTrainedModel, self).__init__()
         if isinstance(model_cls, str):
-            import transformers
             model_cls = getattr(transformers, model_cls)
         if pretrained_model_name_or_path is None:
             self.model = model_cls(config, **kwargs)
-        elif model_cls:
+        else:
+            pretrained_model_name_or_path = HubOperation.download_model(pretrained_model_name_or_path)
             self.model = model_cls.from_pretrained(pretrained_model_name_or_path, config=config, **kwargs)
         self.model_id = pretrained_model_name_or_path
         self.device_mesh = device_mesh
@@ -91,7 +93,12 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.model = self.strategy.wrap_model(self.model)
 
     def _check_adapter_valid(self, adapter_name: str):
-        assert adapter_name in self.sample_group, f'Use a valid {adapter_name} first, current is: {adapter_name}'
+        assert adapter_name in self.optimizer_group, f'Use a valid {adapter_name} first, current is: {adapter_name}'
+
+    @staticmethod
+    def _not_encoded(inputs):
+        assert isinstance(inputs, dict)
+        return not 'input_ids' not in inputs and 'input_embedding' not in inputs
 
     @remote_function()
     def forward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
@@ -106,19 +113,20 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
-        if isinstance(inputs, Trajectory):
-            assert self.self.optimizer_group[adapter_name].template is not None, \
+
+        if isinstance(inputs, dict) and self._not_encoded(inputs):
+            assert self.optimizer_group[adapter_name].template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
-            inputs = self.self.optimizer_group[adapter_name].template.encode(inputs)
-        if isinstance(inputs, list) and isinstance(inputs[0], Trajectory):
-            assert self.self.optimizer_group[adapter_name].template is not None, \
+            inputs = self.optimizer_group[adapter_name].template.encode(inputs)
+        if isinstance(inputs, list) and self._not_encoded(inputs[0]):
+            assert self.optimizer_group[adapter_name].template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
-            inputs = self.self.optimizer_group[adapter_name].template.batch_encode(inputs)
+            inputs = self.optimizer_group[adapter_name].template.batch_encode(inputs)
         processor: InputProcessor = self.optimizer_group[adapter_name].processor
         assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
-        inputs: Dict[str, Any] = to_transformers_dict(processor(inputs))
+        inputs: Dict[str, Any] = processor(inputs)
         if adapter_name:
-            self.model.set_current_adapter_name(adapter_name)
+            self.strategy.unwrap_model(self.model).set_current_adapter_name(adapter_name)
         outputs = self.model(**inputs)
         self.optimizer_group[adapter_name].inputs = inputs
         self.optimizer_group[adapter_name].outputs = outputs
@@ -128,21 +136,21 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def forward_only(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
         adapter_name = kwargs.pop("adapter_name", None) or ''
         self._check_adapter_valid(adapter_name)
-        if isinstance(inputs, Trajectory):
-            assert self.self.optimizer_group[adapter_name].template is not None, \
+        if isinstance(inputs, dict) and self._not_encoded(inputs):
+            assert self.optimizer_group[adapter_name].template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
-            inputs = self.self.optimizer_group[adapter_name].template.encode(inputs)
-        if isinstance(inputs, list) and isinstance(inputs[0], Trajectory):
-            assert self.self.optimizer_group[adapter_name].template is not None, \
+            inputs = self.optimizer_group[adapter_name].template.encode(inputs)
+        if isinstance(inputs, list) and self._not_encoded(inputs[0]):
+            assert self.optimizer_group[adapter_name].template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
-            inputs = self.self.optimizer_group[adapter_name].template.batch_encode(inputs)
+            inputs = self.optimizer_group[adapter_name].template.batch_encode(inputs)
         import torch
         with torch.no_grad():
             processor: InputProcessor = self.optimizer_group[adapter_name].processor
             assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
-            inputs: Dict[str, Any] = processor(inputs).to_transformers_dict()
+            inputs: Dict[str, Any] = processor(inputs)
             if adapter_name:
-                self.model.set_current_adapter_name(adapter_name)
+                self.strategy.unwrap_model(self.model).set_current_adapter_name(adapter_name)
             outputs = self.model(**inputs)
         self.optimizer_group[adapter_name].inputs = inputs
         self.optimizer_group[adapter_name].outputs = outputs

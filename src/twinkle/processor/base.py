@@ -1,7 +1,7 @@
 from dataclasses import fields
 from typing import Union, List, Optional
 from twinkle import Platform, DeviceMesh
-from twinkle.data_format import InputFeature
+from twinkle.data_format import InputFeature, to_transformers_dict
 
 
 class InputProcessor:
@@ -16,12 +16,12 @@ class InputProcessor:
 
     def prepare_inputs(self, inputs: InputFeature) -> InputFeature:
         import torch
-        for f in fields(inputs):
-            if isinstance(f.value, torch.Tensor):
-                f.value = f.value.to(Platform.get_local_device())
+        for key in list(inputs.keys()):
+            if isinstance(inputs[key], torch.Tensor):
+                inputs[key] = inputs[key].to(Platform.get_local_device())
         return inputs
 
     def collate_fn(self, inputs: List[InputFeature]) -> InputFeature:
         from torch.utils.data import default_collate
-        batch_encoded = default_collate([_input.to_transformers_dict() for _input in inputs])
+        batch_encoded = default_collate([to_transformers_dict(_input) for _input in inputs])
         return InputFeature(**batch_encoded)

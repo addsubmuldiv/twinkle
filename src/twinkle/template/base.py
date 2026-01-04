@@ -14,18 +14,19 @@ class Template:
     def encode(self, trajectory: Trajectory) -> InputFeature:
         conversation = [dict(message) for message in trajectory['messages']]
         tools = [dict(tool) for tool in trajectory['tools']]
-        templated = self.tokenizer.apply_chat_template(conversation=conversation, tools=tools)
-        encoded = self.tokenizer(templated, return_tensors="np")
+        encoded = self.tokenizer.apply_chat_template(conversation=conversation, tools=tools)
         return InputFeature(
-            input_ids=encoded['input_ids'],
-            attention_mask=np.ones_like(encoded['input_ids']),
-            position_ids=np.arange(0, len(encoded['input_ids'])),
+            input_ids=encoded,
+            attention_mask=np.ones_like(encoded),
+            position_ids=np.arange(0, len(encoded)),
         )
 
     @staticmethod
     def map_col_to_row(trajectories: Dict[str, Any]):
+        if not trajectories:
+            return []
         rows = []
-        total_count = trajectories[next(iter(trajectories.keys()))]
+        total_count = len(trajectories[next(iter(list(trajectories.keys())))])
         for i in range(total_count):
             row = {}
             for key in trajectories:
@@ -33,12 +34,29 @@ class Template:
             rows.append(row)
         return rows
 
+    @staticmethod
+    def map_row_to_col(rows: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
+        if not rows:
+            return {}
+        
+        columns: Dict[str, List[Any]] = {}
+        keys = rows[0].keys()
+        
+        for key in keys:
+            columns[key] = [row[key] for row in rows]
+        
+        return columns
 
     def batch_encode(self, trajectories: Dict[str, Any]) -> List[InputFeature]:
         output = []
-        trajectories = self.map_col_to_row(trajectories)
+        _transfer = False
+        if isinstance(trajectories, dict):
+            _transfer = True
+            trajectories = self.map_row_to_col(trajectories)
         for trajectory in trajectories:
             output.append(self.encode(trajectory))
+        if  _transfer:
+            output = self.map_row_to_col(output)
         return output
 
     def check(self, trajectory: Trajectory) -> Optional[Trajectory]:

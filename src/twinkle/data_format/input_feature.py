@@ -1,5 +1,4 @@
 from typing import List, Union, Optional, TypedDict
-
 import numpy as np
 
 InputType = Union[List[List[int]], List[int], np.ndarray, 'torch.Tensor']
@@ -16,11 +15,16 @@ class InputFeature(TypedDict, total=False):
 
 
 def to_transformers_dict(feature: InputFeature) -> dict:
-    return {
+    import torch
+    output = {
         'input_ids': feature.get('input_ids'),
         'attention_mask': feature.get('attention_mask'),
         'position_ids': feature.get('position_ids'),
     }
+    for key in list(output.keys()):
+        if not isinstance(output[key], torch.Tensor):
+            output[key] = np.array(output[key])
+    return output
 
 
 def to_megatron_dict(feature: InputFeature) -> dict:
