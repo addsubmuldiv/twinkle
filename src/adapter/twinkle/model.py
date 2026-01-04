@@ -123,11 +123,11 @@ def build_model_app(model_id: str,
                              *,
                              inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]],
                              adapter_name: str,
-                             gradient_accumulation_steps: int = 1,
+                             grad_acc_steps: int = 1,
                              **kwargs):
             self.assert_adapter_exists(adapter_name=adapter_name)
             adapter_name = self.get_adapter_name(request, adapter_name=adapter_name)
-            return self.model.forward_backward(inputs=inputs, adapter_name=adapter_name, gradient_accumulation_steps=gradient_accumulation_steps, **kwargs)
+            return self.model.forward_backward(inputs=inputs, adapter_name=adapter_name, grad_acc_steps=grad_acc_steps, **kwargs)
 
         @app.post("/step")
         def step(self, request, *, adapter_name: str, **kwargs):

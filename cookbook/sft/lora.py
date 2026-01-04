@@ -32,7 +32,7 @@ def train():
     print(get_device_placement())
     for step, batch in enumerate(dataloader):
         for gas in range(16):
-            model.forward_backward(inputs=batch, adapter_name='default', gradient_accumulation_steps=16)
+            model.forward_backward(inputs=batch, adapter_name='default', grad_acc_steps=16)
         model.step()
         model.zero_grad()
         model.lr_step()
