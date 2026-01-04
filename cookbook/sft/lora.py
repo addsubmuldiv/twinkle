@@ -32,6 +32,7 @@ def train():
     model.set_optimizer(AdamW, lr=1e-4, adapter_name='default')
     model.set_lr_scheduler(LinearLR, adapter_name='default')
     logger.info(get_device_placement())
+    logger.info(model.get_train_configs())
     for step, batch in enumerate(dataloader):
         output = model.forward_backward(inputs=batch, adapter_name='default')
         logger.info(f'Current is step {gas}/{step}, loss: {output["loss"]}')

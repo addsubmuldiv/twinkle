@@ -1,5 +1,5 @@
-from dataclasses import fields
 from typing import Union, List, Optional
+
 from twinkle import Platform, DeviceMesh
 from twinkle.data_format import InputFeature, to_transformers_dict
 

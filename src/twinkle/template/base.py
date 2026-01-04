@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import List, Optional, Dict, Any
 from transformers import AutoTokenizer, PreTrainedTokenizer
 import numpy as np
@@ -60,7 +61,7 @@ class Template:
     def batch_encode(self, trajectories: Dict[str, Any]) -> List[InputFeature]:
         output = []
         _transfer = False
-        if isinstance(trajectories, dict):
+        if isinstance(trajectories, Mapping):
             _transfer = True
             trajectories = self.map_row_to_col(trajectories)
         for trajectory in trajectories:

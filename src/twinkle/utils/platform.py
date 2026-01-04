@@ -183,9 +183,10 @@ class DeviceMesh:
     def data_parallel_world_size(self) -> int:
         return self.dp_world_size * self.fsdp_world_size
 
-    def get_slice(self, total_length: int) -> slice:
+    def get_slice(self, total_length: int, rank: Optional[int] = None) -> slice:
         world_size = self.data_parallel_world_size
-        rank = self.data_parallel_rank
+        if rank is None:
+            rank = self.data_parallel_rank
 
         k, m = divmod(total_length, world_size)
         start = rank * k + min(rank, m)

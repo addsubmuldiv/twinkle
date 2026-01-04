@@ -1,4 +1,5 @@
 import contextlib
+import json
 import re
 from dataclasses import dataclass
 from typing import Dict, Any, List, Literal
@@ -14,7 +15,7 @@ from transformers import PreTrainedModel, PretrainedConfig, AutoModelForCausalLM
 import transformers
 import twinkle
 from twinkle import remote_class, remote_function, template, DeviceMesh
-from twinkle.loss import Loss
+from twinkle.loss import Loss, CrossEntropyLoss
 from twinkle.hub import HubOperation
 from .base import TwinkleModel
 from twinkle.processor import InputProcessor
@@ -32,7 +33,7 @@ class OptimizerGroup:
     lr_scheduler: LRScheduler = None
     inputs: Dict[str, Any] = None
     outputs: Dict[str, Any] = None
-    loss_instance: Loss = None
+    loss_instance: Loss = CrossEntropyLoss
     loss_value: Any = None
     template: Template = None
     processor: InputProcessor = None
@@ -409,6 +410,20 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         grad_scaler_config = self.grad_scaler_config.copy()
         grad_scaler_config.update(kwargs)
         self.optimizer_group[adapter_name].scaler = GradScaler(**grad_scaler_config)
+
+    def get_train_configs(self, adapter_name: str = ''):
+        self._check_adapter_valid(adapter_name)
+        expr = ''
+        optimizer_config = self.optimizer_group[adapter_name]
+        config = optimizer_config.adapter_config.__dict__
+        config = {key: value for key, value in config.items() if value is not None}
+        expr += (f'Adapter config:\n'
+                 f'{json.dumps(config, indent=2, ensure_ascii=False)}\n'
+                 f'Optimizer: {optimizer_config.optimizer.__class__.__name__}\n'
+                 f'Learning rate: {optimizer_config.optimizer.defaults.get("lr", "No default lr")}\n'
+                 f'Lr scheduler: {optimizer_config.lr_scheduler.__class__.__name__}\n'
+                 f'Gradient accumulation steps: {optimizer_config.gradient_accumulation_steps}\n')
+        return expr
 
     def remove_adapter(self, adapter_name: str):
         if adapter_name in self.optimizer_group:

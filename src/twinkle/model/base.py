@@ -56,3 +56,6 @@ class TwinkleModel:
 
     def set_processor(self, processor_cls: Union[Type[processor.InputProcessor], str], **kwargs):
         ...
+
+    def get_train_configs(self, adapter_name: str = ''):
+        ...
