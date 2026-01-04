@@ -236,7 +236,7 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
         if device_mesh is not None:
             # TODO this may occurs error when remote calls remote
             assert device_mesh.world_size == len(workers)
-        length = len(workers) if not device_mesh else device_mesh.dp_world_size
+        length = len(workers) if not device_mesh else device_mesh.data_parallel_world_size
         dp_repeat = len(workers) // length
 
         def dispatch_func(arg, n):

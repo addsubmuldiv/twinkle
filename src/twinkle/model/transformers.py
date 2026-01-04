@@ -98,7 +98,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.model: PreTrainedModel = MultiAdapter()(self.model) # patch multiple loras
         self.mixed_precision = mixed_precision
         self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, ddp_config=ddp_config,
-                                           fsdp_config=fsdp_config)
+                                           fsdp_config=fsdp_config, device_mesh=device_mesh)
         self.grad_scaler_config = grad_scaler_config
         _gas_default = kwargs.get('gradient_accumulation_steps', 1)
         self.optimizer_group: Dict[str, OptimizerGroup] = {

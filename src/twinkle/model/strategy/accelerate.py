@@ -44,7 +44,7 @@ class AccelerateStrategy(TrainStrategy):
         cp_size = device_mesh.get_dim_size("cp") if device_mesh.has_dim("cp") else 1
         sp_size = device_mesh.get_dim_size("sp") if device_mesh.has_dim("sp") else 1
 
-        if dp_size > 1 and fsdp_size == 1 and tp_size == 1 and cp_size == 1 and sp_size == 1:
+        if tp_size == 1 and cp_size == 1 and sp_size == 1:
             # Only ddp
             return None
 
@@ -71,8 +71,10 @@ class AccelerateStrategy(TrainStrategy):
 
         if fsdp_size == 1 and dp_size == 1:
             return None
+        
+        fsdp_config = fsdp_config or {}
 
-        sharding_strategy = fsdp_config.get("sharding_strategy")
+        sharding_strategy = fsdp_config.pop("sharding_strategy", None)
         if dp_size > 1 and fsdp_size > 1:
             # HSDP
             if sharding_strategy not in (FSDPShardingStrategy.HYBRID_SHARD, FSDPShardingStrategy._HYBRID_SHARD_ZERO2):
@@ -93,6 +95,7 @@ class AccelerateStrategy(TrainStrategy):
             cpu_offload=fsdp_config.pop("cpu_offload", False),
             activation_checkpointing=fsdp_config.pop('activation_checkpointing', False),
             auto_wrap_policy=fsdp_config.pop('auto_wrap_policy', 'transformer_based_wrap'), # noqa
+            reshard_after_forward=fsdp_config.pop('reshard_after_forward', True),
             **fsdp_config,
         )
         return fsdp_plugin

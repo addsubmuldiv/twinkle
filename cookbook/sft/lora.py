@@ -13,17 +13,17 @@ from twinkle.processor import InputProcessor
 logger = get_logger()
 
 
-#device_mesh = DeviceMesh(
-#    device_type='cuda',
-#    mesh=np.array([[0,1], [2,3]]),
-#    mesh_dim_names=('dp', 'fsdp')
-#)
-
 device_mesh = DeviceMesh(
     device_type='cuda',
-    mesh=np.array([0,1,2,3]),
-    mesh_dim_names=('dp',)
+    mesh=np.array([[0,1], [2,3]]),
+    mesh_dim_names=('dp', 'fsdp')
 )
+
+#device_mesh = DeviceMesh(
+#    device_type='cuda',
+#    mesh=np.array([0,1,2,3]),
+#    mesh_dim_names=('dp',)
+#)
 
 
 def train():
@@ -33,10 +33,7 @@ def train():
     dataset.encode(batched=True)
     dataloader = DataLoader(dataset, batch_size=8, device_mesh=device_mesh)
 
-    fsdp_config = {
-        'sharding_strategy': ShardingStrategy.FULL_SHARD,
-    }
-    model = TransformersModel(pretrained_model_name_or_path='ms://Qwen/Qwen2.5-7B-Instruct', device_mesh=device_mesh, fsdp_config=fsdp_config)
+    model = TransformersModel(pretrained_model_name_or_path='ms://Qwen/Qwen2.5-7B-Instruct', device_mesh=device_mesh)
 
     lora_config = LoraConfig(
         target_modules='all-linear'
