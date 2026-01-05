@@ -77,6 +77,7 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         if groups is not None:
             _device_group = groups
         _nproc_per_node = nproc_per_node
+        RayHelper.initialize(nproc_per_node=_nproc_per_node, device_groups=_device_group)
 
 
 def get_device_placement(device_group = None) -> str:
