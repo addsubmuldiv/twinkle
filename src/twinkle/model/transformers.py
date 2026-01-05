@@ -325,7 +325,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before setting lr_scheduler'
         optimizer_config.lr_scheduler = scheduler_cls(optimizer, **kwargs)
 
-    @remote_function(execute='first')
+    @remote_function()
     def save(self, output_dir, **kwargs):
         adapter_name = kwargs.get('adapter_name', _default_adapter_name)
         model = self.strategy.unwrap_model(self.model)
