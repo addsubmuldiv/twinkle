@@ -46,7 +46,7 @@ class DataLoader(TorchDataLoader):
         worker_seed = num_workers * rank + init_seed + worker_id
         framework_util.seed_everything(worker_seed)
 
-    @remote_function()
+    @remote_function(collect='flatten')
     def __iter__(self):
         if self.dataloader is None:
             if 'collate_fn' not in self.dataloader_params:

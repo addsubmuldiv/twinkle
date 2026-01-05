@@ -147,7 +147,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         inputs['labels'] = labels
         optimizer_config.inputs = inputs
         optimizer_config.outputs = outputs
-        return outputs.__dict__
+        return outputs
 
     @remote_function()
     def forward_only(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
@@ -173,7 +173,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         optimizer_config.outputs = outputs
         return outputs
 
-    @remote_function()
+    @remote_function(collect='avg')
     def calculate_loss(self, **kwargs):
         adapter_name = kwargs.get('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
@@ -184,7 +184,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         assert inputs is not None and outputs is not None, 'Cannot calculate loss of empty inputs and outputs'
         loss_value = loss_instance(inputs, outputs, **kwargs)
         optimizer_config.loss_value = loss_value
-        return loss_value
+        return loss_value.detach().cpu().float().numpy()
 
     @remote_function()
     def backward(self, **kwargs):
@@ -206,13 +206,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             loss_value.backward()
         optimizer_config.cur_step += 1
 
-    @remote_function()
+    @remote_function(collect='avg')
     def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
         output = self.forward(inputs=inputs, **kwargs)
         loss = self.calculate_loss(**kwargs)
         output['loss'] = loss
         self.backward(**kwargs)
-        return output
+        return loss
 
     @remote_function()
     def clip_grad_norm(self, max_grad_norm: float=1.0, norm_type=2, **kwargs):

@@ -3,7 +3,7 @@ import inspect
 import os
 from typing import Literal, List, Optional, Union, Callable
 from typing import TypeVar
-
+from types import MethodType
 import numpy as np
 
 from ..utils import DeviceGroup, DeviceMesh, Platform
@@ -34,10 +34,10 @@ _device_group: Optional[List[DeviceGroup]] = [
 ]
 
 _device_mesh = DeviceMesh(
-                            device_type=Platform.get_platform().device_prefix(),
-                            mesh=np.arange(Platform.get_world_size()),
-                            mesh_dim_names=('dp',)
-                        )
+    device_type=Platform.get_platform().device_prefix(),
+    mesh=np.arange(Platform.get_world_size()),
+    mesh_dim_names=('dp',)
+)
 
 _remote_components: dict = {}
 
@@ -94,7 +94,7 @@ def get_device_placement(device_group=None) -> str:
         device_group = _device_group
 
     WIDTH = 80
-    
+
     def box_line(content="", align="left", prefix="│", suffix="│"):
         inner_width = WIDTH - 4
         if align == "center":
@@ -102,61 +102,61 @@ def get_device_placement(device_group=None) -> str:
         else:
             text = content.ljust(inner_width)
         return f"{prefix} {text} {suffix}"
-    
+
     def header_box(title):
         return [
             "╔" + "═" * (WIDTH - 2) + "╗",
             box_line(title, align="center", prefix="║", suffix="║"),
             "╚" + "═" * (WIDTH - 2) + "╝",
         ]
-    
+
     def section_top(title=""):
         lines = ["┌" + "─" * (WIDTH - 2) + "┐"]
         if title:
             lines.append(box_line(f"◈ {title}", prefix="│", suffix="│"))
             lines.append("├" + "─" * (WIDTH - 2) + "┤")
         return lines
-    
+
     def section_bottom():
         return ["└" + "─" * (WIDTH - 2) + "┘"]
-    
+
     def format_ranks(ranks):
         if isinstance(ranks, list):
             if len(ranks) <= 16:
                 return str(ranks)
             return f"{ranks[:6]} ... {ranks[-3:]} ({len(ranks)} total)"
         return str(ranks)
-    
+
     def render_mesh_grid(mesh_array, dim_names):
         """Render a compact mesh visualization."""
         lines = []
-        
+
         if mesh_array.ndim == 1:
             mesh_array = mesh_array.reshape(1, -1)
-        
+
         if mesh_array.ndim > 2:
             lines.append(box_line(f"    ⊞ High-dim mesh: shape={mesh_array.shape}"))
             return lines
-        
+
         rows, cols = mesh_array.shape
         max_rows, max_cols = 6, 10
         show_rows, show_cols = min(rows, max_rows), min(cols, max_cols)
-        
+
         cell_w = max(4, len(str(mesh_array.max())) + 2)
-        
+
         # Column headers
         col_label = dim_names[-1].upper() if dim_names else "COL"
         row_label = dim_names[0].upper() if len(dim_names) >= 2 else "ROW"
-        
+
         header = "      " + "".join(f"{i:^{cell_w}}" for i in range(show_cols))
         if cols > max_cols:
             header += " ⋯"
         lines.append(box_line(f"    {header}"))
-        
+
         # Top border
         border = "      ╭" + "─" * (cell_w * show_cols + show_cols - 1) + "╮"
         lines.append(box_line(f"    {border}"))
-        
+
         # Data rows
         for r in range(show_rows):
             row_data = "│".join(f"{mesh_array[r, c]:^{cell_w}}" for c in range(show_cols))
@@ -164,25 +164,25 @@ def get_device_placement(device_group=None) -> str:
             if cols > max_cols:
                 row_str += " ⋯"
             lines.append(box_line(f"    {row_str}"))
-        
+
         if rows > max_rows:
             lines.append(box_line(f"         {'⋮':^{cell_w * show_cols}}"))
-        
+
         # Bottom border
         border = "      ╰" + "─" * (cell_w * show_cols + show_cols - 1) + "╯"
         lines.append(box_line(f"    {border}"))
-        
+
         return lines
-    
+
     # Build output
     lines = header_box("DEVICE PLACEMENT TOPOLOGY")
     lines.append("")
-    
+
     for group in device_group:
         lines.extend(section_top(f"DeviceGroup: {group.name}"))
         lines.append(box_line(f"  ├─ Device Type : {group.device_type}"))
         lines.append(box_line(f"  └─ Ranks       : {format_ranks(group.ranks)}"))
-        
+
         if not group._device_mesh:
             lines.append(box_line(""))
             lines.append(box_line("  (No device meshes configured)", align="center"))
@@ -190,33 +190,33 @@ def get_device_placement(device_group=None) -> str:
             for mesh_name, mesh in group._device_mesh.items():
                 lines.append(box_line(""))
                 lines.append(box_line(f"  ┌─ DeviceMesh: {mesh_name}"))
-                
+
                 # Dimensions
                 if mesh.mesh_dim_names:
                     dim_info = " × ".join(
                         f"{name}={size}" for name, size in zip(mesh.mesh_dim_names, mesh.mesh.shape)
                     )
                     lines.append(box_line(f"  │  Dimensions : {dim_info}"))
-                
+
                 # Active parallelism
                 parallelism = []
                 for dim in ['pp', 'dp', 'tp', 'ep', 'sp', 'cp', 'fsdp']:
                     ws = mesh._get_world_size_for_dim(dim)
                     if ws > 1:
                         parallelism.append(f"{dim.upper()}={ws}")
-                
+
                 if parallelism:
                     lines.append(box_line(f"  │  Parallelism: {', '.join(parallelism)}"))
-                
+
                 # Mesh layout
                 lines.append(box_line(f"  │"))
                 lines.append(box_line(f"  └─ Mesh Layout:"))
                 lines.extend(render_mesh_grid(mesh.mesh, mesh.mesh_dim_names or []))
-        
+
         lines.append(box_line(""))
         lines.extend(section_bottom())
         lines.append("")
-    
+
     return "\n".join(lines)
 
 
@@ -234,6 +234,7 @@ def _get_workers(workers, execute):
 def _collect_func(method: Union[Literal['none', 'flatten'], Callable], result):
     if not result:
         return result
+
     if isinstance(result[0], tuple):
         output = []
         for i in range(len(result[0])):
@@ -247,6 +248,10 @@ def _collect_func(method: Union[Literal['none', 'flatten'], Callable], result):
         if isinstance(result[0], np.ndarray):
             return np.array(flatten)
         return type(result[0])(flatten)
+    elif method == 'avg':
+        return np.mean(result)
+    elif method == 'sum':
+        return np.sum(result)
     elif isinstance(method, Callable):
         # Callable
         return method(result)
@@ -283,8 +288,7 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
         for i in range(length):
             sliced_args = tuple(arg[i] for arg in args)
             sliced_kwargs = {k: v[i] for k, v in kwargs.items()}
-            if (sliced_args and sliced_args[0]) or (kwargs and list(kwargs.values())):
-                result.append((workers[i], sliced_args, sliced_kwargs))
+            result.append((workers[i], sliced_args, sliced_kwargs))
 
         return result
     elif isinstance(dispatch, Callable):
@@ -362,32 +366,31 @@ def remote_class():
                     device_group = [dg for dg in _device_group if dg.name == remote_group][0]
                     device_group._device_mesh[self.__class__.__name__] = device_mesh
 
+                def __iter__(_self):
+                    _iter = _self.__iter_origin__()
+                    assert _iter is not _self
+                    _self._iter = _iter
+
+                def __next__(_self):
+                    return next(_self._iter)
+
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     init_method(self, *args, **kwargs)
-                    
                     if remote_group and os.environ.get('CLUSTER_NAME') == remote_group:
                         # Seed when a remote class is created.
                         framework_util.seed_everything(int(os.environ['TWINKLE_SEED']),
                                                        bool(int(os.environ['TWINKLE_FULL_DETERMINISM'])))
-                        if hasattr(cls, '__iter__'):
-                            assert not hasattr(cls, '__next__')
-
-                            def __iter__(_self):
-                                _iter = _self.__iter_origin__()
-                                assert _iter is not _self
-                                _self._iter = _iter
-
-                            def __next__(_self):
-                                return next(_self._iter)
-
-                            cls.__iter_origin__ = cls.__iter__
-                            cls.__iter__ = remote_function(execute=cls.__iter_origin__._execute,
-                                                           dispatch=cls.__iter_origin__._dispatch,
-                                                           collect=cls.__iter_origin__._collect)(__iter__)
-                            cls.__next__ = remote_function(execute=cls.__iter_origin__._execute,
-                                                           dispatch=cls.__iter_origin__._dispatch,
-                                                           collect=cls.__iter_origin__._collect)(__next__)
                 else:
+                    if hasattr(cls, '__iter__'):
+                        _dispatch = self.__iter__._dispatch
+                        _execute = self.__iter__._execute
+                        _collect = self.__iter__._collect
+
+                    if hasattr(cls, '__iter__'):
+                        cls.__iter_origin__ = cls.__iter__
+                        cls.__iter__ = __iter__
+                        cls.__next__ = __next__
+
                     # Create remote workers
                     _actors = RayHelper.create_workers(cls,
                                                        remote_group,
@@ -397,18 +400,17 @@ def remote_class():
                                                        full_determinism=_full_determinism,
                                                        *args, **kwargs)
                     self._actors = _actors
+                    if hasattr(cls, '__iter__'):
+                        cls.__iter__ = remote_function(dispatch=_dispatch,
+                                                        execute=_execute,
+                                                        collect='none')(__iter__)
+                        cls.__next__ = remote_function(dispatch=_dispatch,
+                                                        execute=_execute,
+                                                        collect=_collect)(__next__)
                     for arg in (list(args) + list(kwargs.values())):
                         if isinstance(arg, DeviceMesh):
                             self.device_mesh = arg
                             break
-                    if hasattr(cls, '__iter__'):
-                        def __iter__(self):
-                            _workers_and_args = _dispatch_args(_get_workers(self._actors, 'all'), 'all',
-                                                               'all', None, (), {})
-                            RayHelper.execute_all_sync('__iter__', _workers_and_args)
-                            return self
-
-                        cls.__iter__ = __iter__
 
                 self.remote_group = remote_group
                 self._instance_id = instance_id
@@ -422,8 +424,8 @@ def remote_class():
 
 
 def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice',
-             execute: Literal['first', 'peer', 'all'] = 'all',
-             collect: Union[Literal['none', 'flatten'], Callable] = 'none'):
+                    execute: Literal['first', 'peer', 'all'] = 'all',
+                    collect: Union[Literal['none', 'flatten'], Callable] = 'none'):
     """Patch each method called from remote(which class should be decorated with `remote_class`) with this decorator.
 
     Args:
@@ -456,17 +458,21 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                     from .ray import RayHelper
                     args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
                     _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), dispatch,
-                                                        execute, device_mesh, args, kwargs)
+                                                       execute, device_mesh, args, kwargs)
                     result = RayHelper.execute_all_async(func.__name__, _workers_and_args)
                     result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
-                    return result_func if _lazy_collect else result_func()
+                    result = result_func if _lazy_collect else result_func()
+                    if func.__name__ == '__iter__':
+                        return self
+                    else:
+                        return result
             else:
                 raise NotImplementedError(f'Unsupported mode {_mode}')
 
-        wrapper._execute = func._execute = execute
-        wrapper._collect = func._collect = collect
-        wrapper._dispatch = func._dispatch = dispatch
-
+        wrapper._execute = execute
+        wrapper._collect = collect
+        wrapper._dispatch = dispatch
+        wrapper._lazy_collect = _lazy_collect
         return wrapper
 
     return decorator

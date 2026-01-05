@@ -35,7 +35,7 @@ device_mesh = DeviceMesh(
 #    mesh_dim_names=('dp',)
 #)
 
-twinkle.initialize(mode='ray', groups=device_group, global_device_mesh=device_mesh)
+twinkle.initialize(mode='ray', groups=device_group, global_device_mesh=device_mesh, lazy_collect=False)
 
 
 def create_dataset():
@@ -66,7 +66,7 @@ def train():
     for step, batch in enumerate(dataloader):
         output = model.forward_backward(inputs=batch)
         if step % 16 == 0:
-            logger.info(f'Current is step {step // 16}, loss: {output["loss"]}')
+            logger.info(f'Current is step {step // 16}, loss: {output}')
         model.clip_grad_norm(1.0)
         model.step()
         model.zero_grad()
