@@ -42,7 +42,7 @@ _device_mesh = DeviceMesh(
 _remote_components: dict = {}
 
 
-def initialize(mode: Literal['local', 'ray'],
+def initialize(mode: Literal['local', 'ray'] = 'local',
                nproc_per_node: Optional[int] = 8,
                seed: int = 42,
                full_determinism: bool = False,
