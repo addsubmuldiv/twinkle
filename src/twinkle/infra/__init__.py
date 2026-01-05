@@ -27,7 +27,7 @@ _full_determinism = False
 
 _device_group: Optional[List[DeviceGroup]] = [
     DeviceGroup(
-        name='local',
+        name='default',
         ranks=list(range(Platform.get_world_size())),
         device_type=Platform.get_platform().device_prefix(),
     )
@@ -74,7 +74,8 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         framework_util.seed_everything(seed, full_determinism)
     if _mode == 'ray':
         requires('ray')
-        _device_group = groups
+        if groups is not None:
+            _device_group = groups
         _nproc_per_node = nproc_per_node
 
 
