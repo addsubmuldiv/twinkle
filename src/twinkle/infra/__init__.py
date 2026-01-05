@@ -314,6 +314,7 @@ def remote_class():
                 device_mesh = _get_device_mesh_param(args, kwargs)
                 if device_mesh_name:
                     if device_mesh is None:
+                        device_mesh = _device_mesh
                         kwargs[device_mesh_name] = _device_mesh
                     assert len(_device_group) == 1
                     _device_group[0]._device_mesh[self.__class__.__name__] = device_mesh
@@ -333,6 +334,7 @@ def remote_class():
 
                 device_mesh = _get_device_mesh_param(args, kwargs)
                 if device_mesh is None and device_mesh_name:
+                    device_mesh = _device_mesh
                     kwargs[device_mesh_name] = _device_mesh
 
                 if remote_group and device_mesh_name:
