@@ -40,23 +40,23 @@ def train():
     )
 
     model.add_adapter_to_model('default', lora_config, gradient_accumulation_steps=16)
-    model.set_template('Qwen3Template', adapter_name='default')
-    model.set_processor(InputProcessor, adapter_name='default', padding_side='right')
-    model.set_loss(CrossEntropyLoss, adapter_name='default')
-    model.set_optimizer(AdamW, lr=1e-4, adapter_name='default')
-    model.set_lr_scheduler(LinearLR, adapter_name='default')
+    model.set_template('Qwen3Template')
+    model.set_processor(InputProcessor, padding_side='right')
+    model.set_loss(CrossEntropyLoss)
+    model.set_optimizer(AdamW, lr=1e-4)
+    model.set_lr_scheduler(LinearLR)
     logger.info(get_device_placement())
-    logger.info(model.get_train_configs(adapter_name='default'))
+    logger.info(model.get_train_configs())
     for step, batch in enumerate(dataloader):
-        output = model.forward_backward(inputs=batch, adapter_name='default')
+        output = model.forward_backward(inputs=batch)
         if step % 16 == 0:
             logger.info(f'Current is step {step // 16}, loss: {output["loss"]}')
-        model.clip_grad_norm(1.0, adapter_name='default')
-        model.step(adapter_name='default')
-        model.zero_grad(adapter_name='default')
-        model.lr_step(adapter_name='default')
+        model.clip_grad_norm(1.0)
+        model.step()
+        model.zero_grad()
+        model.lr_step()
         if step % 50 == 0:
-            model.save('./output', adapter_name='default')
+            model.save('./output')
 
 
 if __name__ == '__main__':
