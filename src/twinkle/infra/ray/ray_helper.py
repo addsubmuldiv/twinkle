@@ -1,6 +1,6 @@
 import os
 from typing import Dict, List, Optional, TypeVar, Type, Tuple, Any, Literal, Callable, Union
-
+from copy import copy
 import ray
 
 from .resource_manager import ResourceManager
@@ -180,7 +180,7 @@ class RayHelper:
             new_args.append(arg)
 
         new_kwargs = {}
-        for key in kwargs.keys().copy():
+        for key in list(kwargs.keys()):
             value = kwargs[key]
             if isinstance(value, Callable) and getattr(value, '_is_lazy_collect', False):
                 value = value()
@@ -206,10 +206,10 @@ class RayHelper:
             placement_groups = placement_groups[_slice]
             ranks = ranks[_slice]
 
-            key = f'{group}-{worker_cls.__name__}-{instance_id}'
+            key = f'{group}-{worker_cls.__class__.__name__}-{instance_id}'
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
-            ip = RayHelper.add_or_get_config(key, ip)
-            port = RayHelper.add_or_get_config(key, port)
+            ip = RayHelper.add_or_get_config(key + '-ip', ip)
+            port = RayHelper.add_or_get_config(key + '-port', port)
         else:
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
 
@@ -217,7 +217,7 @@ class RayHelper:
             for rank, (deploy_pg, gpu) in enumerate(zip(placement_groups, ranks)):
                 deploy_pg: Dict
                 cluster_name = group
-                worker_name = cluster_name + '-' + str(rank)
+                worker_name = key + '-' + str(rank)
                 env_vars = os.environ.copy()
                 env_vars.update({
                     'WORLD_SIZE':
@@ -230,11 +230,11 @@ class RayHelper:
                     cluster_name,
                     'WORKER_NAME':
                     worker_name,
-                    Platform.get_platform(device_config.device_type.upper()):
+                    Platform.get_platform(device_config.device_type.upper()).visible_device_env():
                     ','.join([str(r) for r in deploy_pg['gpu_rank']]),
                     'TWINKLE_MODE': 'ray',
                     'TWINKLE_SEED': str(seed),
-                    'TWINKLE_FULL_DETERMINISM': str(full_determinism),
+                    'TWINKLE_FULL_DETERMINISM': str(int(full_determinism)),
                 })
 
                 env_vars['MASTER_ADDR'] = ip
@@ -273,7 +273,7 @@ class RayHelper:
                     Platform.get_platform(device_config.device_type.upper()): '',
                     'TWINKLE_MODE': 'ray',
                     'TWINKLE_SEED': str(seed),
-                    'TWINKLE_FULL_DETERMINISM': str(full_determinism),
+                    'TWINKLE_FULL_DETERMINISM': str(int(full_determinism)),
                 })
                 runtime_env = RuntimeEnv(env_vars=env_vars)
 

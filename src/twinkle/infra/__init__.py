@@ -80,7 +80,7 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         RayHelper.initialize(nproc_per_node=_nproc_per_node, device_groups=_device_group)
 
 
-def get_device_placement(device_group = None) -> str:
+def get_device_placement(device_group=None) -> str:
     """Get the device placement graph, can be used to show the training topology.
 
     Args:
@@ -93,114 +93,130 @@ def get_device_placement(device_group = None) -> str:
     if device_group is None:
         device_group = _device_group
 
-    lines = ["=" * 80, "                        DEVICE PLACEMENT TOPOLOGY", "=" * 80]
-
-    for group_idx, group in enumerate(device_group):
-        lines.append("")
-        lines.append(f"┌{'─' * 76}┐")
-        lines.append(f"│ DeviceGroup: {group.name:<61} │")
-        lines.append(f"│ Device Type: {group.device_type:<61} │")
-
-        if isinstance(group.ranks, list):
-            ranks_str = str(group.ranks) if len(group.ranks) <= 16 else f"{group.ranks[:8]} ... {group.ranks[-4:]}"
+    WIDTH = 80
+    
+    def box_line(content="", align="left", prefix="│", suffix="│"):
+        inner_width = WIDTH - 4
+        if align == "center":
+            text = content.center(inner_width)
         else:
-            ranks_str = str(group.ranks)
-        lines.append(f"│ Ranks: {ranks_str:<67} │")
-        lines.append(f"├{'─' * 76}┤")
-
+            text = content.ljust(inner_width)
+        return f"{prefix} {text} {suffix}"
+    
+    def header_box(title):
+        return [
+            "╔" + "═" * (WIDTH - 2) + "╗",
+            box_line(title, align="center", prefix="║", suffix="║"),
+            "╚" + "═" * (WIDTH - 2) + "╝",
+        ]
+    
+    def section_top(title=""):
+        lines = ["┌" + "─" * (WIDTH - 2) + "┐"]
+        if title:
+            lines.append(box_line(f"◈ {title}", prefix="│", suffix="│"))
+            lines.append("├" + "─" * (WIDTH - 2) + "┤")
+        return lines
+    
+    def section_bottom():
+        return ["└" + "─" * (WIDTH - 2) + "┘"]
+    
+    def format_ranks(ranks):
+        if isinstance(ranks, list):
+            if len(ranks) <= 16:
+                return str(ranks)
+            return f"{ranks[:6]} ... {ranks[-3:]} ({len(ranks)} total)"
+        return str(ranks)
+    
+    def render_mesh_grid(mesh_array, dim_names):
+        """Render a compact mesh visualization."""
+        lines = []
+        
+        if mesh_array.ndim == 1:
+            mesh_array = mesh_array.reshape(1, -1)
+        
+        if mesh_array.ndim > 2:
+            lines.append(box_line(f"    ⊞ High-dim mesh: shape={mesh_array.shape}"))
+            return lines
+        
+        rows, cols = mesh_array.shape
+        max_rows, max_cols = 6, 10
+        show_rows, show_cols = min(rows, max_rows), min(cols, max_cols)
+        
+        cell_w = max(4, len(str(mesh_array.max())) + 2)
+        
+        # Column headers
+        col_label = dim_names[-1].upper() if dim_names else "COL"
+        row_label = dim_names[0].upper() if len(dim_names) >= 2 else "ROW"
+        
+        header = "      " + "".join(f"{i:^{cell_w}}" for i in range(show_cols))
+        if cols > max_cols:
+            header += " ⋯"
+        lines.append(box_line(f"    {header}"))
+        
+        # Top border
+        border = "      ╭" + "─" * (cell_w * show_cols + show_cols - 1) + "╮"
+        lines.append(box_line(f"    {border}"))
+        
+        # Data rows
+        for r in range(show_rows):
+            row_data = "│".join(f"{mesh_array[r, c]:^{cell_w}}" for c in range(show_cols))
+            row_str = f"   {r:>2} │{row_data}│"
+            if cols > max_cols:
+                row_str += " ⋯"
+            lines.append(box_line(f"    {row_str}"))
+        
+        if rows > max_rows:
+            lines.append(box_line(f"         {'⋮':^{cell_w * show_cols}}"))
+        
+        # Bottom border
+        border = "      ╰" + "─" * (cell_w * show_cols + show_cols - 1) + "╯"
+        lines.append(box_line(f"    {border}"))
+        
+        return lines
+    
+    # Build output
+    lines = header_box("DEVICE PLACEMENT TOPOLOGY")
+    lines.append("")
+    
+    for group in device_group:
+        lines.extend(section_top(f"DeviceGroup: {group.name}"))
+        lines.append(box_line(f"  ├─ Device Type : {group.device_type}"))
+        lines.append(box_line(f"  └─ Ranks       : {format_ranks(group.ranks)}"))
+        
         if not group._device_mesh:
-            lines.append(f"│ {'(No device meshes configured)':<74} │")
+            lines.append(box_line(""))
+            lines.append(box_line("  (No device meshes configured)", align="center"))
         else:
             for mesh_name, mesh in group._device_mesh.items():
-                lines.append(f"│                                                                            │")
-                lines.append(f"│  ◆ DeviceMesh: {mesh_name:<59} │")
-
+                lines.append(box_line(""))
+                lines.append(box_line(f"  ┌─ DeviceMesh: {mesh_name}"))
+                
+                # Dimensions
                 if mesh.mesh_dim_names:
                     dim_info = " × ".join(
-                        f"{name}={size}"
-                        for name, size in zip(mesh.mesh_dim_names, mesh.mesh.shape)
+                        f"{name}={size}" for name, size in zip(mesh.mesh_dim_names, mesh.mesh.shape)
                     )
-                    lines.append(f"│    Dimensions: {dim_info:<59} │")
-
-                world_sizes = []
-                for dim_name in ['pp', 'dp', 'tp', 'ep', 'sp', 'cp', 'fsdp']:
-                    ws = mesh._get_world_size_for_dim(dim_name)
+                    lines.append(box_line(f"  │  Dimensions : {dim_info}"))
+                
+                # Active parallelism
+                parallelism = []
+                for dim in ['pp', 'dp', 'tp', 'ep', 'sp', 'cp', 'fsdp']:
+                    ws = mesh._get_world_size_for_dim(dim)
                     if ws > 1:
-                        world_sizes.append(f"{dim_name.upper()}={ws}")
-                if world_sizes:
-                    lines.append(f"│    Active Parallelism: {', '.join(world_sizes):<51} │")
-
-                lines.append(f"│                                                                            │")
-                lines.append(f"│    Mesh Layout:                                                            │")
-
-                mesh_array = mesh.mesh
-                if mesh_array.ndim == 1:
-                    mesh_array = mesh_array.reshape(1, -1)
-
-                if mesh_array.ndim == 2:
-                    rows, cols = mesh_array.shape
-
-                    if mesh.mesh_dim_names and len(mesh.mesh_dim_names) >= 2:
-                        col_label = mesh.mesh_dim_names[-1].upper()
-                    else:
-                        col_label = "COL"
-
-                    if mesh.mesh_dim_names and len(mesh.mesh_dim_names) >= 1:
-                        row_label = mesh.mesh_dim_names[0].upper() if mesh_array.ndim == 2 and len(
-                            mesh.mesh_dim_names) >= 2 else mesh.mesh_dim_names[0].upper()
-                    else:
-                        row_label = "ROW"
-
-                    max_val = mesh_array.max()
-                    cell_width = max(3, len(str(max_val)) + 2)
-
-                    header = "│    " + " " * 4
-                    for c in range(min(cols, 12)):
-                        header += f"{c:^{cell_width}}"
-                    if cols > 12:
-                        header += " ..."
-                    header = header.ljust(75) + "│"
-                    lines.append(header)
-
-                    sep_line = "│    " + " " * 4 + "┌" + ("─" * cell_width + "┬") * (
-                                min(cols, 12) - 1) + "─" * cell_width + "┐"
-                    sep_line = sep_line.ljust(75) + "│"
-                    lines.append(sep_line)
-
-                    for r in range(min(rows, 8)):
-                        row_str = f"│    {r:>3} │"
-                        for c in range(min(cols, 12)):
-                            val = mesh_array[r, c]
-                            row_str += f"{val:^{cell_width}}│"
-                        if cols > 12:
-                            row_str += " ..."
-                        row_str = row_str.ljust(75) + "│"
-                        lines.append(row_str)
-
-                        if r < min(rows, 8) - 1:
-                            mid_line = "│    " + " " * 4 + "├" + ("─" * cell_width + "┼") * (
-                                        min(cols, 12) - 1) + "─" * cell_width + "┤"
-                            mid_line = mid_line.ljust(75) + "│"
-                            lines.append(mid_line)
-
-                    if rows > 8:
-                        lines.append(f"│    {'...':<71} │")
-
-                    bottom_line = "│    " + " " * 4 + "└" + ("─" * cell_width + "┴") * (
-                                min(cols, 12) - 1) + "─" * cell_width + "┘"
-                    bottom_line = bottom_line.ljust(75) + "│"
-                    lines.append(bottom_line)
-
-                elif mesh_array.ndim > 2:
-                    lines.append(f"│    (High-dimensional mesh: shape={mesh_array.shape})                      │")
-
-                lines.append(f"│                                                                            │")
-
-        lines.append(f"└{'─' * 76}┘")
-
-    lines.append("")
-    lines.append("=" * 80)
-
+                        parallelism.append(f"{dim.upper()}={ws}")
+                
+                if parallelism:
+                    lines.append(box_line(f"  │  Parallelism: {', '.join(parallelism)}"))
+                
+                # Mesh layout
+                lines.append(box_line(f"  │"))
+                lines.append(box_line(f"  └─ Mesh Layout:"))
+                lines.extend(render_mesh_grid(mesh.mesh, mesh.mesh_dim_names or []))
+        
+        lines.append(box_line(""))
+        lines.extend(section_bottom())
+        lines.append("")
+    
     return "\n".join(lines)
 
 
@@ -348,7 +364,7 @@ def remote_class():
 
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     init_method(self, *args, **kwargs)
-
+                    
                     if remote_group and os.environ.get('CLUSTER_NAME') == remote_group:
                         # Seed when a remote class is created.
                         framework_util.seed_everything(int(os.environ['TWINKLE_SEED']),

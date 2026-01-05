@@ -418,6 +418,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         grad_scaler_config.update(kwargs)
         optimizer_config.scaler = GradScaler(**grad_scaler_config)
 
+    @remote_function(execute='first')
     def get_train_configs(self, **kwargs):
         expr = ''
         adapter_name = kwargs.get('adapter_name', _default_adapter_name)

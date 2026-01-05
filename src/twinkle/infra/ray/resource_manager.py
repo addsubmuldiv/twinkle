@@ -20,10 +20,11 @@ class ResourceManager:
         device_types = set([group.device_type.upper() for group in groups]) - {'CPU'}
         assert len(device_types) == 1
         device_type = next(iter(device_types))
+        device_type = Platform.get_platform(device_type).__name__
 
         for group in groups:
             ranks = group.ranks
-            device = group.device_type.upper()
+            device = device_type
             if device == 'CPU':
                 # Only support totally how many processes needed
                 assert isinstance(ranks, int), 'CPU group only supports integer ranks'
@@ -84,7 +85,7 @@ class ResourceManager:
         self.device_groups = {}
         ray_address = str(ray.get_runtime_context().gcs_address)
         for group in groups:
-            if group.device_type.upper() != 'CPU':
+            if device_type != 'CPU':
                 ranks = group.ranks
                 local_device_groups = []
                 for rank in ranks:

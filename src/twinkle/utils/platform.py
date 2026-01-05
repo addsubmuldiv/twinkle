@@ -167,7 +167,7 @@ class DeviceMesh:
 
     @property
     def world_size(self) -> int:
-        return Platform.get_world_size()
+        return self.mesh.flatten().shape[0]
 
     @property
     def mp_rank(self) -> int:
