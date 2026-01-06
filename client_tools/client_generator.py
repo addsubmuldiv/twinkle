@@ -256,7 +256,7 @@ def generate_processors():
             code = f'''    
     def {name}(self{sig_part}):
         response = http_post(
-            url=f'{{self.server_url}}/call',
+            url=f'{{self.server_url}}/processors/call',
             json_data={{
                 'processor_id': self.processor_id,
                 'function': '{name}',
@@ -270,7 +270,7 @@ def generate_processors():
                 code += '''
     def __next__(self):
         response = http_post(
-            url=f'{self.server_url}/call',
+            url=f'{self.server_url}/processors/call',
             json_data={
                 'processor_id': self.processor_id,
                 'function': '__next__',
@@ -307,7 +307,7 @@ class {class_name}({inheritance}):
         self.server_url = TWINKLE_SERVER_URL
 
         response = http_post(
-            url=f'{{self.server_url}}/create',
+            url=f'{{self.server_url}}/processors/create',
             json_data={{
                 'processor_type': '{processor_type}',
                 'class_type': '{class_name}',
@@ -424,9 +424,10 @@ class MultiLoraTransformersModel(TwinkleModel, PreTrainedModel):
     def __init__(self, pretrained_model_name_or_path: str, **kwargs):
         """Initialize model client."""
         self.server_url = TWINKLE_SERVER_URL
+        self.server_url = f'{self.server_url}/{pretrained_model_name_or_path}'
         self.adapter_name = None
         response = http_post(
-            url=f'{self.server_url}/{pretrained_model_name_or_path}/create',
+            url=f'{self.server_url}/create',
         )
         response.raise_for_status()
     

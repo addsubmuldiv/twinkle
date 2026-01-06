@@ -106,6 +106,7 @@ def build_processor_app(nproc_per_node:int,
                     _kwargs[key] = self.resource_dict[value]
                 else:
                     _kwargs[key] = value
+
             return function(**_kwargs)
 
     return ProcessorManagement.options(**deploy_options).bind(nproc_per_node, device_group, device_mesh)
