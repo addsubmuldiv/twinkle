@@ -87,7 +87,7 @@ def build_model_app(model_id: str,
         def forward(self,
                     request,
                     *,
-                    inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]],
+                    inputs: Any,
                     adapter_name: str,
                     **kwargs):
             self.assert_adapter_exists(adapter_name=adapter_name)
@@ -98,7 +98,7 @@ def build_model_app(model_id: str,
         def forward_only(self,
                          request,
                          *,
-                         inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]],
+                         inputs: Any,
                          adapter_name: Optional[str] = None,
                          **kwargs):
             self.assert_adapter_valid(adapter_name=adapter_name)
@@ -121,7 +121,7 @@ def build_model_app(model_id: str,
         def forward_backward(self,
                              request,
                              *,
-                             inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]],
+                             inputs: Any,
                              adapter_name: str,
                              **kwargs):
             self.assert_adapter_exists(adapter_name=adapter_name)
