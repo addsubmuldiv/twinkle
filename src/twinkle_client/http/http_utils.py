@@ -1,4 +1,5 @@
-from typing import Optional, Dict, Any
+from numbers import Number
+from typing import Optional, Dict, Any, Mapping
 from .utils import TWINKLE_REQUEST_ID, TWINKLE_SERVER_TOKEN
 import requests
 
@@ -28,11 +29,27 @@ def http_get(
     
     if additional_headers:
         headers.update(additional_headers)
-    
+    _params = {}
+    for key, value in params.items():
+        if hasattr(value, 'processor_id'):
+            _params[key] = value.processor_id
+        elif hasattr(value, '__dict__'):
+            primitive_types = (str, Number, bool, bytes, type(None))
+            container_types = (Mapping, list, tuple, set, frozenset)
+            basic_types = (*primitive_types, *container_types)
+
+            filtered_dict = {
+                _subkey: _subvalue
+                for _subkey, _subvalue in value.__dict__.items()
+                if isinstance(_subvalue, basic_types)
+            }
+            _params[key] = filtered_dict
+        else:
+            _params[key] = value
     response = requests.get(
         url,
         headers=headers,
-        params=params,
+        params=_params,
         timeout=timeout,
     )
     

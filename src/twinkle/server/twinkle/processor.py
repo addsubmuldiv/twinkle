@@ -85,7 +85,7 @@ def build_processor_app(device_group: Dict[str, Any],
                                                             device_mesh=device_mesh,
                                                             **kwargs)
             self.resource_dict.update({processor_id: processor})
-            return processor_id
+            return 'pid:' + processor_id
 
         @app.post("/heartbeat")
         def heartbeat(self, processor_id: str):
@@ -101,6 +101,12 @@ def build_processor_app(device_group: Dict[str, Any],
             function = getattr(processor, function, None)
             assert function is not None, f'`function` not found in {processor.__class__}'
             assert hasattr(function, '_execute'), f'Cannot call inner method of {processor.__class__}'
-            return function(**kwargs)
+            _kwargs = {}
+            for key, value in kwargs.items():
+                if isinstance(value, str) and value.startswith('pid:'):
+                    _kwargs[key] = self.resource_dict[value]
+                else:
+                    _kwargs[key] = value
+            return function(**_kwargs)
 
     return ProcessorManagement.bind()
