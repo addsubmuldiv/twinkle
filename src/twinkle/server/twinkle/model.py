@@ -33,7 +33,6 @@ def build_model_app(model_id: str,
 
         def __init__(self, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
             self.device_group = DeviceGroup(**device_group)
-            breakpoint()
             twinkle.initialize(mode='ray', groups=[self.device_group], lazy_collect=False)
 
             self.device_mesh = DeviceMesh(**device_mesh)

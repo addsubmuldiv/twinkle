@@ -32,9 +32,7 @@ def build_processor_app(device_group: Dict[str, Any],
 
         def __init__(self, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
             self.device_group = DeviceGroup(**device_group)
-            twinkle.initialize(mode='ray',
-                               groups=[self.device_group],
-                               lazy_collect=False)
+            twinkle.initialize(mode='ray', groups=[self.device_group], lazy_collect=False)
 
             self.device_mesh = DeviceMesh(**device_mesh)
             self.resource_dict = {}
@@ -110,4 +108,4 @@ def build_processor_app(device_group: Dict[str, Any],
                     _kwargs[key] = value
             return function(**_kwargs)
 
-    return ProcessorManagement.options(**deploy_options).bind()
+    return ProcessorManagement.options(**deploy_options).bind(device_group, device_mesh)
