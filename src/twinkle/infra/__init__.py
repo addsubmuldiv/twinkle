@@ -425,7 +425,7 @@ def remote_class():
 
 def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice',
                     execute: Literal['first', 'peer', 'all'] = 'all',
-                    collect: Union[Literal['none', 'flatten'], Callable] = 'none'):
+                    collect: Union[Literal['none', 'flatten', 'avg', 'sum'], Callable] = 'none'):
     """Patch each method called from remote(which class should be decorated with `remote_class`) with this decorator.
 
     Args:

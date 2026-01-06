@@ -1,5 +1,5 @@
 import sys
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Any
 import numpy as np
 
 if sys.version_info[:2] <= (3, 11):
@@ -7,7 +7,7 @@ if sys.version_info[:2] <= (3, 11):
 else:
     from typing import TypedDict
 
-InputType = Union[List[List[int]], List[int], np.ndarray, 'torch.Tensor']
+InputType = Union[List[List[int]], List[int], np.ndarray, Any]
 
 
 class InputFeature(TypedDict, total=False):
