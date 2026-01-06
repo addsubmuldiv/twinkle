@@ -19,11 +19,12 @@ class ResourceManager:
         cpu_proc_count = 0
         device_types = set([group.device_type.upper() for group in groups]) - {'CPU'}
         assert len(device_types) <= 1
-        if not device_type:
+
+        if not device_types:
             device_type = 'CPU'
-        device_type = next(iter(device_types))
-        if 
-        device_type = Platform.get_platform(device_type).__name__
+        else:
+            device_type = next(iter(device_types))
+            device_type = Platform.get_platform(device_type).__name__
 
         for group in groups:
             ranks = group.ranks
@@ -57,7 +58,8 @@ class ResourceManager:
         for i in range(self.nnodes):
             node = self.nodes[i]
             node_cpu = int(node['Resources']['CPU'])
-            bundles.append({device_type: nproc_per_node, 'CPU': node_cpu // 2 + 1}) # create bundles
+            if device_type != 'CPU':
+                bundles.append({device_type: nproc_per_node, 'CPU': node_cpu // 2 + 1}) # create bundles
             cpu_bundles.append({'CPU': node_cpu // 4 + 1})  # TODO a fixed cpu count
 
         nproc_cpu_per_node = cpu_proc_count // len(cpu_bundles) + 1 # how many processes in one node
@@ -73,11 +75,14 @@ class ResourceManager:
         self.placement_groups = [ray.util.placement_group([bundle]) for bundle in bundles]
         self.cpu_placement_groups = [ray.util.placement_group([bundle]) for bundle in cpu_bundles]
         cpu_bundles.sort(key=lambda bundle: bundle['CPU'], reverse=True)
-        ray.get([pg.ready() for pg in self.placement_groups])
+        if self.placement_groups:
+            ray.get([pg.ready() for pg in self.placement_groups])
         ray.get([pg.ready() for pg in self.cpu_placement_groups])
 
-        self.node_ranks = ray.get(
-            [ray.remote(Platform.get_node_rank).options(placement_group=pg).remote() for pg in self.placement_groups])
+        self.node_ranks = []
+        if self.placement_groups:
+            self.node_ranks = ray.get(
+                [ray.remote(Platform.get_node_rank).options(placement_group=pg).remote() for pg in self.placement_groups])
         if self.node_ranks.count(0) > 1:
             self.node_ranks = list(range(len(self.placement_groups)))
 

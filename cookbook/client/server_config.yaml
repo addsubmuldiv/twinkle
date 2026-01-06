@@ -32,7 +32,7 @@ applications:
     args:
       device_group:
         name: model
-        ranks: [ 0,1,2,3 ]
+        ranks: 4
         device_type: CPU
       device_mesh:
         device_type: CPU
