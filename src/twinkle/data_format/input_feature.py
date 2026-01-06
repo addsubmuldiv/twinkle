@@ -1,5 +1,11 @@
-from typing import List, Union, Optional, TypedDict
+import sys
+from typing import List, Union, Optional
 import numpy as np
+
+if sys.version_info <= (3, 11):
+    from typing_extensions import TypedDict
+else:
+    from typing import TypedDict
 
 InputType = Union[List[List[int]], List[int], np.ndarray, 'torch.Tensor']
 

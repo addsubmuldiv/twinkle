@@ -1,4 +1,9 @@
-from typing import Literal, Union, List, Dict, Optional, TypedDict, Required, Any
+import sys
+from typing import Literal, Union, List, Dict, Optional, Required, Any
+if sys.version_info <= (3, 11):
+    from typing_extensions import TypedDict
+else:
+    from typing import TypedDict
 
 
 class ToolCall(TypedDict, total=False):
