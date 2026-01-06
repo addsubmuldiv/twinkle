@@ -2,7 +2,7 @@ import sys
 from typing import List, Dict, Any
 from .message import Message, Tool
 
-if sys.version_info <= (3, 11):
+if sys.version_info[:2] <= (3, 11):
     from typing_extensions import TypedDict
 else:
     from typing import TypedDict

@@ -1,4 +1,5 @@
 import os
+# os.environ["RAY_SERVE_ENABLE_EXPERIMENTAL_STREAMING"] = "1"
 
 import ray
 from omegaconf import OmegaConf
@@ -11,9 +12,9 @@ file_dir = os.path.abspath(os.path.dirname(__file__))
 config = OmegaConf.load(os.path.join(file_dir, 'server_config.yaml'))
 
 APP_BUILDERS = {
-    'main:build_model_app': build_model_app,
+    'main:model_qwen3_7b': build_model_app,
     # 'main:build_sampler_app': build_sampler_app,
-    'main:build_processor_app': build_processor_app,
+    'main:processor_app': build_processor_app,
 }
 
 for app_config in config.applications:
