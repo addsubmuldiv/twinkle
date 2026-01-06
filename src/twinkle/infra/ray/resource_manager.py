@@ -43,15 +43,17 @@ class ResourceManager:
             last_rank = ranks[-1]
 
         assert len(set(all_ranks)) == len(all_ranks) # no duplication
-        self.nnodes = math.ceil(len(all_ranks) / nproc_per_node)
+        self.nnodes = math.ceil(len(all_ranks) / nproc_per_node) or len(ray.nodes())
 
         self.nodes = []
         for node in ray.nodes():
             # get available nodes
             resource = node['Resources']
             node_gpu_num = int(resource.get(device_type, 0))
-            if node_gpu_num >= nproc_per_node:
+            if node_gpu_num >= nproc_per_node and (device_type != 'CPU' or 'GPU' not in resource):
                 self.nodes.append(node)
+        
+        self.nnodes = min(self.nnodes, len(self.nodes))
 
         bundles = []
         cpu_bundles = []
@@ -60,7 +62,9 @@ class ResourceManager:
             node_cpu = int(node['Resources']['CPU'])
             if device_type != 'CPU':
                 bundles.append({device_type: nproc_per_node, 'CPU': node_cpu // 2 + 1}) # create bundles
-            cpu_bundles.append({'CPU': node_cpu // 4 + 1})  # TODO a fixed cpu count
+                cpu_bundles.append({'CPU': node_cpu // 4 + 1})  # TODO a fixed cpu count
+            else:
+                cpu_bundles.append({'CPU': node_cpu // 2 + 1})
 
         nproc_cpu_per_node = cpu_proc_count // len(cpu_bundles) + 1 # how many processes in one node
 

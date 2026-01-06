@@ -9,6 +9,7 @@ applications:
     import_path: main:model_qwen25_7B
     args:
       model_id: "ms://Qwen/Qwen2.5-7B-Instruct"
+      nproc_per_node: 4
       device_group:
         name: model
         ranks: [ 0,1,2,3 ]
@@ -30,6 +31,7 @@ applications:
     route_prefix: /processors
     import_path: main:processor_app
     args:
+      nproc_per_node: 4
       device_group:
         name: model
         ranks: 4

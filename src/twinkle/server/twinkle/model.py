@@ -15,6 +15,7 @@ from .validation import verify_request_token, init_config_registry, ConfigRegist
 
 
 def build_model_app(model_id: str,
+                    nproc_per_node: int,
                     device_group: Dict[str, Any],
                     device_mesh: Dict[str, Any],
                     deploy_options: Dict[str, Any],
@@ -31,9 +32,9 @@ def build_model_app(model_id: str,
 
         COUNT_DOWN = 60 * 30
 
-        def __init__(self, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
+        def __init__(self, nproc_per_node, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
             self.device_group = DeviceGroup(**device_group)
-            twinkle.initialize(mode='ray', groups=[self.device_group], lazy_collect=False)
+            twinkle.initialize(mode='ray', nproc_per_node=nproc_per_node, groups=[self.device_group], lazy_collect=False)
             self.device_mesh = DeviceMesh(**device_mesh)
             self.model = TransformersModel(pretrained_model_name_or_path=model_id, device_mesh=device_mesh,
                                            remote_group=self.device_group.name, **kwargs)
@@ -199,4 +200,4 @@ def build_model_app(model_id: str,
             adapter_name = self.get_adapter_name(request, adapter_name=adapter_name)
             self.adapter_records[adapter_name] = 0
 
-    return ModelManagement.options(**deploy_options).bind(device_group, device_mesh)
+    return ModelManagement.options(**deploy_options).bind(nproc_per_node, device_group, device_mesh)

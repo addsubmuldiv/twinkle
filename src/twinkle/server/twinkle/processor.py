@@ -12,7 +12,8 @@ from twinkle.server.twinkle.validation import verify_request_token, ConfigRegist
 from twinkle import DeviceGroup, DeviceMesh
 
 
-def build_processor_app(device_group: Dict[str, Any],
+def build_processor_app(nproc_per_node:int,
+                        device_group: Dict[str, Any],
                         device_mesh: Dict[str, Any],
                         deploy_options: Dict[str, Any]):
     app = FastAPI()
@@ -30,10 +31,9 @@ def build_processor_app(device_group: Dict[str, Any],
 
         COUNT_DOWN = 60 * 30
 
-        def __init__(self, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
-            breakpoint()
+        def __init__(self, nproc_per_node: int, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
             self.device_group = DeviceGroup(**device_group)
-            twinkle.initialize(mode='ray', groups=[self.device_group], lazy_collect=False)
+            twinkle.initialize(mode='ray', nproc_per_node=nproc_per_node, groups=[self.device_group], lazy_collect=False)
             self.device_mesh = DeviceMesh(**device_mesh)
             self.resource_dict = {}
             self.resource_records: Dict[str, int] = {}
@@ -108,4 +108,4 @@ def build_processor_app(device_group: Dict[str, Any],
                     _kwargs[key] = value
             return function(**_kwargs)
 
-    return ProcessorManagement.options(**deploy_options).bind(device_group, device_mesh)
+    return ProcessorManagement.options(**deploy_options).bind(nproc_per_node, device_group, device_mesh)
