@@ -68,13 +68,12 @@ class RayHelper:
         Returns:
             None
         """
-        if RayHelper.ray_inited():
-            return
-
         requires('ray')
         import ray
         RayHelper.device_groups = device_groups
-        ray.init()
+        if not RayHelper.ray_inited():
+            ray.init()
+
         if RayHelper.resource_manager is None:
             # Resource manager initializes only once in the pipeline process.
             RayHelper.resource_manager = ResourceManager(nproc_per_node, device_groups)

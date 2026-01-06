@@ -1,4 +1,5 @@
 import os
+os.environ['RAY_DEBUG'] = '1'
 import ray
 from omegaconf import OmegaConf
 from ray import serve
