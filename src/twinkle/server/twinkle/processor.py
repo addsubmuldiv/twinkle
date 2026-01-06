@@ -16,12 +16,6 @@ def build_processor_app(device_group: Dict[str, Any],
                         device_mesh: Dict[str, Any],
                         deploy_options: Dict[str, Any]):
     app = FastAPI()
-    device_group = DeviceGroup(**device_group)
-    twinkle.initialize(mode='ray',
-                       groups=[device_group],
-                       lazy_collect=False)
-
-    device_mesh = DeviceMesh(**device_mesh)
 
     @app.middleware("http")
     async def verify_token(request: Request, call_next):
@@ -36,7 +30,13 @@ def build_processor_app(device_group: Dict[str, Any],
 
         COUNT_DOWN = 60 * 30
 
-        def __init__(self):
+        def __init__(self, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
+            self.device_group = DeviceGroup(**device_group)
+            twinkle.initialize(mode='ray',
+                               groups=[self.device_group],
+                               lazy_collect=False)
+
+            self.device_mesh = DeviceMesh(**device_mesh)
             self.resource_dict = {}
             self.resource_records: Dict[str, int] = {}
             self.hb_thread = threading.Thread(target=self.countdown)
@@ -82,8 +82,8 @@ def build_processor_app(device_group: Dict[str, Any],
             self.key_token_dict[processor_id] = request.state.token
             kwargs.pop('remote_group', None)
             kwargs.pop('device_mesh', None)
-            processor = getattr(processor_type, class_type)(remote_group=device_group.name,
-                                                            device_mesh=device_mesh,
+            processor = getattr(processor_type, class_type)(remote_group=self.device_group.name,
+                                                            device_mesh=self.device_mesh,
                                                             **kwargs)
             self.resource_dict.update({processor_id: processor})
             return 'pid:' + processor_id

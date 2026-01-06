@@ -20,10 +20,6 @@ def build_model_app(model_id: str,
                     deploy_options: Dict[str, Any],
                     **kwargs):
     app = FastAPI()
-    device_group = DeviceGroup(**device_group)
-    twinkle.initialize(mode='ray', groups=[device_group], lazy_collect=False)
-
-    device_mesh = DeviceMesh(**device_mesh)
 
     @app.middleware("http")
     async def verify_token(request: Request, call_next):
@@ -35,9 +31,13 @@ def build_model_app(model_id: str,
 
         COUNT_DOWN = 60 * 30
 
-        def __init__(self):
+        def __init__(self, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
+            self.device_group = DeviceGroup(**device_group)
+            twinkle.initialize(mode='ray', groups=[self.device_group], lazy_collect=False)
+
+            self.device_mesh = DeviceMesh(**device_mesh)
             self.model = TransformersModel(pretrained_model_name_or_path=model_id, device_mesh=device_mesh,
-                                           remote_group=device_group.name, **kwargs)
+                                           remote_group=self.device_group.name, **kwargs)
             self.adapter_records: Dict[str, int] = {}
             self.hb_thread = threading.Thread(target=self.countdown)
             self.hb_thread.start()
@@ -200,4 +200,4 @@ def build_model_app(model_id: str,
             adapter_name = self.get_adapter_name(request, adapter_name=adapter_name)
             self.adapter_records[adapter_name] = 0
 
-    return ModelManagement.options(**deploy_options).bind()
+    return ModelManagement.options(**deploy_options).bind(device_group, device_mesh)
