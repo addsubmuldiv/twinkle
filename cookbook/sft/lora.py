@@ -1,14 +1,14 @@
-from torch.optim.lr_scheduler import LinearLR
 import numpy as np
+from peft import LoraConfig
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LinearLR
+
 import twinkle
 from twinkle import get_device_placement, get_logger, DeviceMesh, DeviceGroup, Platform
 from twinkle.dataloader import DataLoader
 from twinkle.dataset import Dataset, DatasetMeta
 from twinkle.loss import CrossEntropyLoss
 from twinkle.model import TransformersModel
-from peft import LoraConfig
-from torch.optim import AdamW
-from torch.distributed.fsdp import ShardingStrategy
 from twinkle.processor import InputProcessor
 
 logger = get_logger()

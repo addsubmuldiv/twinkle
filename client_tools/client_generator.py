@@ -1,34 +1,23 @@
 import ast
-import os
-import inspect
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple, Set
 
 
 def generate_processors():
-    from twinkle.dataloader import DataLoader
-    from twinkle.dataset import Dataset
-    from twinkle.hub import HubOperation
-    from twinkle.preprocessor import Preprocessor
-    from twinkle.processor import InputProcessor
-    from twinkle.reward import Reward
-    from twinkle.template import Template
-    from twinkle.weight_loader import WeightLoader
-
-    # Base classes to search for
-    base_classes = {
-        'DataLoader': DataLoader,
-        'Dataset': Dataset,
-        'HubOperation': HubOperation,
-        'Preprocessor': Preprocessor,
-        'InputProcessor': InputProcessor,
-        'Reward': Reward,
-        'Template': Template,
-        'WeightLoader': WeightLoader,
+    """Generate client wrappers for all classes with @remote_function methods."""
+    
+    # Module mapping: module_name -> directory in src/twinkle
+    module_mapping = {
+        'dataloader': 'dataloader',
+        'dataset': 'dataset',
+        'processor': 'processor',
+        'reward': 'reward',
+        'template': 'template',
+        'weight_loader': 'weight_loader',
     }
     
-    # Map module names to their paths
-    module_mapping = {
+    # Map module names to processor types in the server
+    processor_type_mapping = {
         'dataloader': 'dataloader',
         'dataset': 'dataset',
         'hub': 'hub',
@@ -36,7 +25,7 @@ def generate_processors():
         'processor': 'processor',
         'reward': 'reward',
         'template': 'template',
-        'weight_loader': 'weight_loader',
+        'weight_loader': 'weight_synchronizer',
     }
     
     # Get the project root directory
@@ -44,9 +33,144 @@ def generate_processors():
     src_twinkle_path = project_root / 'src' / 'twinkle'
     src_client_path = project_root / 'src' / 'client'
     
-    def find_classes_in_file(file_path: Path) -> List[Tuple[str, str, List[Tuple[str, str]]]]:
-        """Find classes that inherit from base classes.
+    def get_method_signature(func_node: ast.FunctionDef) -> str:
+        """Extract method signature from AST node."""
+        args = []
+        
+        # Regular arguments
+        for i, arg in enumerate(func_node.args.args):
+            if arg.arg == 'self':
+                continue
             
+            # Get argument name
+            arg_str = arg.arg
+            
+            # Get type annotation if available
+            if arg.annotation:
+                try:
+                    arg_str += f": {ast.unparse(arg.annotation)}"
+                except:
+                    pass
+            
+            # Get default value if available
+            defaults_offset = len(func_node.args.args) - len(func_node.args.defaults)
+            if i >= defaults_offset:
+                default_idx = i - defaults_offset
+                try:
+                    default_val = ast.unparse(func_node.args.defaults[default_idx])
+                    arg_str += f" = {default_val}"
+                except:
+                    pass
+            
+            args.append(arg_str)
+        
+        # *args
+        if func_node.args.vararg:
+            vararg_str = f"*{func_node.args.vararg.arg}"
+            if func_node.args.vararg.annotation:
+                try:
+                    vararg_str += f": {ast.unparse(func_node.args.vararg.annotation)}"
+                except:
+                    pass
+            args.append(vararg_str)
+        
+        # **kwargs
+        if func_node.args.kwarg:
+            kwarg_str = f"**{func_node.args.kwarg.arg}"
+            if func_node.args.kwarg.annotation:
+                try:
+                    kwarg_str += f": {ast.unparse(func_node.args.kwarg.annotation)}"
+                except:
+                    pass
+            args.append(kwarg_str)
+        
+        return ', '.join(args)
+    
+    def extract_typing_imports(signatures: List[str]) -> Set[str]:
+        """Extract required typing imports from signatures."""
+        typing_imports = set()
+        all_text = ' '.join(signatures)
+        
+        if 'Union[' in all_text:
+            typing_imports.add('Union')
+        if 'Optional[' in all_text:
+            typing_imports.add('Optional')
+        if 'List[' in all_text:
+            typing_imports.add('List')
+        if 'Dict[' in all_text:
+            typing_imports.add('Dict')
+        if 'Tuple[' in all_text:
+            typing_imports.add('Tuple')
+        if 'Type[' in all_text:
+            typing_imports.add('Type')
+        if 'Any' in all_text:
+            typing_imports.add('Any')
+        if 'Callable' in all_text:
+            typing_imports.add('Callable')
+        
+        return typing_imports
+    
+    def extract_twinkle_imports(signatures: List[str]) -> Set[str]:
+        """Extract required twinkle imports from signatures."""
+        twinkle_imports = set()
+        all_text = ' '.join(signatures)
+        
+        # Check for common twinkle types
+        if 'InputFeature' in all_text:
+            twinkle_imports.add('from twinkle.data_format import InputFeature')
+        if 'Trajectory' in all_text:
+            twinkle_imports.add('from twinkle.data_format import Trajectory')
+        if 'template.Template' in all_text or 'Template' in all_text:
+            twinkle_imports.add('from twinkle.template import Template')
+            twinkle_imports.add('from twinkle import template')
+        if 'DataFilter' in all_text:
+            twinkle_imports.add('from twinkle.preprocessor import DataFilter')
+        if 'Template]' in all_text:  # Type[Template]
+            twinkle_imports.add('from twinkle.template import Template')
+        if 'Preprocessor' in all_text:
+            twinkle_imports.add('from twinkle.preprocessor import Preprocessor')
+        if 'DatasetMeta' in all_text:
+            twinkle_imports.add('from twinkle.dataset import DatasetMeta')
+        if 'DeviceMesh' in all_text:
+            twinkle_imports.add('from twinkle import DeviceMesh')
+        
+        return twinkle_imports
+    
+    def parse_params_from_signature(signature: str) -> List[str]:
+        """Parse parameter names from signature, handling nested brackets."""
+        params = []
+        current_param = ''
+        bracket_depth = 0
+        
+        for char in signature + ',':
+            if char in '[(':
+                bracket_depth += 1
+                current_param += char
+            elif char in '])':
+                bracket_depth -= 1
+                current_param += char
+            elif char == ',' and bracket_depth == 0:
+                if current_param.strip():
+                    params.append(current_param.strip())
+                current_param = ''
+            else:
+                current_param += char
+        
+        # Extract parameter names from each param
+        param_names = []
+        for param in params:
+            if param.startswith('*'):
+                continue  # Skip *args and **kwargs
+            # Extract just the parameter name (before : or =)
+            param_name = param.split(':')[0].split('=')[0].strip()
+            if param_name and param_name not in ['self']:
+                param_names.append(param_name)
+        
+        return param_names
+    
+    def find_classes_with_remote_methods(file_path: Path) -> List[Tuple[str, str, List[Tuple[str, str]]]]:
+        """Find all classes that have @remote_function decorated methods.
+        
         Returns:
             List of tuples (class_name, base_class_name, [(method_name, signature), ...])
         """
@@ -56,286 +180,222 @@ def generate_processors():
         except Exception as e:
             print(f"Error parsing {file_path}: {e}")
             return []
-            
-        def get_method_signature(func_node: ast.FunctionDef) -> str:
-            """Extract method signature from AST node."""
-            args = []
-                
-            # Regular arguments
-            for i, arg in enumerate(func_node.args.args):
-                if arg.arg == 'self':
-                    continue
-                    
-                # Get argument name
-                arg_str = arg.arg
-                    
-                # Get type annotation if available
-                if arg.annotation:
-                    try:
-                        arg_str += f": {ast.unparse(arg.annotation)}"
-                    except:
-                        pass
-                    
-                # Get default value if available
-                defaults_offset = len(func_node.args.args) - len(func_node.args.defaults)
-                if i >= defaults_offset:
-                    default_idx = i - defaults_offset
-                    try:
-                        default_val = ast.unparse(func_node.args.defaults[default_idx])
-                        arg_str += f" = {default_val}"
-                    except:
-                        pass
-                    
-                args.append(arg_str)
-                
-            # *args
-            if func_node.args.vararg:
-                vararg_str = f"*{func_node.args.vararg.arg}"
-                if func_node.args.vararg.annotation:
-                    try:
-                        vararg_str += f": {ast.unparse(func_node.args.vararg.annotation)}"
-                    except:
-                        pass
-                args.append(vararg_str)
-                
-            # **kwargs
-            if func_node.args.kwarg:
-                kwarg_str = f"**{func_node.args.kwarg.arg}"
-                if func_node.args.kwarg.annotation:
-                    try:
-                        kwarg_str += f": {ast.unparse(func_node.args.kwarg.annotation)}"
-                    except:
-                        pass
-                args.append(kwarg_str)
-                
-            return ', '.join(args)
-            
+        
         classes_found = []
-            
+        
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
-                # Check if this class inherits from any base class
-                for base in node.bases:
-                    base_name = None
-                    if isinstance(base, ast.Name):
-                        base_name = base.id
-                    elif isinstance(base, ast.Attribute):
-                        base_name = base.attr
+                # Extract all methods decorated with @remote_function
+                methods = []
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef):
+                        # Check for remote_function decorator
+                        has_remote_decorator = False
+                        for decorator in item.decorator_list:
+                            if isinstance(decorator, ast.Name) and decorator.id == 'remote_function':
+                                has_remote_decorator = True
+                            elif isinstance(decorator, ast.Call):
+                                if isinstance(decorator.func, ast.Name) and decorator.func.id == 'remote_function':
+                                    has_remote_decorator = True
+                                elif isinstance(decorator.func, ast.Attribute) and decorator.func.attr == 'remote_function':
+                                    has_remote_decorator = True
                         
-                    if base_name in base_classes:
-                        # Extract all methods decorated with @remote_function
-                        methods = []
-                        for item in node.body:
-                            if isinstance(item, ast.FunctionDef):
-                                # Check for remote_function decorator
-                                has_remote_decorator = False
-                                for decorator in item.decorator_list:
-                                    if isinstance(decorator, ast.Name) and decorator.id == 'remote_function':
-                                        has_remote_decorator = True
-                                    elif isinstance(decorator, ast.Call):
-                                        if isinstance(decorator.func, ast.Name) and decorator.func.id == 'remote_function':
-                                            has_remote_decorator = True
-                                        elif isinstance(decorator.func, ast.Attribute) and decorator.func.attr == 'remote_function':
-                                            has_remote_decorator = True
-                                    
-                                if has_remote_decorator and not item.name.startswith('_'):
-                                    signature = get_method_signature(item)
-                                    methods.append((item.name, signature))
-                            
-                        classes_found.append((node.name, base_name, methods))
-            
-        return classes_found
-
-    def scan_module(module_path: Path) -> Dict[str, List[Tuple[str, List[Tuple[str, str]]]]]:
-        """Scan a module directory for classes.
-            
-        Returns:
-            Dict mapping base_class_name to list of (class_name, [(method_name, signature), ...])
-        """
-        result = {}
-            
-        if not module_path.exists():
-            return result
-            
-        for py_file in module_path.glob('*.py'):
-            if py_file.name.startswith('_'):
-                continue
+                        if has_remote_decorator:
+                            # Include method if:
+                            # 1. It's a dunder method (__xxx__)
+                            # 2. Or it doesn't start with underscore
+                            if item.name.startswith('__') and item.name.endswith('__'):
+                                signature = get_method_signature(item)
+                                methods.append((item.name, signature))
+                            elif not item.name.startswith('_'):
+                                signature = get_method_signature(item)
+                                methods.append((item.name, signature))
                 
-            classes = find_classes_in_file(py_file)
-            for class_name, base_name, methods in classes:
-                if base_name not in result:
-                    result[base_name] = []
-                result[base_name].append((class_name, methods))
-            
-        return result
+                # Only include classes that have at least one remote method
+                if methods:
+                    # Determine base class name from the first base (if any)
+                    base_name = None
+                    if node.bases:
+                        base = node.bases[0]
+                        if isinstance(base, ast.Name):
+                            base_name = base.id
+                        elif isinstance(base, ast.Attribute):
+                            base_name = base.attr
+                    
+                    # If no base class found, use object as default
+                    if not base_name:
+                        base_name = 'object'
+                    
+                    classes_found.append((node.name, base_name, methods))
         
-    def generate_client_class(class_name: str, base_class_name: str, 
-                             methods: List[Tuple[str, str]], module_name: str, 
+        return classes_found
+    
+    def generate_client_class(class_name: str, base_class_name: str,
+                             methods: List[Tuple[str, str]], module_name: str,
                              processor_type: str) -> str:
-        """Generate client wrapper class code.
-            
-        Args:
-            methods: List of tuples (method_name, signature)
-        """
-        code_lines = [f"""from typing import Any, Optional
-import uuid
-from client.http import TWINKLE_SERVER_URL
-from client.http import http_post, heartbeat_manager
-import twinkle
-
-
-class {class_name}(twinkle.{module_name}.{base_class_name}):
-    \"\"\"Client wrapper for {class_name} that calls server HTTP endpoints.\"\"\"
-    
-    def __init__(self,
-                 **kwargs):
-        assert TWINKLE_SERVER_URL
-        self.server_url = TWINKLE_SERVER_URL
+        """Generate client wrapper class code."""
         
-        # Create processor instance on server
-        response = http_post(
-            url=f'{{self.server_url}}/create',
-            json_data={{
-                'processor_type': '{processor_type}',
-                'class_type': '{class_name}',
-                **kwargs
-            }}
-        )
-        response.raise_for_status()
-        self.processor_id = response.json()
+        # Extract typing imports from all signatures
+        signatures = [sig for _, sig in methods]
+        typing_imports = extract_typing_imports(signatures)
+        twinkle_imports = extract_twinkle_imports(signatures)
         
-        # Register for automatic heartbeat
-        heartbeat_manager.register_processor(
-            self.processor_id,
-        )
-    
-    def __del__(self):
-        try:
-            heartbeat_manager.unregister_processor(self.processor_id)
-        except:
-            pass
-"""]
-
-        # Generate methods
+        # Build imports section
+        import_lines = []
+        if typing_imports:
+            import_lines.append(f"from typing import {', '.join(sorted(typing_imports))}")
+        import_lines.extend([
+            "from client.http import TWINKLE_SERVER_URL",
+            "from client.http import http_post, heartbeat_manager",
+        ])
+        # Add twinkle-specific imports
+        for imp in sorted(twinkle_imports):
+            import_lines.append(imp)
+        # Add base module import
+        import_lines.append(f"import twinkle.{module_name}")
+        import_lines.append("")
+        
+        # Generate class definition
+        code_lines = ['\n'.join(import_lines)]
+        code_lines.append(f"\nclass {class_name}(twinkle.{module_name}.{base_class_name}):")
+        code_lines.append(f'    """Client wrapper for {class_name} that calls server HTTP endpoints."""')
+        code_lines.append("")
+        
+        # Generate __init__
+        code_lines.append("    def __init__(self, **kwargs):")
+        code_lines.append("        assert TWINKLE_SERVER_URL")
+        code_lines.append("        self.server_url = TWINKLE_SERVER_URL")
+        code_lines.append("")
+        code_lines.append("        # Create processor instance on server")
+        code_lines.append("        response = http_post(")
+        code_lines.append("            url=f'{self.server_url}/create',")
+        code_lines.append("            json_data={")
+        code_lines.append(f"                'processor_type': '{processor_type}',")
+        code_lines.append(f"                'class_type': '{class_name}',")
+        code_lines.append("                **kwargs")
+        code_lines.append("            }")
+        code_lines.append("        )")
+        code_lines.append("        response.raise_for_status()")
+        code_lines.append("        self.processor_id = response.json()")
+        code_lines.append("")
+        code_lines.append("        # Register for automatic heartbeat")
+        code_lines.append("        heartbeat_manager.register_processor(self.processor_id)")
+        code_lines.append("")
+        
+        # Generate __del__
+        code_lines.append("    def __del__(self):")
+        code_lines.append("        try:")
+        code_lines.append("            heartbeat_manager.unregister_processor(self.processor_id)")
+        code_lines.append("        except:")
+        code_lines.append("            pass")
+        code_lines.append("")
+        
+        # Generate remote methods
         for method_name, signature in methods:
-            # Parse signature to extract parameter names for the JSON payload
-            param_names = []
-            if signature:
-                # Extract parameter names from signature
-                for param in signature.split(','):
-                    param = param.strip()
-                    if param.startswith('*'):
-                        continue  # Skip *args and **kwargs for now
-                    # Extract just the parameter name (before : or =)
-                    param_name = param.split(':')[0].split('=')[0].strip()
-                    if param_name and param_name not in ['self']:
-                        param_names.append(param_name)
+            param_names = parse_params_from_signature(signature)
             
-            # Build kwargs dict from parameters
+            # Build kwargs dict
             if param_names:
                 kwargs_items = ', '.join([f"'{p}': {p}" for p in param_names])
                 kwargs_dict = f"{{{kwargs_items}}}"
             else:
                 kwargs_dict = "{}"
             
-            code_lines.extend([f"""    
-    def {method_name}(self{', ' + signature if signature else ''}):
-        response = http_post(
-            url=f'{{self.server_url}}/call',
-            json_data={{
-                'processor_id': self.processor_id,
-                'function': '{method_name}',
-                **{kwargs_dict}
-            }}
-        )
-        response.raise_for_status()
-        return response.json()"""
-            ])
-
+            code_lines.append(f"    def {method_name}(self{', ' + signature if signature else ''}):")
+            code_lines.append("        response = http_post(")
+            code_lines.append("            url=f'{self.server_url}/call',")
+            code_lines.append("            json_data={")
+            code_lines.append("                'processor_id': self.processor_id,")
+            code_lines.append(f"                'function': '{method_name}',")
+            code_lines.append(f"                **{kwargs_dict}")
+            code_lines.append("            }")
+            code_lines.append("        )")
+            code_lines.append("        response.raise_for_status()")
+            code_lines.append("        return response.json()")
+            code_lines.append("")
+        
         return '\n'.join(code_lines)
-
-    # Map base class names to processor types in the server
-    processor_type_mapping = {
-        'DataLoader': 'dataloader',
-        'Dataset': 'dataset',
-        'HubOperation': 'hub',
-        'Preprocessor': 'preprocessor',
-        'InputProcessor': 'processor',
-        'Reward': 'reward',
-        'Template': 'template',
-        'WeightLoader': 'weight_synchronizer',  # Note: server uses 'weight_synchronizer'
-    }
-
+    
     # Scan all modules
-    print("Scanning src/twinkle modules...")
-    all_classes = {}
-
+    print("Scanning src/twinkle modules for classes with @remote_function methods...")
+    
+    # Structure: {module_name: {source_filename: [(class_name, base_class_name, methods), ...]}}
+    module_files: Dict[str, Dict[str, List[Tuple[str, str, List[Tuple[str, str]]]]]] = {}
+    
     for module_name, module_dir in module_mapping.items():
         module_path = src_twinkle_path / module_dir
+        
+        if not module_path.exists():
+            continue
+        
         print(f"  Scanning {module_name}...")
-        classes = scan_module(module_path)
-
-        for base_class_name, class_list in classes.items():
-            if base_class_name not in all_classes:
-                all_classes[base_class_name] = {}
-            if module_name not in all_classes[base_class_name]:
-                all_classes[base_class_name][module_name] = []
-            all_classes[base_class_name][module_name].extend(class_list)
-
+        
+        for py_file in module_path.glob('*.py'):
+            if py_file.name.startswith('_'):
+                continue
+            
+            classes = find_classes_with_remote_methods(py_file)
+            
+            if classes:
+                if module_name not in module_files:
+                    module_files[module_name] = {}
+                
+                source_filename = py_file.stem
+                if source_filename not in module_files[module_name]:
+                    module_files[module_name][source_filename] = []
+                
+                module_files[module_name][source_filename].extend(classes)
+    
     # Generate client files
     print("\nGenerating client classes...")
-
-    # Track all classes per module for __init__.py generation
-    module_classes: Dict[str, List[str]] = {}
-
-    for base_class_name, modules in all_classes.items():
-        for module_name, class_list in modules.items():
-            client_module_path = src_client_path / module_name
-
-            # Create package directory if it doesn't exist
-            client_module_path.mkdir(parents=True, exist_ok=True)
-
-            # Track classes for this module
-            if module_name not in module_classes:
-                module_classes[module_name] = []
-
-            processor_type = processor_type_mapping.get(base_class_name, module_name)
-
-            for class_name, methods in class_list:
-                client_file = client_module_path / f'{class_name.lower()}.py'
-                print(f"  Generating {client_file}...")
-
-                client_code = generate_client_class(
+    
+    for module_name, source_files in module_files.items():
+        client_module_path = src_client_path / module_name
+        client_module_path.mkdir(parents=True, exist_ok=True)
+        
+        processor_type = processor_type_mapping.get(module_name, module_name)
+        
+        for source_filename, classes in source_files.items():
+            client_file = client_module_path / f'{source_filename}.py'
+            print(f"  Writing {client_file}...")
+            
+            # Generate code for all classes from this source file
+            all_code_parts = []
+            for class_name, base_class_name, methods in classes:
+                code = generate_client_class(
                     class_name, base_class_name, methods, module_name, processor_type
                 )
-
-                # Overwrite the file completely
-                with open(client_file, 'w', encoding='utf-8') as f:
-                    f.write(client_code)
-
-                # Track class for __init__.py export
-                module_classes[module_name].append(class_name)
-
+                all_code_parts.append(code)
+            
+            # Combine all classes from the same source file
+            combined_code = '\n\n'.join(all_code_parts)
+            
+            # Write the file
+            with open(client_file, 'w', encoding='utf-8') as f:
+                f.write(combined_code)
+    
     # Generate __init__.py files for each module
     print("\nGenerating __init__.py files...")
-    for module_name, class_names in module_classes.items():
+    
+    for module_name, source_files in module_files.items():
         client_module_path = src_client_path / module_name
         init_file = client_module_path / '__init__.py'
-
-        # Generate complete __init__.py content
+        
+        # Collect all class names
         init_lines = []
-        for class_name in sorted(class_names):
-            init_lines.append(f"from .{class_name.lower()} import {class_name}")
-
+        for source_filename, classes in sorted(source_files.items()):
+            class_names = [class_name for class_name, _, _ in classes]
+            for class_name in sorted(class_names):
+                init_lines.append(f"from .{source_filename} import {class_name}")
+        
         init_content = '\n'.join(init_lines) + '\n'
-
-        # Overwrite __init__.py completely
+        
         print(f"  Writing {init_file}...")
         with open(init_file, 'w', encoding='utf-8') as f:
             f.write(init_content)
-
-    print("\nClient generation complete!")
-    return all_classes
+    
+    print("\nProcessor client generation complete!")
+    return module_files
 
 
 def generate_models():
@@ -347,25 +407,24 @@ def generate_models():
     client_module_path = src_client_path / 'model'
     client_module_path.mkdir(parents=True, exist_ok=True)
 
-    model_code = '''from typing import Any, Optional
+    model_code = '''from typing import Any, Optional, Union, Type, Dict, Literal, List
 import uuid
 from client.http import TWINKLE_SERVER_URL
 from client.http import http_post, heartbeat_manager
-import twinkle
-from transformers import PretrainedConfig
+from twinkle.model.base import TwinkleModel
+from transformers import PreTrainedModel, PretrainedConfig
 from twinkle import DeviceMesh
+from twinkle.data_format import InputFeature, Trajectory
 
 
-class TransformersModel(twinkle.model.TransformersModel):
+class MultiLoraTransformersModel(TwinkleModel, PreTrainedModel):
     """Client wrapper for TwinkleModel that calls server HTTP endpoints.
     
     This client manages adapters and sends training/inference requests to the model server.
     Each adapter has its own lifecycle managed through automatic heartbeats.
     """
     
-    def __init__(self, # noqa
-                 pretrained_model_name_or_path: str,
-                 **kwargs):
+    def __init__(self, pretrained_model_name_or_path: str, **kwargs):
         """Initialize model client."""
         self.server_url = TWINKLE_SERVER_URL
         self.adapter_name = None
@@ -386,8 +445,6 @@ class TransformersModel(twinkle.model.TransformersModel):
         """Add a new adapter to the model and start automatic heartbeat."""
         response = http_post(
             url=f'{self.server_url}/add_adapter',
-            request_id=self.request_id,
-            authorization=self.authorization,
             json_data={'adapter_name': adapter_name, 'config': config}
         )
         response.raise_for_status()
@@ -535,18 +592,15 @@ class TransformersModel(twinkle.model.TransformersModel):
         return response.json()
 '''
 
-    # Create package directory
-    client_module_path.mkdir(parents=True, exist_ok=True)
-
-    # Write the model client file (overwrite if exists)
-    client_file = client_module_path / 'transformers.py'
+    # Write the model client file
+    client_file = client_module_path / 'multi_lora_transformers.py'
     print(f"Generating {client_file}...")
     with open(client_file, 'w', encoding='utf-8') as f:
         f.write(model_code)
 
-    # Create/overwrite __init__.py with exports
+    # Create/overwrite __init__.py
     init_file = client_module_path / '__init__.py'
-    init_content = "from .transformers import TransformersModel\n"
+    init_content = "from .multi_lora_transformers import MultiLoraTransformersModel\n"
     print(f"Writing {init_file}...")
     with open(init_file, 'w', encoding='utf-8') as f:
         f.write(init_content)
@@ -563,18 +617,18 @@ def generate_samplers():
     client_module_path = src_client_path / 'sampler'
     client_module_path.mkdir(parents=True, exist_ok=True)
 
-    sampler_code = '''from typing import Any, Optional
+    sampler_code = '''from typing import Any, Optional, List, Dict
 import uuid
 from client.http import TWINKLE_SERVER_URL
 from client.http import http_post, heartbeat_manager
-import twinkle
-import json
+from twinkle.sampler.base import Sampler
 from twinkle import DeviceMesh
 from peft import PeftConfig
-from twinkle.trajectory import Trajectory
+from twinkle.data_format import Trajectory
+import json
 
 
-class VLLMSampler(twinkle.sampler.VLLMSampler):
+class VLLMSampler(Sampler):
     """Client wrapper for Sampler that calls server HTTP endpoints.
     
     This client manages sampling operations and adapter synchronization with the sampler server.
@@ -603,12 +657,7 @@ class VLLMSampler(twinkle.sampler.VLLMSampler):
         response.raise_for_status()
     
     def add_adapter_to_sampler(self, adapter_name: str, config: PeftConfig):
-        """Add a new adapter to the sampler and start automatic heartbeat.
-        
-        Args:
-            adapter_name: Name of the adapter
-            config: LoRA configuration dictionary
-        """
+        """Add a new adapter to the sampler and start automatic heartbeat."""
         if isinstance(config, PeftConfig):
             config = config.__dict__
         response = http_post(
@@ -635,15 +684,7 @@ class VLLMSampler(twinkle.sampler.VLLMSampler):
             pass
     
     def sample(self, trajectories: List[Trajectory], adapter_name: str = '') -> List[Trajectory]:
-        """Sample from the model using provided trajectories.
-        
-        Args:
-            trajectories: List of Trajectory objects to sample from
-            adapter_name: Optional adapter name (uses instance default if not provided)
-        
-        Returns:
-            List of sampled Trajectory objects
-        """
+        """Sample from the model using provided trajectories."""
         response = http_post(
             url=f'{self.server_url}/sample',
             json_data={'trajectories': json.dumps(trajectories, ensure_ascii=False), 'adapter_name': adapter_name}
@@ -652,12 +693,7 @@ class VLLMSampler(twinkle.sampler.VLLMSampler):
         return response.json()
     
     def sync_weights(self, state_dict: Dict[str, Any], adapter_name: str = ''):
-        """Synchronize weights to the sampler.
-        
-        Args:
-            state_dict: Model state dictionary to sync
-            adapter_name: Optional adapter name (uses instance default if not provided)
-        """
+        """Synchronize weights to the sampler."""
         adapter = adapter_name or self.adapter_name
         response = http_post(
             url=f'{self.server_url}/sync_weights',
@@ -667,16 +703,13 @@ class VLLMSampler(twinkle.sampler.VLLMSampler):
         return response.json()
 '''
 
-    # Create package directory
-    client_module_path.mkdir(parents=True, exist_ok=True)
-
-    # Write the sampler client file (overwrite if exists)
+    # Write the sampler client file
     client_file = client_module_path / 'vllm_sampler.py'
     print(f"Generating {client_file}...")
     with open(client_file, 'w', encoding='utf-8') as f:
         f.write(sampler_code)
 
-    # Create/overwrite __init__.py with exports
+    # Create/overwrite __init__.py
     init_file = client_module_path / '__init__.py'
     init_content = "from .vllm_sampler import VLLMSampler\n"
     print(f"Writing {init_file}...")
@@ -706,4 +739,3 @@ if __name__ == '__main__':
     
     print("\n" + "=" * 60)
     print("\n✓ All client code generation complete!\n")
-

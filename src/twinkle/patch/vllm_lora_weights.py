@@ -4,7 +4,11 @@ from typing import Optional, Dict
 from .base import Patch
 from twinkle import requires
 import torch
-from vllm.lora.request import LoRARequest
+
+try:
+    from vllm.lora.request import LoRARequest
+except (ModuleNotFoundError, ImportError):
+    LoRARequest = object
 
 
 class TensorLoRARequest(LoRARequest):

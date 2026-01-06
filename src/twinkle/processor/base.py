@@ -1,9 +1,10 @@
 from typing import Union, List, Optional
 import numpy as np
-from twinkle import Platform, DeviceMesh
+from twinkle import Platform, DeviceMesh, remote_class, remote_function
 from twinkle.data_format import InputFeature, to_transformers_dict
 
 
+@remote_class()
 class InputProcessor:
 
     padding_map = {
@@ -19,11 +20,13 @@ class InputProcessor:
         self.device_mesh = device_mesh
         self.padding_side = kwargs.get('padding_side', 'right')
 
+    @remote_function()
     def __call__(self, inputs: Union[InputFeature, List[InputFeature]]):
         if isinstance(inputs, list):
             inputs = self.collate_fn(inputs)
         return self.prepare_inputs(inputs)
 
+    @remote_function()
     def prepare_inputs(self, inputs: InputFeature) -> InputFeature:
         import torch
         for key in list(inputs.keys()):
@@ -66,6 +69,7 @@ class InputProcessor:
 
         return result
 
+    @remote_function()
     def collate_fn(self, inputs: List[InputFeature]) -> InputFeature:
         batch_encoded = self._inner_collate_fn([to_transformers_dict(_input) for _input in inputs])
         return InputFeature(**batch_encoded)

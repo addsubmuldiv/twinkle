@@ -1,7 +1,8 @@
 from .base import Dataset
-from twinkle import remote_function
+from twinkle import remote_function, remote_class
 
 
+@remote_class()
 class IterableDataset(Dataset):
     """An Iterable dataset wrapper."""
 

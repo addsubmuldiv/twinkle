@@ -8,6 +8,13 @@ test.py
 # C extensions
 *.so
 
+src/client/dataloader
+src/client/dataset
+src/client/model
+src/client/processor
+src/client/reward
+src/client/sampler
+
 # Distribution / packaging
 .Python
 build/

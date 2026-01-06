@@ -1,10 +1,11 @@
 from typing import Optional
 
-from twinkle import DeviceMesh
+from twinkle import DeviceMesh, remote_class, remote_function
 from twinkle.data_format import InputFeature
 from twinkle.processor import InputProcessor
 
 
+@remote_class()
 class GRPOLossProcessor(InputProcessor):
     """
     Processor for preparing inputs required by GRPOLoss.
@@ -23,6 +24,7 @@ class GRPOLossProcessor(InputProcessor):
         super(GRPOLossProcessor, self).__init__(device_mesh)
         self.ignore_index = ignore_index
 
+    @remote_function()
     def prepare_inputs(self, inputs: InputFeature) -> InputFeature:
         """Compute GRPO-specific fields from labels."""
         labels = inputs.labels
