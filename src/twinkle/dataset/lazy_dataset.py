@@ -5,7 +5,7 @@ from .base import Dataset, DatasetMeta
 from .. import remote_function
 
 
-@remote_class()
+@remote_class(execute='first')
 class LazyDataset(Dataset):
     """A lazy encode dataset wrapper."""
 
@@ -14,15 +14,15 @@ class LazyDataset(Dataset):
         self.do_encode = False
         self.do_check = False
 
-    @remote_function(execute='first')
-    def encode(self, template_cls: Union[Type[template.Template], str], **kwargs):
+    @remote_function()
+    def encode(self, **kwargs):
         self.do_encode = True
 
-    @remote_function(execute='first')
-    def check(self, template_cls: Union[Type[template.Template], str], **kwargs):
+    @remote_function()
+    def check(self, **kwargs):
         self.do_check = True
 
-    @remote_function(execute='first')
+    @remote_function()
     def __getitem__(self, idx):
         item = self.dataset[idx]
         if self.do_encode:
@@ -31,7 +31,7 @@ class LazyDataset(Dataset):
             item = self.template.check(item)
         return item
 
-    @remote_function(execute='first')
+    @remote_function()
     def __len__(self):
         return len(self.dataset)
 

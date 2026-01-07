@@ -200,7 +200,7 @@ class RayHelper:
         return new_args, new_kwargs
 
     @staticmethod
-    def create_workers(worker_cls: Type[T], group: str, execute:Literal['all', 'peer'], instance_id, seed=42, full_determinism=False, *args, **kwargs) -> List[T]:
+    def create_workers(worker_cls: Type[T], group: str, execute: Literal['all', 'peer', 'first'], instance_id, seed=42, full_determinism=False, *args, **kwargs) -> List[T]:
         # TODO when will remote create remote?
         # Should it peer create peer? or peer create all?
         # Whether the input data of each remote is independent, or they are a part of the whole device mesh?
@@ -215,15 +215,18 @@ class RayHelper:
             ranks = list(range(ranks))
         world_size = len(ranks)
         assert len(placement_groups) == len(ranks)
+        key = f'{group}-{worker_cls.__class__.__name__}-{instance_id}'
         if execute == 'peer':
             _slice = Platform.get_peer_index(len(ranks))
             placement_groups = placement_groups[_slice]
             ranks = ranks[_slice]
-
-            key = f'{group}-{worker_cls.__class__.__name__}-{instance_id}'
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
             ip = RayHelper.add_or_get_config(key + '-ip', ip)
             port = RayHelper.add_or_get_config(key + '-port', port)
+        elif execute == 'first':
+            placement_groups = placement_groups[:1]
+            ranks = ranks[:1]
+            ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
         else:
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
 

@@ -29,7 +29,7 @@ class DatasetMeta:
         return self.dataset_id + ':' + self.subset_name + ':' + self.split
 
 
-@remote_class()
+@remote_class(execute='first')
 class Dataset(TorchDataset):
     """A dataset wrapper to load and map the dataset.
 
@@ -45,7 +45,7 @@ class Dataset(TorchDataset):
         self.dataset = dataset
         self.template = None
 
-    @remote_function(execute='first')
+    @remote_function()
     def set_template(self, template_cls: Union[Type[Template], str], **kwargs):
         """Set the template to encode/check the dataset.
 
@@ -61,7 +61,7 @@ class Dataset(TorchDataset):
                 template_cls = Plugin.load_plugin(template_cls, Template)
         self.template = template_cls(**kwargs)
 
-    @remote_function(execute='first')
+    @remote_function()
     def encode(self, **kwargs):
         """An inplace operation to encode the dataset.
 
@@ -73,7 +73,7 @@ class Dataset(TorchDataset):
         else:
             self.dataset = self.dataset.map(self.template.encode, **kwargs).filter(lambda x: len(x['input_ids']) > 0, **kwargs)
 
-    @remote_function(execute='first')
+    @remote_function()
     def check(self, **kwargs):
         """An inplace operation to check the dataset.
 
@@ -96,7 +96,7 @@ class Dataset(TorchDataset):
             dataset = dataset.select(dataset_meta.data_slice)
         return dataset
 
-    @remote_function(execute='first')
+    @remote_function()
     def map(self, preprocess_func: Union[Callable, str, Type[Preprocessor]], dataset_meta: DatasetMeta = None, **kwargs) -> None:
         """An inplace method to operate or transform the dataset.
 
@@ -122,7 +122,7 @@ class Dataset(TorchDataset):
         if len(self.datasets) == 1:
             self.dataset = self.datasets[key]
 
-    @remote_function(execute='first')
+    @remote_function()
     def filter(self, filter_func: Union[Callable, str, Type[DataFilter]], dataset_meta: DatasetMeta = None, **kwargs) -> None:
         """An inplace method to operate or transform the dataset.
 
@@ -147,7 +147,7 @@ class Dataset(TorchDataset):
         if len(self.datasets) == 1:
             self.dataset = self.datasets[key]
 
-    @remote_function(execute='first')
+    @remote_function()
     def add_dataset(self,
                     dataset_meta: DatasetMeta,
                     **kwargs):
@@ -159,7 +159,7 @@ class Dataset(TorchDataset):
         dataset = self._load_dataset(dataset_meta, **kwargs)
         self.datasets[dataset_meta.get_id()] = dataset
 
-    @remote_function(execute='first')
+    @remote_function()
     def mix_dataset(self, interleave=True):
         """Mix the datasets if `add_dataset` was called.
 
@@ -171,10 +171,10 @@ class Dataset(TorchDataset):
         else:
             self.dataset = concatenate_datasets(list(self.datasets.values()))
 
-    @remote_function(execute='first')
+    @remote_function()
     def __getitem__(self, idx):
         return self.dataset[idx]
 
-    @remote_function(execute='first')
+    @remote_function()
     def __len__(self):
         return len(self.dataset)

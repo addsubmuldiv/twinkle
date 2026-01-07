@@ -331,7 +331,7 @@ def _prepare_lazy_collect(args, kwargs):
             arg._lazy_collect = False
     return args, kwargs
 
-def remote_class(execute: Literal['first', 'all'] = 'all'):
+def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
     """Patch each class used in remote clusters with this decorator."""
 
     def decorator(cls):
@@ -413,7 +413,7 @@ def remote_class(execute: Literal['first', 'all'] = 'all'):
                     # Create remote workers
                     _actors = RayHelper.create_workers(cls,
                                                        remote_group,
-                                                       'peer',
+                                                       execute,
                                                        instance_id=instance_id,
                                                        seed=_seed,
                                                        full_determinism=_full_determinism,
