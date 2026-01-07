@@ -22,7 +22,6 @@ class DataLoader(TorchDataLoader):
 
     def __init__(self, dataset: Union[Dataset, Callable], device_mesh: Optional[DeviceMesh]=None,
                  **kwargs):
-        breakpoint()
         if isinstance(dataset, Callable):
             self.dataset: Dataset = dataset()
         else:
