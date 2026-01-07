@@ -38,16 +38,16 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
                         ddp_config=ddp_config, 
                         fsdp_config=fsdp_config, 
                         grad_scaler_config=grad_scaler_config, **kwargs)
+        self.multi_adapter = MultiAdapter()
+        self.model: PreTrainedModel = self.multi_adapter(self.model)
         self.add_adapter_to_model('__dummy_adapter__', LoraConfig(r=1, target_modules='all-linear'))
-        self.model: PreTrainedModel = MultiAdapter()(self.model)
         self.model, _ = self.strategy.wrap_model(self.model, AdamW(self._get_trainable_parameters(adapter_name='__dummy_adapter__').values(), lr=1e-5))
 
     def _check_adapter_valid(self, adapter_name: str):
         assert adapter_name and adapter_name in self.optimizer_group, f'Use a valid {adapter_name} first, current is: {adapter_name}'
 
     def _activate_adapter(self, adapter_name: str):
-        model = self.strategy.unwrap_model(self.model)
-        model.set_current_adapter_name(adapter_name)
+        self.multi_adapter.set_current_adapter_name(adapter_name)
 
     def _lazy_wrap_model(self):
         pass
