@@ -326,13 +326,12 @@ def _prepare_lazy_collect(args, kwargs):
     # an object ref
     if not RayHelper.is_worker():
         return args, kwargs
-    from ray.actor import ActorHandle
     for arg in list(args) + list(kwargs.values()):
-        if isinstance(arg, ActorHandle):
+        if hasattr(arg, '_actors'):
             arg._lazy_collect = False
     return args, kwargs
 
-def remote_class():
+def remote_class(execute: Literal['first', 'all'] = 'all'):
     """Patch each class used in remote clusters with this decorator."""
 
     def decorator(cls):
@@ -395,6 +394,8 @@ def remote_class():
                     if not device_mesh_name:
                         args = [arg for arg in args if not isinstance(arg, DeviceMesh)]
                         kwargs = {key: value for key, value in kwargs.items() if not isinstance(value, DeviceMesh)}
+                    if 'dataloader' in self.__class__.__name__.lower():
+                        breakpoint()
                     from ray.actor import ActorHandle
                     args, kwargs = _prepare_lazy_collect(args, kwargs)
                     init_method(self, *args, **kwargs)
@@ -481,6 +482,7 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                     result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
                     lazy_collect = _lazy_collect
                     if hasattr(self, '_lazy_collect'):
+                        breakpoint()
                         lazy_collect = self._lazy_collect
                     result = result_func if lazy_collect else result_func()
                     if func.__name__ == '__iter__':
