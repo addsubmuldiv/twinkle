@@ -27,6 +27,8 @@
 - [ ] multi-lora支持 P0
     - [ ] transformers P0
     - [ ] megatron P0
+- [ ] 对接FC、百炼，可对外 P0
+  - [ ] 多租户水位和降级控制
 
 ## API
 
