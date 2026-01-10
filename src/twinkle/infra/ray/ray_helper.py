@@ -1,10 +1,11 @@
+# Copyright (c) ModelScope Contributors. All rights reserved.
 import os
 from typing import Dict, List, Optional, TypeVar, Type, Tuple, Any, Literal, Callable, Union
 
 import ray
 
 from .resource_manager import ResourceManager
-from ...utils import DeviceGroup, Platform, find_node_ip, find_free_port, requires
+from twinkle import DeviceGroup, Platform, find_node_ip, find_free_port, requires
 
 T = TypeVar('T')
 
@@ -34,6 +35,7 @@ class RayHelper:
                 self.config[key] = value
 
             def add_or_get(self, key: str, value: Any) -> Tuple[bool, Any]:
+                """Add or get config, because ray is single threaded."""
                 if key in self.config:
                     return self.config[key]
                 self.config[key] = value
@@ -81,6 +83,7 @@ class RayHelper:
 
     @staticmethod
     def teardown():
+        """Teardown RayHelper."""
         if RayHelper.resource_manager is not None:
             RayHelper.resource_manager.destroy_placement_group()
             RayHelper.resource_manager = None
@@ -96,6 +99,7 @@ class RayHelper:
 
     @staticmethod
     def ray_inited():
+        """Check if Ray is initialized."""
         try:
             import ray
         except ImportError:
@@ -110,11 +114,13 @@ class RayHelper:
 
     @staticmethod
     def execute_all_sync(method_name:str, workers_and_args: List[Tuple[Any, List[Any], Dict[str, Any]]]):
+        """Execute method and return results."""
         import ray
         return ray.get(RayHelper.execute_all_async(method_name, workers_and_args))
 
     @staticmethod
     def execute_all_async(method_name:str, workers_and_args: List[Tuple[Any, List[Any], Dict[str, Any]]]):
+        """Execute method and return futures."""
         output = []
         for worker_and_args in workers_and_args:
             worker, args, kwargs = worker_and_args
@@ -139,6 +145,7 @@ class RayHelper:
 
     @staticmethod
     def _get_remote_component(component):
+        """Avoid create remote component twice."""
         if component not in RayHelper._remote_components:
             import ray
             RayHelper._remote_components[component] = ray.remote(component)
@@ -157,12 +164,14 @@ class RayHelper:
 
     @staticmethod
     def do_get_and_collect_func(collect_func: Callable, method: Union[Literal['none', 'flatten'], Callable], futures):
+        """Return a callable to collect results in the workers."""
 
         class LazyCollect:
             def __init__(self, futures, method, collect_func):
                 self._futures = futures
                 self._method = method
                 self._collect_func = collect_func
+                self._is_lazy_collect = True
 
             def __call__(self):
                 result = []
@@ -179,12 +188,11 @@ class RayHelper:
             def __getitem__(self, key):
                 raise RuntimeError(f'This is a lazy function, use value()[index] instead.')
 
-        do_collect = LazyCollect(futures, method, collect_func)
-        do_collect._is_lazy_collect = True
-        return do_collect
+        return LazyCollect(futures, method, collect_func)
 
     @staticmethod
     def do_get_and_collect(args, kwargs):
+        """Collect `LazyCollect` in each arg."""
         new_args = []
         for arg in args:
             if isinstance(arg, Callable) and getattr(arg, '_is_lazy_collect', False):

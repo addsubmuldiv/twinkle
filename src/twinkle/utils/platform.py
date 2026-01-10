@@ -387,6 +387,10 @@ class Platform(ABC):
         ...
 
     @staticmethod
+    def get_platform_names() -> List[str]:
+        return ['GPU', 'NPU']
+
+    @staticmethod
     def get_platform(platform: str = None) -> Type['Platform']:
         if platform is None:
             if shutil.which("npu-smi"):
