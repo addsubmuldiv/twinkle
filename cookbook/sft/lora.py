@@ -1,5 +1,3 @@
-import os
-os.environ["TRUST_REMOTE_CODE"] = "1"
 import numpy as np
 from peft import LoraConfig
 from torch.optim import AdamW
