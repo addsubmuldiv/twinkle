@@ -23,10 +23,10 @@ class MultiAdapter(Patch):
             else:
                 return []
 
-        def set_active_adapters(_, value):
+        def set_active_adapters(_, value, **kwargs):
             pass
 
-        def set_adapter(self, adapter_names):
+        def set_adapter(self, adapter_names, **kwargs):
             pass
 
         LoraLayer.active_adapter = property(get_active_adapter, set_active_adapters)
