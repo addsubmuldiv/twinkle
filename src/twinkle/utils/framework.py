@@ -1,3 +1,4 @@
+# Copyright (c) ModelScope Contributors. All rights reserved.
 import importlib
 import os
 from abc import ABC, abstractmethod
@@ -83,7 +84,7 @@ class Torch(Framework):
     @staticmethod
     @lru_cache
     def is_gpu_available() -> bool:
-        "Checks if at least one GPU device is available"
+        """Checks if at least one GPU device is available"""
         if not Torch.is_torch_available():
             return False
 
