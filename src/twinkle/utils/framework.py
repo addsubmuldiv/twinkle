@@ -69,16 +69,19 @@ class Torch(Framework):
             return "other"
 
     @staticmethod
+    @lru_cache
     def is_torch_available() -> bool:
         """Check if `torch` is installed"""
         return importlib.util.find_spec('torch') is not None
 
     @staticmethod
+    @lru_cache
     def is_torch_npu_available() -> bool:
         """Check if `torch_npu` is installed"""
         return importlib.util.find_spec('torch_npu') is not None
 
     @staticmethod
+    @lru_cache
     def is_gpu_available() -> bool:
         "Checks if at least one GPU device is available"
         if not Torch.is_torch_available():
@@ -91,6 +94,7 @@ class Torch(Framework):
         return torch.cuda.is_available()
 
     @staticmethod
+    @lru_cache
     def is_npu_available() -> bool:
         "Checks if `torch_npu` is installed and if at least one NPU device is available"
         if not Torch.is_torch_available() or not Torch.is_torch_npu_available():
@@ -116,6 +120,7 @@ class Torch(Framework):
             return 'cpu'
 
     @staticmethod
+    @lru_cache
     def get_device(local_rank) -> str:
         if local_rank is None:
             local_rank = max(0, Platform.get_local_rank())
@@ -177,7 +182,6 @@ class Torch(Framework):
         Returns:
             A local torch.Tensor.
         """
-        import torch
         if hasattr(tensor, 'full_tensor'):
             # DTensor from torch.distributed.tensor
             return tensor.full_tensor()

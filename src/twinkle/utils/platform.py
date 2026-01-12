@@ -110,6 +110,10 @@ class DeviceMesh:
         return self.mesh.shape[dim_idx]
 
     @property
+    def is_single_process(self) -> bool:
+        return self.world_size == 1 and 'RANK' not in os.environ
+
+    @property
     def dp_rank(self) -> int:
         return self._get_rank_for_dim("dp")
 
@@ -381,6 +385,10 @@ class Platform(ABC):
     @abstractmethod
     def device_prefix() -> str:
         ...
+
+    @staticmethod
+    def get_platform_names() -> List[str]:
+        return ['GPU', 'NPU']
 
     @staticmethod
     def get_platform(platform: str = None) -> Type['Platform']:
