@@ -150,15 +150,53 @@ class MegatronStrategy(TrainStrategy):
     def initialize(self, **kwargs) -> None:
         """Initialize Megatron parallel state.
         
-        Should be called after distributed process group is initialized.
-        This sets up all the parallel groups for TP/PP/CP/EP/DP.
+        This method handles both local (torchrun) and Ray modes:
+        
+        **Local mode**: 
+          - torch.distributed is already initialized by torchrun
+          - Just initialize mpu.initialize_model_parallel()
+        
+        **Ray mode**:
+          - Read RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT from environment
+          - Initialize torch.distributed with these values
+          - Then initialize mpu.initialize_model_parallel()
+        
+        This allows the same MegatronModel code to work in both modes.
         """
         if self._initialized:
             return
-            
+        
+        import os
+        from datetime import timedelta
+        
+        # Determine execution mode
+        twinkle_mode = os.environ.get('TWINKLE_MODE', 'local')
+        
+        # Initialize torch.distributed if not already done
         if not dist.is_initialized():
-            # Initialize torch distributed if not already done
-            dist.init_process_group(backend='nccl')
+            if twinkle_mode == 'ray':
+                # Ray mode: use environment variables set by RayHelper
+                rank = int(os.environ.get('RANK', '0'))
+                world_size = int(os.environ.get('WORLD_SIZE', '1'))
+                master_addr = os.environ.get('MASTER_ADDR', 'localhost')
+                master_port = os.environ.get('MASTER_PORT', '29500')
+                local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+                
+                # Set CUDA device before init_process_group
+                torch.cuda.set_device(local_rank)
+                
+                # Initialize process group
+                dist.init_process_group(
+                    backend='nccl',
+                    init_method=f'tcp://{master_addr}:{master_port}',
+                    rank=rank,
+                    world_size=world_size,
+                    timeout=timedelta(minutes=10),
+                )
+            else:
+                # Local mode: torchrun should have set up distributed
+                # If not, initialize with default settings
+                dist.init_process_group(backend='nccl')
         
         world_size = dist.get_world_size()
         
@@ -191,7 +229,7 @@ class MegatronStrategy(TrainStrategy):
         self._parallel_state = parallel_state
         self._initialized = True
         
-        # Set CUDA device
+        # Set CUDA device (may be redundant in Ray mode, but safe)
         local_rank = dist.get_rank() % torch.cuda.device_count()
         torch.cuda.set_device(local_rank)
 

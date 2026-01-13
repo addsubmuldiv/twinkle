@@ -183,10 +183,7 @@ class Torch(Framework):
         Returns:
             A local torch.Tensor.
         """
-<<<<<<< HEAD
         import torch
-=======
->>>>>>> origin/dev
         if hasattr(tensor, 'full_tensor'):
             # DTensor from torch.distributed.tensor
             return tensor.full_tensor()

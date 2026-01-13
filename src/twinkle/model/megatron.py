@@ -684,15 +684,35 @@ class MegatronModel(TwinkleModel, nn.Module):
                 local_count = loss_mask_flat.sum()
                 
                 # For CP > 1, aggregate loss across CP ranks
+                # Note: Megatron's schedules.py will multiply loss by cp_group_size
+                # for legacy 2-output loss_func. This assumes loss_func returns SUM/cp_size (MEAN).
+                # So we should return local MEAN (not global MEAN) and let Megatron handle it.
                 if cp_size > 1:
-                    # Combine loss_sum and count for efficient all-reduce
-                    loss_data = torch.cat([local_loss_sum.view(1), local_count.view(1)])
+                    # All-reduce the count across CP ranks to get total token count
+                    # This is needed for correct averaging
+                    total_count = local_count.clone()
                     torch.distributed.all_reduce(
-                        loss_data, 
+                        total_count,
                         op=torch.distributed.ReduceOp.SUM,
                         group=mpu.get_context_parallel_group()
                     )
-                    loss = loss_data[0] / loss_data[1].clamp(min=1)
+                    
+                    # Return local_loss_sum / total_count
+                    # Megatron will multiply by cp_size, so the final result is:
+                    # (local_loss_sum / total_count) * cp_size
+                    # = (local_loss_sum * cp_size) / total_count
+                    # But we want: SUM(local_loss_sum) / total_count
+                    # So we need to do all_reduce on loss_sum too
+                    total_loss_sum = local_loss_sum.clone()
+                    torch.distributed.all_reduce(
+                        total_loss_sum,
+                        op=torch.distributed.ReduceOp.SUM,
+                        group=mpu.get_context_parallel_group()
+                    )
+                    
+                    # Return global mean, but Megatron will multiply by cp_size
+                    # So we divide by cp_size first to counteract that
+                    loss = (total_loss_sum / total_count.clamp(min=1)) / cp_size
                 else:
                     loss = local_loss_sum / local_count.clamp(min=1)
                 
@@ -723,6 +743,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         
         # Extract loss from results (only last PP stage returns non-empty)
         loss = 0.0
+        
         if losses:
             for loss_dict in losses:
                 if isinstance(loss_dict, dict) and 'loss' in loss_dict:
@@ -742,11 +763,14 @@ class MegatronModel(TwinkleModel, nn.Module):
             
             # Broadcast from last PP stage (rank with pipeline_model_parallel_rank == pp_size - 1)
             src_rank = mpu.get_pipeline_model_parallel_last_rank()
+            pp_group = mpu.get_pipeline_model_parallel_group()
+            
             torch.distributed.broadcast(
                 loss_tensor, 
                 src=src_rank, 
-                group=mpu.get_pipeline_model_parallel_group()
+                group=pp_group
             )
+            
             loss = loss_tensor.item()
         
         optimizer_config.cur_step += 1

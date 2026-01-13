@@ -25,7 +25,9 @@ class Template:
         outputs = self.tokenizer.apply_chat_template(conversation=dummy_inputs,
                                                      return_assistant_tokens_mask=True, return_dict=True)
         assistant_masks = outputs['assistant_masks']
-        self._template_support_assistant_tokens_mask = not all(np.array(assistant_masks).flatten())
+        # Check if ANY token is marked as assistant (mask > 0)
+        # If all masks are 0, the template doesn't support this feature
+        self._template_support_assistant_tokens_mask = any(np.array(assistant_masks).flatten())
 
     def encode(self, trajectory: Trajectory) -> InputFeature:
         if self._template_support_assistant_tokens_mask:

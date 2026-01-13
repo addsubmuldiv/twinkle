@@ -1385,10 +1385,16 @@ class TwinkleBridgeInitializer:
         This sets up the required process groups for tensor, pipeline,
         and data parallelism using Megatron's parallel state module directly.
         
+        Handles both local (torchrun) and Ray execution modes:
+        - Local: Uses torchrun's environment variables (already set)
+        - Ray: Uses RayHelper's environment variables (RANK, WORLD_SIZE, etc.)
+        
         Args:
             hf_config: Optional HuggingFace config for additional model parameters.
         """
+        import os
         import torch.distributed as dist
+        from datetime import timedelta
         from megatron.core import parallel_state as mpu
         from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
         
@@ -1399,9 +1405,33 @@ class TwinkleBridgeInitializer:
         except AssertionError:
             pass
         
+        # Determine execution mode
+        twinkle_mode = os.environ.get('TWINKLE_MODE', 'local')
+        
         # Initialize distributed if not already
         if not dist.is_initialized():
-            dist.init_process_group(backend='nccl')
+            if twinkle_mode == 'ray':
+                # Ray mode: use environment variables set by RayHelper
+                rank = int(os.environ.get('RANK', '0'))
+                world_size = int(os.environ.get('WORLD_SIZE', '1'))
+                master_addr = os.environ.get('MASTER_ADDR', 'localhost')
+                master_port = os.environ.get('MASTER_PORT', '29500')
+                local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+                
+                # Set CUDA device before init_process_group
+                torch.cuda.set_device(local_rank)
+                
+                # Initialize process group with explicit parameters
+                dist.init_process_group(
+                    backend='nccl',
+                    init_method=f'tcp://{master_addr}:{master_port}',
+                    rank=rank,
+                    world_size=world_size,
+                    timeout=timedelta(minutes=10),
+                )
+            else:
+                # Local mode (torchrun): environment variables are already set
+                dist.init_process_group(backend='nccl')
         
         # Initialize Megatron parallel state directly
         mpu.initialize_model_parallel(

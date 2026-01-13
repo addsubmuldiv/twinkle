@@ -1,22 +1,37 @@
 # Copyright (c) twinkle authors. All rights reserved.
 """Megatron-Core LoRA training example.
 
-Usage (8 GPUs with TP2 PP2 CP2):
-    torchrun --nproc_per_node=8 cookbook/megatron/lora.py --tp_size 2 --pp_size 2 --cp_size 2
+Supports both local (torchrun) and Ray execution modes.
 
-Usage (4 GPUs with TP2 PP2):
+Usage (Local mode):
     torchrun --nproc_per_node=4 cookbook/megatron/lora.py --tp_size 2 --pp_size 2
 
-Usage (single GPU):
-    torchrun --nproc_per_node=1 cookbook/megatron/lora.py --tp_size 1 --pp_size 1
+Usage (Ray mode):
+    TRUST_REMOTE_CODE=1 python cookbook/megatron/lora.py --mode ray --tp_size 2 --pp_size 2 --num_gpus 4
 """
 import argparse
 import os
+import sys
 
-# CRITICAL: Set CUDA device before any CUDA imports to ensure correct device placement
+# Parse arguments first to determine mode
+parser = argparse.ArgumentParser()
+parser.add_argument('--mode', type=str, default='local', choices=['local', 'ray'])
+parser.add_argument('--tp_size', type=int, default=1)
+parser.add_argument('--pp_size', type=int, default=1)
+parser.add_argument('--cp_size', type=int, default=1)
+parser.add_argument('--num_gpus', type=int, default=4, help='Number of GPUs (Ray mode only)')
+parser.add_argument('--max_steps', type=int, default=None)
+parser.add_argument('--model', type=str, default='ms://Qwen/Qwen2.5-7B-Instruct')
+args = parser.parse_args()
+
+# Set mode in environment before importing twinkle
+os.environ['TWINKLE_MODE'] = args.mode
+
+# CRITICAL: Set CUDA device before any CUDA imports (local mode only)
 import torch
-LOCAL_RANK = int(os.environ.get('LOCAL_RANK', '0'))
-torch.cuda.set_device(LOCAL_RANK)
+if args.mode == 'local':
+    LOCAL_RANK = int(os.environ.get('LOCAL_RANK', '0'))
+    torch.cuda.set_device(LOCAL_RANK)
 
 import numpy as np
 from peft import LoraConfig
@@ -33,46 +48,6 @@ from twinkle.processor import InputProcessor
 
 logger = get_logger()
 
-# Parse arguments
-parser = argparse.ArgumentParser()
-parser.add_argument('--tp_size', type=int, default=1)
-parser.add_argument('--pp_size', type=int, default=1)
-parser.add_argument('--cp_size', type=int, default=1)
-parser.add_argument('--max_steps', type=int, default=None)
-args = parser.parse_args()
-
-# Get parallelism config
-WORLD_SIZE = int(os.environ.get('WORLD_SIZE', '1'))
-TP_SIZE = args.tp_size
-PP_SIZE = args.pp_size
-CP_SIZE = args.cp_size
-DP_SIZE = WORLD_SIZE // (TP_SIZE * PP_SIZE * CP_SIZE)
-
-# Device mesh: Match Megatron's order "tp-cp-ep-dp-pp" from innermost to outermost
-# For mesh shape, we reverse the order: (pp, dp, cp, tp) where rightmost is innermost
-# This ensures DP groups match between twinkle and Megatron
-device_mesh = DeviceMesh(
-    device_type='cuda',
-    mesh=np.arange(WORLD_SIZE).reshape(PP_SIZE, DP_SIZE, CP_SIZE, TP_SIZE),
-    mesh_dim_names=('pp', 'dp', 'cp', 'tp'),
-)
-
-device_group = [
-    DeviceGroup(
-        name='model',
-        ranks=list(range(WORLD_SIZE)),
-        device_type=Platform.get_platform().device_prefix(),
-    )
-]
-
-twinkle.initialize(
-    mode='local',
-    nproc_per_node=WORLD_SIZE,
-    groups=device_group,
-    global_device_mesh=device_mesh,
-    lazy_collect=False,
-)
-
 
 def create_dataset():
     dataset = Dataset(dataset_meta=DatasetMeta('ms://modelscope/competition_math'))
@@ -83,29 +58,86 @@ def create_dataset():
 
 
 def train():
+    # Get parallelism config
+    TP_SIZE = args.tp_size
+    PP_SIZE = args.pp_size
+    CP_SIZE = args.cp_size
+    
+    if args.mode == 'local':
+        WORLD_SIZE = int(os.environ.get('WORLD_SIZE', '1'))
+    else:
+        WORLD_SIZE = args.num_gpus
+    
+    DP_SIZE = WORLD_SIZE // (TP_SIZE * PP_SIZE * CP_SIZE)
+    
+    # Device mesh: Match Megatron's order "tp-cp-ep-dp-pp" from innermost to outermost
+    device_mesh = DeviceMesh(
+        device_type='cuda',
+        mesh=np.arange(WORLD_SIZE).reshape(PP_SIZE, DP_SIZE, CP_SIZE, TP_SIZE),
+        mesh_dim_names=('pp', 'dp', 'cp', 'tp'),
+    )
+    
+    # Device group name - used as remote_group in Ray mode
+    GROUP_NAME = 'model'
+    
+    device_group = [
+        DeviceGroup(
+            name=GROUP_NAME,
+            ranks=list(range(WORLD_SIZE)),
+            device_type=Platform.get_platform().device_prefix(),
+        )
+    ]
+    
+    twinkle.initialize(
+        mode=args.mode,
+        nproc_per_node=WORLD_SIZE,
+        groups=device_group,
+        global_device_mesh=device_mesh,
+        lazy_collect=False,
+    )
+    
     # Use smaller batch size for single GPU to avoid OOM
     batch_size = 2 if WORLD_SIZE == 1 else 8
-    dataloader = DataLoader(dataset=create_dataset, batch_size=batch_size)
+    
+    # In Ray mode, pass remote_group and device_mesh to DataLoader
+    if args.mode == 'ray':
+        dataloader = DataLoader(
+            dataset=create_dataset,
+            batch_size=batch_size,
+            remote_group=GROUP_NAME,
+            device_mesh=device_mesh,
+        )
+    else:
+        dataloader = DataLoader(dataset=create_dataset, batch_size=batch_size)
 
-    model = MegatronModel(
-        pretrained_model_name_or_path='ms://Qwen/Qwen2.5-7B-Instruct',
-        tensor_model_parallel_size=TP_SIZE,
-        pipeline_model_parallel_size=PP_SIZE,
-        context_parallel_size=CP_SIZE,
-        mixed_precision='bf16',
-        # Use 'full' recompute for single GPU to reduce memory usage
-        recompute_granularity='full' if WORLD_SIZE <= 2 else 'selective',
-    )
+    # Create model
+    # In Ray mode, pass remote_group and device_mesh to MegatronModel
+    if args.mode == 'ray':
+        model = MegatronModel(
+            pretrained_model_name_or_path=args.model,
+            tensor_model_parallel_size=TP_SIZE,
+            pipeline_model_parallel_size=PP_SIZE,
+            context_parallel_size=CP_SIZE,
+            mixed_precision='bf16',
+            recompute_granularity='full' if WORLD_SIZE <= 2 else 'selective',
+            remote_group=GROUP_NAME,
+            device_mesh=device_mesh,
+        )
+    else:
+        model = MegatronModel(
+            pretrained_model_name_or_path=args.model,
+            tensor_model_parallel_size=TP_SIZE,
+            pipeline_model_parallel_size=PP_SIZE,
+            context_parallel_size=CP_SIZE,
+            mixed_precision='bf16',
+            recompute_granularity='full' if WORLD_SIZE <= 2 else 'selective',
+        )
 
     lora_config = LoraConfig(target_modules='all-linear')
-
-    # Use 'lora' as adapter_name and pass it consistently to all methods
     adapter_name = 'lora'
     model.add_adapter_to_model(adapter_name, lora_config, gradient_accumulation_steps=16)
     model.set_template('Qwen3Template', adapter_name=adapter_name)
     model.set_processor(InputProcessor, padding_side='right', adapter_name=adapter_name)
-    # Note: For MegatronModel, loss is computed internally by Megatron.
-    # set_loss() is optional and mainly for API compatibility.
     model.set_loss(VocabParallelCrossEntropyLoss, adapter_name=adapter_name)
     model.set_optimizer(AdamW, lr=1e-4, adapter_name=adapter_name)
     model.set_lr_scheduler(LinearLR, adapter_name=adapter_name)
@@ -135,7 +167,6 @@ def cleanup():
     """Clean up distributed resources."""
     import torch.distributed as dist
     try:
-        # Barrier to ensure all processes are synchronized before cleanup
         if dist.is_initialized():
             dist.barrier()
         from megatron.core import parallel_state as mpu
