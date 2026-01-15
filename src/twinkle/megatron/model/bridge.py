@@ -273,6 +273,7 @@ class BridgeConfig:
     vocab_size: int = 32000
     padded_vocab_size: int = 32000
     intermediate_size: int = 11008
+    kv_channels: int = None  # head_dim, if None will be computed from hidden_size // num_attention_heads
     
     # Options
     add_qkv_bias: bool = False
@@ -328,6 +329,17 @@ class BridgeConfig:
         else:
             add_qkv_bias = False
         
+        # Determine QK layernorm setting
+        # Qwen3 uses QK layernorm but doesn't have explicit config attribute
+        qk_layernorm = getattr(hf_config, 'qk_layernorm', False) or \
+                       getattr(hf_config, 'use_qk_norm', False)
+        if not qk_layernorm and model_type in ('qwen3', 'qwen3_moe'):
+            # Qwen3 (dense and MoE) always uses QK layernorm (q_norm, k_norm weights)
+            qk_layernorm = True
+        
+        # Determine kv_channels (head_dim) - Qwen3 has explicit head_dim
+        kv_channels = getattr(hf_config, 'head_dim', None)
+        
         return cls(
             tp_size=tp_size,
             pp_size=pp_size,
@@ -342,13 +354,13 @@ class BridgeConfig:
             intermediate_size=getattr(hf_config, 'intermediate_size', 11008),
             add_qkv_bias=add_qkv_bias,
             add_bias_linear=getattr(hf_config, 'mlp_bias', False),
-            qk_layernorm=getattr(hf_config, 'qk_layernorm', False) or \
-                         getattr(hf_config, 'use_qk_norm', False),
+            qk_layernorm=qk_layernorm,
             tie_word_embeddings=getattr(hf_config, 'tie_word_embeddings', False),
             num_experts=num_experts,
             num_experts_per_tok=num_experts_per_tok,
             shared_expert_intermediate_size=shared_expert_size,
             model_type=model_type,
+            kv_channels=kv_channels,  # Explicit head_dim for Qwen3
         )
 
 
@@ -599,13 +611,19 @@ class TwinkleGPTBridge:
         num_heads = self.config.num_attention_heads
         num_kv_heads = self.config.num_key_value_heads
         hidden_size = self.config.hidden_size
-        head_dim = hidden_size // num_heads
+        # Use kv_channels (head_dim) from config if available (for Qwen3 etc.)
+        head_dim = getattr(self.config, 'kv_channels', hidden_size // num_heads)
         heads_per_group = num_heads // num_kv_heads
         
         # Load Q, K, V weights and merge into linear_qkv
         q_weight = loader.get_tensor(f'{prefix}q_proj.weight')
         k_weight = loader.get_tensor(f'{prefix}k_proj.weight')
         v_weight = loader.get_tensor(f'{prefix}v_proj.weight')
+        
+        # Infer head_dim from actual weight shapes if needed
+        actual_kv_dim = k_weight.shape[0] // num_kv_heads
+        if actual_kv_dim != head_dim:
+            head_dim = actual_kv_dim
         
         # Reshape for GQA
         q_weight = q_weight.reshape(num_kv_heads, heads_per_group * head_dim, hidden_size)
@@ -628,9 +646,12 @@ class TwinkleGPTBridge:
                 k_bias = loader.get_tensor(f'{prefix}k_proj.bias')
                 v_bias = loader.get_tensor(f'{prefix}v_proj.bias')
                 
-                q_bias = q_bias.reshape(num_kv_heads, heads_per_group * head_dim)
-                k_bias = k_bias.reshape(num_kv_heads, head_dim)
-                v_bias = v_bias.reshape(num_kv_heads, head_dim)
+                # Infer head_dim from actual bias shapes if needed
+                actual_bias_head_dim = k_bias.shape[0] // num_kv_heads
+                
+                q_bias = q_bias.reshape(num_kv_heads, heads_per_group * actual_bias_head_dim)
+                k_bias = k_bias.reshape(num_kv_heads, actual_bias_head_dim)
+                v_bias = v_bias.reshape(num_kv_heads, actual_bias_head_dim)
                 
                 qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=1).reshape(-1)
                 self._set_weight(mg_attn.linear_qkv.bias, qkv_bias, 'linear_qkv.bias')
@@ -708,11 +729,19 @@ class TwinkleGPTBridge:
             pass
     
     def _load_moe(self, mg_layer, loader: SafetensorLoader, layer_idx: int):
-        """Load MoE layer weights."""
+        """Load MoE layer weights.
+        
+        Handles Expert Parallel (EP) sharding - each EP rank loads only its
+        assigned subset of experts based on ep_rank and ep_size.
+        
+        For EP=2 with 128 experts:
+          - EP rank 0 loads experts 0-63
+          - EP rank 1 loads experts 64-127
+        """
         mg_mlp = mg_layer.mlp
         prefix = f'{self.HF_LAYERS_PREFIX}.{layer_idx}.mlp.'
         
-        # Load router
+        # Load router (replicated across all ranks)
         try:
             router_key = None
             for key in ['gate.weight', 'router.weight', 'gate.wg.weight']:
@@ -726,6 +755,18 @@ class TwinkleGPTBridge:
                 router_module = deep_getattr(mg_mlp, 'router')
                 if router_module is not None and hasattr(router_module, 'weight'):
                     router_module.weight.data.copy_(router_weight)
+                    
+            # Load expert bias if present (for sigmoid routers like Qwen3)
+            for bias_key in ['gate.e_score_correction_bias', 'moe_statics.e_score_correction_bias']:
+                full_bias_key = f'{prefix}{bias_key}'
+                if full_bias_key in loader:
+                    try:
+                        expert_bias = loader.get_tensor(full_bias_key)
+                        if router_module is not None and hasattr(router_module, 'expert_bias'):
+                            router_module.expert_bias.data.copy_(expert_bias)
+                        break
+                    except KeyError:
+                        continue
         except KeyError:
             pass
         
@@ -745,25 +786,113 @@ class TwinkleGPTBridge:
                     break
                 except KeyError:
                     continue
+            
+            # Load shared expert gate if present
+            for gate_key in ['shared_expert_gate.weight']:
+                full_gate_key = f'{prefix}{gate_key}'
+                if full_gate_key in loader:
+                    try:
+                        gate_weight = loader.get_tensor(full_gate_key)
+                        shared_module = deep_getattr(mg_mlp, 'shared_experts')
+                        if shared_module is not None and hasattr(shared_module, 'gate_weight'):
+                            shared_module.gate_weight.data.copy_(gate_weight)
+                        break
+                    except KeyError:
+                        continue
         
-        # Load experts
+        # Load experts with EP sharding
         num_local_experts = self.config.num_experts // self.ep_size
+        start_expert_idx = self.ep_rank * num_local_experts
         experts_module = deep_getattr(mg_mlp, 'experts')
         
         if experts_module is not None:
-            for local_idx in range(num_local_experts):
-                global_idx = self.ep_rank * num_local_experts + local_idx
+            # Determine expert module type
+            if hasattr(experts_module, 'weight1'):
+                # GroupedMLP format - weights are merged: [hidden, num_experts * ffn_hidden]
+                # Need to collect all experts and set at once
+                fc1_weights = []  # gate and up weights interleaved
+                fc2_weights = []  # down weights
                 
-                try:
-                    gate_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.gate_proj.weight')
-                    up_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.up_proj.weight')
-                    down_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.down_proj.weight')
+                for local_idx in range(num_local_experts):
+                    global_idx = start_expert_idx + local_idx
+                    try:
+                        gate_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.gate_proj.weight')
+                        up_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.up_proj.weight')
+                        down_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.down_proj.weight')
+                        
+                        # Stack gate and up for gated linear unit
+                        fc1_weights.append(gate_weight)  # [ffn_hidden, hidden]
+                        fc1_weights.append(up_weight)    # [ffn_hidden, hidden]
+                        fc2_weights.append(down_weight)  # [hidden, ffn_hidden]
+                    except KeyError as e:
+                        print(f"Warning: Missing expert {global_idx} weights: {e}")
+                        continue
+                
+                if fc1_weights and fc2_weights:
+                    # GroupedMLP weight1: [hidden, num_experts * 2 * ffn_hidden] (transposed)
+                    # HF format: [num_experts * 2, ffn_hidden, hidden]
+                    fc1_stacked = torch.cat(fc1_weights, dim=0)  # [num_experts*2*ffn_hidden, hidden]
+                    fc1_stacked = fc1_stacked.t().contiguous()  # [hidden, num_experts*2*ffn_hidden]
                     
-                    # For grouped linear, weights are stored differently
-                    if hasattr(experts_module, 'linear_fc1'):
-                        # TEGroupedLinear format
+                    # GroupedMLP weight2: [num_experts * ffn_hidden, hidden]
+                    fc2_stacked = torch.cat(fc2_weights, dim=0)  # [num_experts*hidden, ffn_hidden]
+                    
+                    # Set weights directly
+                    if experts_module.weight1.shape == fc1_stacked.shape:
+                        experts_module.weight1.data.copy_(fc1_stacked)
+                    else:
+                        # Handle TP split
+                        tp_rank = self.tp_rank
+                        tp_size = self.tp_size
+                        if tp_size > 1:
+                            # Split along last dim for weight1
+                            chunk_size = fc1_stacked.shape[1] // tp_size
+                            fc1_chunk = fc1_stacked[:, tp_rank * chunk_size:(tp_rank + 1) * chunk_size]
+                            experts_module.weight1.data.copy_(fc1_chunk)
+                        else:
+                            experts_module.weight1.data.copy_(fc1_stacked)
+                    
+                    if experts_module.weight2.shape == fc2_stacked.shape:
+                        experts_module.weight2.data.copy_(fc2_stacked)
+                    else:
+                        # Handle TP split  
+                        tp_rank = self.tp_rank
+                        tp_size = self.tp_size
+                        if tp_size > 1:
+                            # Split along first dim for weight2
+                            chunk_size = fc2_stacked.shape[0] // tp_size
+                            fc2_chunk = fc2_stacked[tp_rank * chunk_size:(tp_rank + 1) * chunk_size, :]
+                            experts_module.weight2.data.copy_(fc2_chunk)
+                        else:
+                            experts_module.weight2.data.copy_(fc2_stacked)
+            
+            elif hasattr(experts_module, 'local_experts'):
+                # SequentialMLP format with local_experts list
+                for local_idx in range(num_local_experts):
+                    global_idx = start_expert_idx + local_idx
+                    try:
+                        gate_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.gate_proj.weight')
+                        up_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.up_proj.weight')
+                        down_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.down_proj.weight')
+                        
+                        expert = experts_module.local_experts[local_idx]
+                        if hasattr(expert, 'linear_fc1'):
+                            fc1_weight = torch.stack([gate_weight, up_weight], dim=0)
+                            self._set_weight(expert.linear_fc1.weight, fc1_weight, 'linear_fc1.weight')
+                            self._set_weight(expert.linear_fc2.weight, down_weight, 'linear_fc2.weight')
+                    except KeyError:
+                        continue
+            
+            elif hasattr(experts_module, 'linear_fc1'):
+                # TEGroupedLinear format - weights stored as weight0, weight1, etc.
+                for local_idx in range(num_local_experts):
+                    global_idx = start_expert_idx + local_idx
+                    try:
+                        gate_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.gate_proj.weight')
+                        up_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.up_proj.weight')
+                        down_weight = loader.get_tensor(f'{prefix}experts.{global_idx}.down_proj.weight')
+                        
                         fc1_weight = torch.stack([gate_weight, up_weight], dim=0)
-                        # Set individual expert weight
                         fc1_param = getattr(experts_module.linear_fc1, f'weight{local_idx}', None)
                         if fc1_param is not None:
                             self._set_weight(fc1_param, fc1_weight, 'linear_fc1.weight', is_expert=True)
@@ -771,23 +900,22 @@ class TwinkleGPTBridge:
                         fc2_param = getattr(experts_module.linear_fc2, f'weight{local_idx}', None)
                         if fc2_param is not None:
                             self._set_weight(fc2_param, down_weight, 'linear_fc2.weight', is_expert=True)
-                    elif hasattr(experts_module, '__getitem__'):
-                        # List of experts
-                        expert = experts_module[local_idx]
-                        if hasattr(expert, 'linear_fc1'):
-                            fc1_weight = torch.stack([gate_weight, up_weight], dim=0)
-                            self._set_weight(expert.linear_fc1.weight, fc1_weight, 'linear_fc1.weight')
-                            self._set_weight(expert.linear_fc2.weight, down_weight, 'linear_fc2.weight')
-                except KeyError:
-                    continue
+                    except KeyError:
+                        continue
         
-        # Load post attention layernorm
+        # Load post attention layernorm (pre_mlp_layernorm for MoE)
         ln_key = f'{self.HF_LAYERS_PREFIX}.{layer_idx}.post_attention_layernorm.weight'
         try:
             ln_weight = loader.get_tensor(ln_key)
-            ln_param = deep_getattr(mg_mlp, 'linear_fc1.layer_norm_weight')
-            if ln_param is not None:
-                ln_param.data.copy_(ln_weight)
+            # Try pre_mlp_layernorm first (used in MoE layers)
+            ln_module = deep_getattr(mg_layer, 'pre_mlp_layernorm')
+            if ln_module is not None and hasattr(ln_module, 'weight'):
+                ln_module.weight.data.copy_(ln_weight)
+            else:
+                # Fallback to linear_fc1.layer_norm_weight
+                ln_param = deep_getattr(mg_mlp, 'linear_fc1.layer_norm_weight')
+                if ln_param is not None:
+                    ln_param.data.copy_(ln_weight)
         except KeyError:
             pass
     
@@ -1312,6 +1440,7 @@ class TwinkleBridgeInitializer:
         params_dtype=None,
         use_cpu_initialization: bool = False,
         attention_backend: str = 'flash',
+        sequence_parallel: bool = False,
         recompute_granularity: Optional[str] = 'selective',
         recompute_modules: Optional[list] = None,
         recompute_method: Optional[str] = None,
@@ -1328,6 +1457,7 @@ class TwinkleBridgeInitializer:
             params_dtype: Parameter dtype (default: torch.bfloat16).
             use_cpu_initialization: Initialize on CPU first.
             attention_backend: Attention backend.
+            sequence_parallel: Enable sequence parallelism. Required for MoE with TP > 1.
             recompute_granularity: Activation recomputation strategy.
                 'selective' (default): Only recompute core attention (memory efficient).
                 'full': Recompute entire transformer layer (most memory efficient).
@@ -1347,6 +1477,7 @@ class TwinkleBridgeInitializer:
         self.params_dtype = params_dtype if params_dtype is not None else torch.bfloat16
         self.use_cpu_initialization = use_cpu_initialization
         self.attention_backend = attention_backend
+        self.sequence_parallel = sequence_parallel
         self.recompute_granularity = recompute_granularity
         self.recompute_modules = recompute_modules or ['core_attn']
         self.recompute_method = recompute_method
@@ -1452,6 +1583,7 @@ class TwinkleBridgeInitializer:
         import torch.distributed as dist
         from megatron.core import parallel_state as mpu
         from megatron.core.transformer import TransformerConfig
+        from megatron.core.transformer.enums import AttnBackend
         from megatron.core.models.gpt import GPTModel
         from megatron.core.models.gpt.gpt_layer_specs import (
             get_gpt_layer_with_transformer_engine_spec,
@@ -1505,27 +1637,96 @@ class TwinkleBridgeInitializer:
                 if hasattr(model_chunk, 'finish_grad_sync'):
                     model_chunk.finish_grad_sync()
         
+        # MoE configuration
+        num_experts = mg_config_dict.get('num_experts', 0) or 0
+        moe_ffn_hidden_size = mg_config_dict.get('moe_ffn_hidden_size')
+        moe_router_topk = mg_config_dict.get('moe_router_topk', 2) or 2
+        moe_shared_expert_intermediate_size = mg_config_dict.get('moe_shared_expert_intermediate_size')
+        
+        # Build MoE-related kwargs
+        moe_kwargs = {}
+        if num_experts > 0:
+            moe_kwargs.update({
+                'num_moe_experts': num_experts,
+                'moe_router_topk': moe_router_topk,
+                'moe_router_load_balancing_type': mg_config_dict.get('moe_router_load_balancing_type', 'aux_loss'),
+                # MoE performance optimizations (aligned with Swift defaults)
+                'moe_token_dispatcher_type': mg_config_dict.get('moe_token_dispatcher_type', 'alltoall'),  # 'alltoall' is more efficient than 'allgather'
+                'moe_grouped_gemm': mg_config_dict.get('moe_grouped_gemm', True),  # Enable for better performance (requires grouped_gemm package)
+                'moe_aux_loss_coeff': mg_config_dict.get('moe_aux_loss_coeff', 0.0),  # Auxiliary load balancing loss coefficient
+            })
+            
+            # FFN hidden size for MoE
+            if moe_ffn_hidden_size:
+                moe_kwargs['moe_ffn_hidden_size'] = moe_ffn_hidden_size
+            
+            # Shared expert configuration
+            if moe_shared_expert_intermediate_size:
+                moe_kwargs['moe_shared_expert_intermediate_size'] = moe_shared_expert_intermediate_size
+            
+            # Router score function (sigmoid for Qwen3, softmax for others)
+            if mg_config_dict.get('moe_router_score_function'):
+                moe_kwargs['moe_router_score_function'] = mg_config_dict['moe_router_score_function']
+            
+            # Expert bias for sigmoid router
+            if mg_config_dict.get('moe_router_enable_expert_bias'):
+                moe_kwargs['moe_router_enable_expert_bias'] = mg_config_dict['moe_router_enable_expert_bias']
+        
+        # Sequence parallel requires TP > 1
+        # Auto-enable for MoE with TP > 1 (required by Megatron)
+        use_sequence_parallel = self.sequence_parallel and self.tp_size > 1
+        if num_experts > 0 and self.tp_size > 1 and not use_sequence_parallel:
+            use_sequence_parallel = True
+            print(f"Auto-enabling sequence_parallel for MoE with TP={self.tp_size}")
+        
+        # For MoE models, ffn_hidden_size should be moe_ffn_hidden_size if not specified
+        ffn_hidden_size = mg_config_dict.get('ffn_hidden_size')
+        if ffn_hidden_size is None:
+            ffn_hidden_size = moe_ffn_hidden_size or (4 * mg_config_dict['hidden_size'])
+        
+        # For models with non-standard head dimensions (like Qwen3-30B-A3B)
+        kv_channels = mg_config_dict.get('kv_channels')
+        
+        # Activation function for SwiGLU (required by Megatron when gated_linear_unit=True)
+        use_swiglu = mg_config_dict.get('swiglu', True)
+        activation_func = torch.nn.functional.silu if use_swiglu else torch.nn.functional.gelu
+        
+        # Enable bias_activation_fusion for SwiGLU (same as Swift)
+        # Note: Only works with TransformerEngine and no bias in linear layers
+        has_bias = not mg_config_dict.get('disable_bias_linear', True)
+        bias_activation_fusion = use_swiglu and not has_bias
+        
         config = TransformerConfig(
             num_layers=num_layers,
             hidden_size=mg_config_dict['hidden_size'],
             num_attention_heads=num_attention_heads,
             num_query_groups=num_query_groups,
-            ffn_hidden_size=mg_config_dict.get('ffn_hidden_size', 4 * mg_config_dict['hidden_size']),
+            kv_channels=kv_channels,
+            ffn_hidden_size=ffn_hidden_size,
             tensor_model_parallel_size=self.tp_size,
             pipeline_model_parallel_size=self.pp_size,
             context_parallel_size=self.cp_size,
             expert_model_parallel_size=self.ep_size,
+            sequence_parallel=use_sequence_parallel,
             params_dtype=self.params_dtype,
             pipeline_dtype=self.params_dtype,  # Required when using pipeline parallelism
             use_cpu_initialization=self.use_cpu_initialization,
             add_qkv_bias=mg_config_dict.get('add_qkv_bias', False),
             add_bias_linear=not mg_config_dict.get('disable_bias_linear', True),
-            gated_linear_unit=mg_config_dict.get('swiglu', True),
+            gated_linear_unit=use_swiglu,
+            activation_func=activation_func,  # SiLU for SwiGLU, GELU otherwise
+            bias_activation_fusion=bias_activation_fusion,  # Fused SwiGLU for performance
             normalization='RMSNorm',
             layernorm_epsilon=mg_config_dict.get('norm_epsilon', 1e-6),
             qk_layernorm=mg_config_dict.get('qk_layernorm', False),
             hidden_dropout=0.0,
             attention_dropout=0.0,
+            # Performance optimizations
+            masked_softmax_fusion=True,  # Fused attention softmax
+            bias_dropout_fusion=True,  # Fused bias + dropout
+            apply_rope_fusion=True,  # Fused RoPE application
+            attention_softmax_in_fp32=True,  # Numerical stability
+            attention_backend=AttnBackend.flash,  # FlashAttention for speed
             # Activation recomputation for memory efficiency
             recompute_granularity=self.recompute_granularity,
             recompute_modules=self.recompute_modules if self.recompute_granularity == 'selective' else None,
@@ -1534,20 +1735,26 @@ class TwinkleBridgeInitializer:
             # Critical: Set finalize_model_grads_func for DP gradient synchronization
             # Uses custom wrapper that handles both DDP and PEFT/LoRA models
             finalize_model_grads_func=finalize_model_grads_for_lora,
+            # MoE configuration
+            **moe_kwargs,
         )
         
-        # Get layer spec
+        # Save transformer config for later use (e.g., DDP wrapping)
+        self._transformer_config = config
+        
+        # Get layer spec - enable moe_grouped_gemm for MoE models
+        moe_grouped_gemm = num_experts > 0
         try:
             layer_spec = get_gpt_layer_with_transformer_engine_spec(
                 num_experts=mg_config_dict.get('num_experts'),
-                moe_grouped_gemm=False,
+                moe_grouped_gemm=moe_grouped_gemm,
                 qk_layernorm=mg_config_dict.get('qk_layernorm', False),
             )
         except Exception:
             from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_local_spec
             layer_spec = get_gpt_layer_local_spec(
                 num_experts=mg_config_dict.get('num_experts'),
-                moe_grouped_gemm=False,
+                moe_grouped_gemm=moe_grouped_gemm,
                 qk_layernorm=mg_config_dict.get('qk_layernorm', False),
             )
         

@@ -54,6 +54,10 @@ class MegatronOptimizerGroup:
     gradient_accumulation_steps: int = 1
     cur_step: int = 0
     dp_group = None
+    # Megatron optimizer specific fields
+    is_megatron_optimizer: bool = False
+    _last_grad_norm: float = 0.0
+    _last_step_success: bool = True
 
     def do_grad_sync(self, gradient_accumulation_steps: Optional[int] = None) -> bool:
         """Check if gradient synchronization should happen."""
@@ -227,10 +231,11 @@ class MegatronModel(TwinkleModel, nn.Module):
             params_dtype=params_dtype,
             use_cpu_initialization=False,
             attention_backend='flash',  # Use flash for training performance
+            sequence_parallel=self.strategy.sequence_parallel,
             recompute_granularity=self.recompute_granularity,
             recompute_modules=self.recompute_modules,
-            recompute_method=getattr(self, 'recompute_method', None),
-            recompute_num_layers=getattr(self, 'recompute_num_layers', None),
+            recompute_method=getattr(self, "recompute_method", None),
+            recompute_num_layers=getattr(self, "recompute_num_layers", None),
         )
         
         # Create model (this calls initialize_megatron internally)
@@ -239,6 +244,9 @@ class MegatronModel(TwinkleModel, nn.Module):
         # Update strategy state since bridge has initialized Megatron
         self.strategy._initialized = True
         self.strategy._parallel_state = mpu
+        
+        # Save transformer config for DDP wrapping
+        self._transformer_config = getattr(self._bridge_initializer, '_transformer_config', None)
         
         # Move to GPU
         model = self._move_model_to_gpu(model)
@@ -512,7 +520,8 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config.cur_step += 1
 
     @remote_function(dispatch='all', collect='avg', sync=True)
-    def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
+    def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], 
+                         num_microbatches: int = 1, **kwargs):
         """Combined forward and backward pass using Megatron's scheduler.
         
         Note: sync=True is required for Ray mode because Megatron's pipeline
@@ -522,14 +531,21 @@ class MegatronModel(TwinkleModel, nn.Module):
         Always uses Megatron's get_forward_backward_func() which handles:
         - Pipeline scheduling (1F1B, interleaved, or no-pipeline)
         - Communication between stages (using proper process groups for multi-tenant isolation)
-        - Gradient accumulation
+        - Gradient accumulation across microbatches
         
         Args:
-            inputs: Model inputs.
+            inputs: Model inputs. Can be:
+                - A single batch dict (num_microbatches=1)
+                - A list of batch dicts (num_microbatches=len(inputs))
+                - An iterator yielding batch dicts
+            num_microbatches: Number of microbatches to process in one call.
+                If inputs is a list, this is inferred from len(inputs).
+                Using num_microbatches > 1 enables Megatron's native gradient
+                accumulation with better memory management and compute overlap.
             **kwargs: Additional arguments.
             
         Returns:
-            Loss value.
+            Average loss value across all microbatches.
         """
         from functools import partial
         from megatron.core.pipeline_parallel import get_forward_backward_func
@@ -538,36 +554,47 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config = self.optimizer_group[adapter_name]
         self._lazy_wrap_model()
         
-        # Encode inputs if needed
-        if isinstance(inputs, dict) and 'input_ids' not in inputs:
-            if optimizer_config.template is not None:
-                inputs = optimizer_config.template.encode(inputs)
-        if isinstance(inputs, list) and 'input_ids' not in inputs[0]:
-            if optimizer_config.template is not None:
-                inputs = optimizer_config.template.batch_encode(inputs)
-                
-        # Process inputs
-        processor = optimizer_config.processor
-        if processor is not None:
-            inputs = processor(inputs)
+        # Handle different input formats
+        # 1. Single batch dict -> wrap in list
+        # 2. List of batches -> use as-is
+        # 3. Iterator -> convert to list
+        if isinstance(inputs, dict):
+            microbatch_list = [inputs]
+        elif hasattr(inputs, '__iter__') and not isinstance(inputs, (list, tuple)):
+            # Iterator - convert to list
+            microbatch_list = list(inputs)
+        else:
+            microbatch_list = list(inputs)
         
-        # Store labels before removing from inputs
-        labels = inputs.get('labels', None)
-        if 'labels' in inputs:
-            try:
-                del inputs['labels']
-            except (TypeError, KeyError):
-                pass  # Some dict-like types don't support deletion
+        # Infer num_microbatches from inputs if list is provided
+        if len(microbatch_list) > 1:
+            num_microbatches = len(microbatch_list)
+        
+        # Process each microbatch
+        processed_batches = []
+        for batch in microbatch_list:
+            # Encode inputs if needed
+            if isinstance(batch, dict) and 'input_ids' not in batch:
+                if optimizer_config.template is not None:
+                    batch = optimizer_config.template.encode(batch)
+            
+            # Process inputs
+            processor = optimizer_config.processor
+            if processor is not None:
+                batch = processor(batch)
+            
+            processed_batches.append(batch)
+        
+        # Get first batch for shape info (all batches should have same shape)
+        first_batch = processed_batches[0]
         
         # Get CP size for sequence padding and splitting
         cp_size = self.strategy.cp_size
         cp_rank = mpu.get_context_parallel_rank() if cp_size > 1 else 0
         
-        # Get sequence length and batch size
-        # Note: Megatron's schedule internally divides seq_length by cp_size
-        # So we pass the padded full sequence length here
-        original_seq_length = inputs['input_ids'].shape[1] if 'input_ids' in inputs else 1
-        micro_batch_size = inputs['input_ids'].shape[0] if 'input_ids' in inputs else 1
+        # Get sequence length and batch size from first batch
+        original_seq_length = first_batch['input_ids'].shape[1] if 'input_ids' in first_batch else 1
+        micro_batch_size = first_batch['input_ids'].shape[0] if 'input_ids' in first_batch else 1
         
         # For CP > 1, pad seq_length to be divisible by 2*cp_size
         if cp_size > 1:
@@ -578,12 +605,6 @@ class MegatronModel(TwinkleModel, nn.Module):
                 seq_length = original_seq_length
         else:
             seq_length = original_seq_length
-        
-        # Move labels to GPU if needed
-        if labels is not None and not isinstance(labels, torch.Tensor):
-            labels = torch.tensor(labels, device=torch.cuda.current_device())
-        elif labels is not None:
-            labels = labels.to(torch.cuda.current_device())
         
         def split_tensor_for_cp(tensor, dim=-1):
             """
@@ -620,10 +641,20 @@ class MegatronModel(TwinkleModel, nn.Module):
         # forward_step_func(data_iterator, model) -> (output_tensor, partial(loss_func))
         def forward_step_func(data_iterator, model):
             batch = next(data_iterator)
-            input_ids = batch.get('input_ids')
-            position_ids = batch.get('position_ids')
-            attention_mask = batch.get('attention_mask')
-            batch_labels = batch.get('labels', labels)  # Use batch labels or passed labels
+            
+            # Move tensors to CUDA with non_blocking=True for async transfer
+            # This matches Swift's to_device(data, 'cuda', non_blocking=True) behavior
+            def to_cuda_non_blocking(tensor):
+                if tensor is None:
+                    return None
+                if isinstance(tensor, torch.Tensor) and not tensor.is_cuda:
+                    return tensor.cuda(non_blocking=True)
+                return tensor
+            
+            input_ids = to_cuda_non_blocking(batch.get('input_ids'))
+            position_ids = to_cuda_non_blocking(batch.get('position_ids'))
+            attention_mask = to_cuda_non_blocking(batch.get('attention_mask'))
+            batch_labels = to_cuda_non_blocking(batch.get('labels'))  # Labels should be in each batch
             
             # Pad sequence for Context Parallel compatibility
             # Megatron's RoPE requires seq_len % (2 * cp_size) == 0
@@ -671,54 +702,44 @@ class MegatronModel(TwinkleModel, nn.Module):
             )
             
             # Megatron's compute_language_model_loss returns per-token loss [batch, seq]
-            # We need to aggregate it with loss_mask
+            # We need to aggregate it with loss_mask and return 3 values for proper per-token normalization
+            # Swift uses 3-value return: (loss, num_tokens, loss_dict) for per-token loss mode
             def megatron_loss_func(labels_for_mask, cp_size, output_tensor):
                 # output_tensor is per-token loss [batch, seq]
                 # Create loss mask from labels (ignore -100)
-                loss_mask = (labels_for_mask != -100).float()
+                loss_mask = (labels_for_mask != -100)
                 
-                # Flatten and compute mean
-                losses = output_tensor.float().view(-1)
-                loss_mask_flat = loss_mask.view(-1)
+                # Compute per-token losses
+                losses = output_tensor.float()
                 
-                # Compute local sum and count
-                local_loss_sum = torch.sum(losses * loss_mask_flat)
-                local_count = loss_mask_flat.sum()
+                # Compute sum of losses and token count (same as Swift)
+                # Swift: loss = torch.cat([torch.sum(losses * loss_mask).view(1), loss_mask.sum().view(1)])
+                loss_sum = torch.sum(losses * loss_mask.float())
+                local_num_tokens = loss_mask.sum().to(torch.int)
                 
-                # For CP > 1, aggregate loss across CP ranks
-                # Note: Megatron's schedules.py will multiply loss by cp_group_size
-                # for legacy 2-output loss_func. This assumes loss_func returns SUM/cp_size (MEAN).
-                # So we should return local MEAN (not global MEAN) and let Megatron handle it.
+                # For CP > 1, aggregate across CP ranks
                 if cp_size > 1:
-                    # All-reduce the count across CP ranks to get total token count
-                    # This is needed for correct averaging
-                    total_count = local_count.clone()
+                    # All-reduce loss sum and token count across CP ranks
+                    loss_tensor = torch.cat([loss_sum.view(1), local_num_tokens.float().view(1)])
                     torch.distributed.all_reduce(
-                        total_count,
+                        loss_tensor,
                         op=torch.distributed.ReduceOp.SUM,
                         group=mpu.get_context_parallel_group()
                     )
-                    
-                    # Return local_loss_sum / total_count
-                    # Megatron will multiply by cp_size, so the final result is:
-                    # (local_loss_sum / total_count) * cp_size
-                    # = (local_loss_sum * cp_size) / total_count
-                    # But we want: SUM(local_loss_sum) / total_count
-                    # So we need to do all_reduce on loss_sum too
-                    total_loss_sum = local_loss_sum.clone()
-                    torch.distributed.all_reduce(
-                        total_loss_sum,
-                        op=torch.distributed.ReduceOp.SUM,
-                        group=mpu.get_context_parallel_group()
-                    )
-                    
-                    # Return global mean, but Megatron will multiply by cp_size
-                    # So we divide by cp_size first to counteract that
-                    loss = (total_loss_sum / total_count.clamp(min=1)) / cp_size
-                else:
-                    loss = local_loss_sum / local_count.clamp(min=1)
+                    loss_sum = loss_tensor[0]
+                    local_num_tokens = loss_tensor[1].to(torch.int)
                 
-                return loss, {'loss': loss.detach()}
+                # Return 3 values for per-token loss mode (same as Swift):
+                # 1. loss (sum, will be divided by num_tokens by Megatron)
+                # 2. local_num_tokens (for proper averaging)
+                # 3. loss_dict for logging
+                reporting_loss = torch.cat([loss_sum.detach().view(1), local_num_tokens.float().view(1)])
+                
+                return (
+                    loss_sum,
+                    local_num_tokens,
+                    {'lm loss': reporting_loss}
+                )
             
             return output_tensor, partial(megatron_loss_func, batch_labels, cp_size)
         
@@ -728,32 +749,55 @@ class MegatronModel(TwinkleModel, nn.Module):
         # - PP = 1: forward_backward_no_pipelining
         forward_backward_func = get_forward_backward_func()
         
-        # Create single-item iterator
-        data_iter = iter([inputs])
+        # Create iterator over all microbatches
+        # Megatron's scheduler will call next(data_iterator) num_microbatches times
+        data_iter = iter(processed_batches)
         
         # Run forward-backward with Megatron's scheduler
         # Megatron handles all communication internally using proper process groups
+        # With num_microbatches > 1, gradients are accumulated across microbatches
         losses = forward_backward_func(
             forward_step_func=forward_step_func,
             data_iterator=data_iter,
             model=[self.model],
-            num_microbatches=1,
+            num_microbatches=num_microbatches,
             seq_length=seq_length,
             micro_batch_size=micro_batch_size,
             forward_only=False,
         )
         
         # Extract loss from results (only last PP stage returns non-empty)
-        loss = 0.0
+        # With 3-value loss_func return, each loss_dict contains 'lm loss': [loss_sum, num_tokens]
+        # We aggregate across all microbatches using proper per-token averaging
+        total_loss_sum = 0.0
+        total_num_tokens = 0
         
         if losses:
             for loss_dict in losses:
-                if isinstance(loss_dict, dict) and 'loss' in loss_dict:
-                    loss = loss_dict['loss']
-                    break
-                elif isinstance(loss_dict, torch.Tensor):
-                    loss = loss_dict
-                    break
+                if isinstance(loss_dict, dict):
+                    # New format: 'lm loss' contains [loss_sum, num_tokens]
+                    if 'lm loss' in loss_dict:
+                        reporting = loss_dict['lm loss']
+                        if isinstance(reporting, torch.Tensor) and reporting.numel() == 2:
+                            total_loss_sum += reporting[0].item()
+                            total_num_tokens += int(reporting[1].item())
+                        elif isinstance(reporting, (list, tuple)) and len(reporting) == 2:
+                            total_loss_sum += float(reporting[0])
+                            total_num_tokens += int(reporting[1])
+                    # Legacy format: 'loss' contains average loss
+                    elif 'loss' in loss_dict:
+                        loss_val = loss_dict['loss']
+                        if isinstance(loss_val, torch.Tensor):
+                            total_loss_sum += loss_val.item()
+                        else:
+                            total_loss_sum += float(loss_val)
+                        total_num_tokens += 1  # Fallback: treat as 1 sample
+        
+        # Compute average loss (per-token average across all microbatches)
+        if total_num_tokens > 0:
+            loss = total_loss_sum / total_num_tokens
+        else:
+            loss = total_loss_sum / max(num_microbatches, 1)
         
         # For PP > 1, broadcast loss from last PP stage to all ranks
         # Note: mpu is imported at module level, no need to reimport
@@ -777,14 +821,9 @@ class MegatronModel(TwinkleModel, nn.Module):
         
         optimizer_config.cur_step += 1
         
-        # Critical: Synchronize all DP replicas before returning
-        # This ensures all DP replicas complete the same training step before
-        # moving to the next batch, preventing P2P communication deadlocks
-        dp_world_size = mpu.get_data_parallel_world_size()
-        if dp_world_size > 1:
-            # Use barrier on DP+CP group to synchronize all replicas
-            dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
-            dist.barrier(group=dp_cp_group)
+        # Note: finalize_model_grads is called inside forward_backward_func
+        # which already handles gradient synchronization across DP replicas.
+        # No additional barrier is needed here - adding one would hurt performance.
         
         if isinstance(loss, torch.Tensor):
             return loss.detach().cpu().float().numpy()
@@ -803,6 +842,15 @@ class MegatronModel(TwinkleModel, nn.Module):
             Total norm of gradients.
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        optimizer_config = self.optimizer_group[adapter_name]
+        
+        # Check if using Megatron optimizer (handles clip_grad internally)
+        is_megatron_opt = getattr(optimizer_config, 'is_megatron_optimizer', False)
+        if is_megatron_opt:
+            # Megatron optimizer handles gradient clipping in step()
+            # Return the grad_norm from last step if available
+            return getattr(optimizer_config, '_last_grad_norm', 0.0)
+        
         parameters = self._get_trainable_parameters(adapter_name).values()
         
         return torch.nn.utils.clip_grad_norm_(
@@ -844,16 +892,29 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer = optimizer_config.optimizer
         assert optimizer is not None, 'Set optimizer correctly before stepping'
         
-        optimizer.step(**kwargs)
+        # Check if using Megatron optimizer (has different step() signature)
+        is_megatron_opt = getattr(optimizer_config, 'is_megatron_optimizer', False)
+        if is_megatron_opt:
+            # Megatron optimizer step() returns (success, grad_norm, num_zeros)
+            success, grad_norm, num_zeros = optimizer.step()
+            # Store grad_norm for later retrieval
+            optimizer_config._last_grad_norm = grad_norm if grad_norm is not None else 0.0
+            optimizer_config._last_step_success = success
+        else:
+            optimizer.step(**kwargs)
     
     def _is_model_ddp_wrapped(self) -> bool:
         """Check if model is wrapped with DDP.
         
         Returns:
-            True if model is wrapped with DDP (either Megatron DDP or PyTorch DDP).
+            True if model is wrapped with DDP (either Megatron DDP, LoRA DDP, or PyTorch DDP).
         """
         from torch.nn.parallel import DistributedDataParallel as TorchDDP
-        return isinstance(self.model, (MegatronDDP, TorchDDP))
+        try:
+            from twinkle.megatron.distributed import LoRADistributedDataParallel
+            return isinstance(self.model, (MegatronDDP, LoRADistributedDataParallel, TorchDDP))
+        except ImportError:
+            return isinstance(self.model, (MegatronDDP, TorchDDP))
     
     def _get_unwrapped_model(self) -> nn.Module:
         """Get the unwrapped model.
@@ -862,6 +923,120 @@ class MegatronModel(TwinkleModel, nn.Module):
             The base model without DDP wrapper.
         """
         return self.strategy.unwrap_model(self.model)
+    
+    @remote_function(dispatch='all')
+    def wrap_with_lora_ddp(
+        self,
+        adapter_name: str = _default_adapter_name,
+        overlap_grad_reduce: bool = True,
+        bucket_size: Optional[int] = None,
+        lora_param_patterns: Optional[set] = None,
+        **kwargs
+    ):
+        """
+        Wrap the model with LoRA-aware DDP for efficient distributed training.
+        
+        This enables:
+        1. Communication-computation overlap: Gradient all-reduce starts while
+           backward pass is still computing other gradients.
+        2. Gradient bucketing: Small gradients are grouped for efficient communication.
+        3. Async gradient reduction: Non-blocking communication operations.
+        
+        Should be called AFTER add_adapter_to_model() and BEFORE training starts.
+        
+        Args:
+            adapter_name: Name of the adapter (for multi-adapter scenarios).
+            overlap_grad_reduce: Enable communication-computation overlap.
+                Set to True for best performance (default).
+            bucket_size: Size of gradient buckets in number of elements.
+                None for automatic sizing based on LoRA parameter count.
+            lora_param_patterns: Set of patterns to identify LoRA parameters.
+                Default: {'lora_A', 'lora_B', 'lora_'}
+            **kwargs: Additional arguments passed to DDP config.
+                - use_distributed_optimizer: bool (default False for LoRA)
+                - grad_reduce_in_fp32: bool (default False)
+        
+        Returns:
+            self for method chaining.
+            
+        Example:
+            >>> model = MegatronModel(...)
+            >>> model.add_adapter_to_model('lora', lora_config)
+            >>> model.wrap_with_lora_ddp(
+            ...     adapter_name='lora',
+            ...     overlap_grad_reduce=True,
+            ... )
+            >>> # Now training will use optimized DDP
+            >>> for batch in dataloader:
+            ...     loss = model.forward_backward(inputs=batch)
+            ...     model.step()
+            ...     model.zero_grad()
+        """
+        from twinkle.megatron.distributed import wrap_model_with_lora_ddp
+        from megatron.core.distributed import DistributedDataParallelConfig
+        
+        # Check if already wrapped
+        if self._is_model_ddp_wrapped():
+            if mpu.get_data_parallel_rank() == 0:
+                print("Warning: Model is already DDP wrapped. Skipping wrap_with_lora_ddp().")
+            return self
+        
+        # Get the transformer config from the bridge initializer
+        transformer_config = getattr(self, '_transformer_config', None)
+        if transformer_config is None:
+            # Try to get from strategy
+            if hasattr(self.strategy, 'transformer_config'):
+                transformer_config = self.strategy.transformer_config
+            else:
+                raise ValueError(
+                    "Cannot find TransformerConfig. "
+                    "Make sure model is created via MegatronModel."
+                )
+        
+        # Create DDP config
+        ddp_config = DistributedDataParallelConfig(
+            overlap_grad_reduce=overlap_grad_reduce,
+            use_distributed_optimizer=kwargs.get('use_distributed_optimizer', False),
+            grad_reduce_in_fp32=kwargs.get('grad_reduce_in_fp32', False),
+            bucket_size=bucket_size,
+            average_in_collective=kwargs.get('average_in_collective', False),
+        )
+        
+        # Get tenant process group if multi-tenant
+        tenant_process_group = kwargs.get('tenant_process_group', None)
+        
+        # Wrap model
+        self.model = wrap_model_with_lora_ddp(
+            model=self.model,
+            config=transformer_config,
+            ddp_config=ddp_config,
+            lora_param_patterns=lora_param_patterns,
+            tenant_id=adapter_name,
+            tenant_process_group=tenant_process_group,
+        )
+        
+        # CRITICAL: Update transformer_config.no_sync_func to use the DDP's no_sync
+        # This is needed for Megatron's forward_backward_func to properly control
+        # gradient synchronization during gradient accumulation
+        transformer_config.no_sync_func = self.model.no_sync
+        
+        # Also update finalize_model_grads_func to use the DDP's finish_grad_sync
+        # instead of the custom PEFT version
+        def finalize_model_grads_for_ddp(model_list, *args, **kwargs):
+            """Finalize gradients for DDP-wrapped model."""
+            for model_chunk in model_list:
+                if hasattr(model_chunk, 'finish_grad_sync'):
+                    model_chunk.finish_grad_sync()
+        transformer_config.finalize_model_grads_func = finalize_model_grads_for_ddp
+        
+        if mpu.get_data_parallel_rank() == 0:
+            lora_count = self.model.get_lora_param_count()
+            lora_numel = self.model.get_lora_param_numel()
+            print(f"Wrapped model with LoRA DDP: {lora_count} params, {lora_numel:,} elements")
+            print(f"  overlap_grad_reduce={overlap_grad_reduce}")
+            print(f"  bucket_size={bucket_size or 'auto'}")
+        
+        return self
 
     @remote_function(dispatch='all')
     def zero_grad(self, **kwargs):
@@ -869,22 +1044,29 @@ class MegatronModel(TwinkleModel, nn.Module):
         
         For DDP-wrapped models, also zeros the DDP gradient buffers.
         
+        Note: For DDP-wrapped models, zero_grad_buffer() is always called
+        because it's essential for the next training iteration. The
+        do_grad_sync check only affects the optimizer.zero_grad() call.
+        
         Args:
             **kwargs: Additional arguments.
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
         
+        # For DDP-wrapped models, ALWAYS zero the gradient buffer
+        # This is essential because Megatron's forward_backward_func uses
+        # the buffer's state to track gradient accumulation
+        if self._is_model_ddp_wrapped() and hasattr(self.model, 'zero_grad_buffer'):
+            self.model.zero_grad_buffer()
+        
         if not optimizer_config.do_grad_sync(kwargs.get('gradient_accumulation_steps')):
             return
             
         optimizer = optimizer_config.optimizer
         if optimizer is not None:
-            optimizer.zero_grad(**kwargs)
-        
-        # For Megatron DDP, zero the gradient buffer
-        if self._is_model_ddp_wrapped() and hasattr(self.model, 'zero_grad_buffer'):
-            self.model.zero_grad_buffer()
+            # Clear set_to_none for better compatibility
+            optimizer.zero_grad(set_to_none=True)
 
     @remote_function()
     def lr_step(self, **kwargs):
@@ -936,10 +1118,20 @@ class MegatronModel(TwinkleModel, nn.Module):
         
         Args:
             optimizer_cls: Optimizer class or string name.
+                - Standard PyTorch optimizers: 'AdamW', 'Adam', 'SGD', etc.
+                - 'MegatronDistributed': Use Megatron's distributed optimizer
             **kwargs: Additional arguments.
+                - For standard optimizers: lr, weight_decay, etc.
+                - For MegatronDistributed: use_distributed_optimizer, clip_grad, etc.
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        
+        # Check if requesting Megatron distributed optimizer
+        if optimizer_cls == 'MegatronDistributed' or kwargs.pop('use_megatron_optimizer', False):
+            optimizer_config.optimizer = self._create_megatron_optimizer(**kwargs)
+            optimizer_config.is_megatron_optimizer = True
+            return
         
         if isinstance(optimizer_cls, str):
             if hasattr(torch.optim, optimizer_cls):
@@ -950,6 +1142,73 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config.optimizer = optimizer_cls(
             self._get_trainable_parameters(adapter_name).values(), **kwargs
         )
+        optimizer_config.is_megatron_optimizer = False
+    
+    def _create_megatron_optimizer(self, **kwargs):
+        """Create Megatron distributed optimizer.
+        
+        This provides significant memory savings for large models by sharding
+        optimizer states across DP replicas.
+        
+        Args:
+            **kwargs: Optimizer configuration options.
+                - lr: Learning rate (default: 1e-4)
+                - weight_decay: Weight decay (default: 0.0)
+                - use_distributed_optimizer: Shard optimizer states (default: True)
+                - clip_grad: Gradient clipping threshold (default: 1.0)
+                - bf16: Use bf16 training (default: True)
+                - adam_beta1, adam_beta2, adam_eps: Adam parameters
+                
+        Returns:
+            MegatronOptimizer instance.
+        """
+        from megatron.core.optimizer import get_megatron_optimizer, OptimizerConfig
+        
+        # Build optimizer config
+        lr = kwargs.get('lr', 1e-4)
+        use_distributed_optimizer = kwargs.get('use_distributed_optimizer', True)
+        
+        opt_config = OptimizerConfig(
+            optimizer='adam',
+            lr=lr,
+            min_lr=kwargs.get('min_lr', 0.0),
+            weight_decay=kwargs.get('weight_decay', 0.0),
+            adam_beta1=kwargs.get('adam_beta1', 0.9),
+            adam_beta2=kwargs.get('adam_beta2', 0.999),
+            adam_eps=kwargs.get('adam_eps', 1e-8),
+            clip_grad=kwargs.get('clip_grad', 1.0),
+            bf16=kwargs.get('bf16', True),
+            use_distributed_optimizer=use_distributed_optimizer,
+            overlap_param_gather=kwargs.get('overlap_param_gather', False),
+            log_num_zeros_in_grad=kwargs.get('log_num_zeros_in_grad', False),
+        )
+        
+        # For PEFT models, we need to handle the case where model is not DDP-wrapped
+        # We create a temporary wrapper to satisfy Megatron's optimizer requirements
+        model_chunks = [self.model]
+        
+        # Check if model has ddp_config (required for distributed optimizer)
+        if not hasattr(self.model, 'ddp_config') and use_distributed_optimizer:
+            # For PEFT models without DDP, fall back to non-distributed optimizer
+            # but still use Megatron's optimized implementation
+            opt_config.use_distributed_optimizer = False
+            if mpu.get_data_parallel_rank() == 0:
+                print("Note: Falling back to non-distributed optimizer for PEFT model. "
+                      "For distributed optimizer, wrap model with MegatronDDP.")
+        
+        try:
+            optimizer = get_megatron_optimizer(
+                config=opt_config,
+                model_chunks=model_chunks,
+            )
+            return optimizer
+        except Exception as e:
+            # Fallback to simple FP32 optimizer if Megatron optimizer fails
+            if mpu.get_data_parallel_rank() == 0:
+                print(f"Warning: Failed to create Megatron optimizer ({e}), falling back to PyTorch AdamW")
+            
+            params = [p for p in self.model.parameters() if p.requires_grad]
+            return torch.optim.AdamW(params, lr=lr, weight_decay=kwargs.get('weight_decay', 0.0))
 
     def _get_trainable_parameters(self, adapter_name: str = _default_adapter_name) -> Dict[str, nn.Parameter]:
         """Get trainable parameters.
@@ -1215,22 +1474,37 @@ class MegatronModel(TwinkleModel, nn.Module):
                 """Synchronize gradients across DP ranks for non-DDP models.
                 
                 This is a compatibility shim for Megatron's finalize_model_grads.
-                For PEFT/LoRA models, we manually all-reduce gradients.
+                For PEFT/LoRA models, we manually all-reduce only trainable (LoRA) gradients.
+                
+                Optimizations:
+                1. Only process gradients of trainable parameters (LoRA weights)
+                2. Skip if DP size is 1 (no synchronization needed)
+                3. Use coalesced all-reduce for efficiency
                 """
                 dp_world_size = mpu.get_data_parallel_world_size()
-                if dp_world_size > 1:
-                    dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
-                    grads = []
-                    for param in self.model.parameters():
-                        if param.requires_grad and param.grad is not None:
-                            grads.append(param.grad.data)
-                    
-                    if grads:
-                        from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
-                        coalesced = _flatten_dense_tensors(grads)
-                        dist.all_reduce(coalesced, op=dist.ReduceOp.AVG, group=dp_cp_group)
-                        for grad, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
-                            grad.copy_(synced)
+                if dp_world_size <= 1:
+                    return  # No sync needed for DP=1
+                
+                dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
+                grads = []
+                
+                # Only collect gradients from trainable parameters (LoRA weights)
+                # This is much faster than iterating all parameters
+                for param in self.model.parameters():
+                    if param.requires_grad and param.grad is not None:
+                        grads.append(param.grad.data)
+                
+                if not grads:
+                    return  # No gradients to sync
+                
+                # Coalesced all-reduce for efficiency
+                from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
+                coalesced = _flatten_dense_tensors(grads)
+                dist.all_reduce(coalesced, op=dist.ReduceOp.AVG, group=dp_cp_group)
+                
+                # Copy back synchronized gradients
+                for grad, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
+                    grad.copy_(synced)
             
             self.model.finish_grad_sync = finish_grad_sync
             
