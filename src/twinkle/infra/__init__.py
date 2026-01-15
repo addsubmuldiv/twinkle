@@ -24,6 +24,8 @@ _lazy_collect = True
 
 _full_determinism = False
 
+_STOP_ITERATION = {"__twinkle_stop__": True}  # Fixes Ray "Unhandled error" when DataLoader ends.
+
 _device_group: Optional[List[DeviceGroup]] = [
     DeviceGroup(
         name='default',
@@ -237,6 +239,10 @@ def _collect_func(method: Union[Literal['none', 'flatten'], Callable], result):
     if not result:
         return result
 
+    if isinstance(result, list) and any(item == _STOP_ITERATION for item in result):
+        # Stop in the driver to avoid Ray treating StopIteration as an actor error.
+        raise StopIteration
+
     if isinstance(result[0], tuple):
         output = []
         for i in range(len(result[0])):
@@ -253,7 +259,8 @@ def _collect_func(method: Union[Literal['none', 'flatten'], Callable], result):
         if isinstance(result[0], np.ndarray):
             return np.array(flatten)
         return type(result[0])(flatten)
-    elif method == 'avg':
+    elif method in ('avg', 'mean'):
+        # Fixes "Unsupported collect method: mean" by aliasing to avg.
         return np.mean(result)
     elif method == 'sum':
         return np.sum(result)
@@ -389,7 +396,11 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                     _self._iter = _iter
 
                 def __next__(_self):
-                    return next(_self._iter)
+                    try:
+                        return next(_self._iter)
+                    except StopIteration:
+                        # Ray surfaces StopIteration as an actor error without this sentinel.
+                        return _STOP_ITERATION
 
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     # remote_group is None when it's worker and remote_group not passed through arguments

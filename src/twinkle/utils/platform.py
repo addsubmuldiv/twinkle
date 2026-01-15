@@ -500,7 +500,8 @@ class NPU(Platform):
 
     @staticmethod
     def visible_device_env():
-        return 'ASCEND_VISIBLE_DEVICES'
+        # Ascend runtime uses ASCEND_RT_VISIBLE_DEVICES.
+        return 'ASCEND_RT_VISIBLE_DEVICES'
 
     @staticmethod
     def device_prefix():

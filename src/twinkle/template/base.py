@@ -25,7 +25,8 @@ class Template:
         outputs = self.tokenizer.apply_chat_template(conversation=dummy_inputs,
                                                      return_assistant_tokens_mask=True, return_dict=True)
         assistant_masks = outputs['assistant_masks']
-        self._template_support_assistant_tokens_mask = not all(np.array(assistant_masks).flatten())
+        # Fixes "return_assistant_tokens_mask==True but chat template does not contain `{% generation %}`".
+        self._template_support_assistant_tokens_mask = bool(np.any(np.array(assistant_masks)))
 
     def encode(self, trajectory: Trajectory) -> InputFeature:
         if self._template_support_assistant_tokens_mask:
@@ -35,7 +36,12 @@ class Template:
                                                return_assistant_tokens_mask=True, return_dict=True)
             input_ids = outputs['input_ids']
             assistant_masks = outputs['assistant_masks']
-            labels = np.where(assistant_masks, input_ids, -100)
+            mask_array = np.array(assistant_masks)
+            if np.any(mask_array):
+                labels = np.where(mask_array, input_ids, -100)
+            else:
+                # Avoids NaN loss when all labels are masked.
+                input_ids, labels = tokenize_with_assistant_labels(self.tokenizer, trajectory)
         else:
             input_ids, labels = tokenize_with_assistant_labels(self.tokenizer, trajectory)
         return InputFeature(
