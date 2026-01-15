@@ -910,11 +910,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             True if model is wrapped with DDP (either Megatron DDP, LoRA DDP, or PyTorch DDP).
         """
         from torch.nn.parallel import DistributedDataParallel as TorchDDP
-        try:
-            from twinkle.megatron.distributed import LoRADistributedDataParallel
-            return isinstance(self.model, (MegatronDDP, LoRADistributedDataParallel, TorchDDP))
-        except ImportError:
-            return isinstance(self.model, (MegatronDDP, TorchDDP))
+        return isinstance(self.model, (MegatronDDP, TorchDDP))
     
     def _get_unwrapped_model(self) -> nn.Module:
         """Get the unwrapped model.
@@ -1028,13 +1024,6 @@ class MegatronModel(TwinkleModel, nn.Module):
                 if hasattr(model_chunk, 'finish_grad_sync'):
                     model_chunk.finish_grad_sync()
         transformer_config.finalize_model_grads_func = finalize_model_grads_for_ddp
-        
-        if mpu.get_data_parallel_rank() == 0:
-            lora_count = self.model.get_lora_param_count()
-            lora_numel = self.model.get_lora_param_numel()
-            print(f"Wrapped model with LoRA DDP: {lora_count} params, {lora_numel:,} elements")
-            print(f"  overlap_grad_reduce={overlap_grad_reduce}")
-            print(f"  bucket_size={bucket_size or 'auto'}")
         
         return self
 

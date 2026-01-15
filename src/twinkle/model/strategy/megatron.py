@@ -509,6 +509,7 @@ class MegatronStrategy(TrainStrategy):
         )
         
         # Wrap with MegatronDDP
+        # TODO: multi-tenant ddp
         try:
             wrapped_model = MegatronDDP(
                 config=config,

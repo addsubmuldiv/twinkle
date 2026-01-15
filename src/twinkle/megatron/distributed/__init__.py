@@ -1,12 +1,16 @@
 # Copyright (c) twinkle authors. All rights reserved.
-"""Distributed training utilities for Megatron-based models."""
 
-from .lora_ddp import (
-    LoRADistributedDataParallel,
-    wrap_model_with_lora_ddp,
+
+from .multi_tenant_ddp import (
+    MultiTenantLoRADDP,
+    TenantContext,
+    TenantGradientManager,
+    create_multi_tenant_ddp,
 )
 
 __all__ = [
-    'LoRADistributedDataParallel',
-    'wrap_model_with_lora_ddp',
+    'MultiTenantLoRADDP',
+    'TenantContext',
+    'TenantGradientManager',
+    'create_multi_tenant_ddp',
 ]
