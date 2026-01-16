@@ -34,6 +34,7 @@ class CallRequest(BaseModel):
         extra = "allow"
 
 def build_processor_app(nproc_per_node: int,
+                        ncpu_proc_per_node:int,
                         device_group: Dict[str, Any],
                         device_mesh: Dict[str, Any],
                         deploy_options: Dict[str, Any]):
@@ -54,10 +55,10 @@ def build_processor_app(nproc_per_node: int,
 
         COUNT_DOWN = 60 * 30
 
-        def __init__(self, nproc_per_node: int, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
+        def __init__(self, nproc_per_node: int, ncpu_proc_per_node:int, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
             self.device_group = DeviceGroup(**device_group)
             twinkle.initialize(mode='ray', nproc_per_node=nproc_per_node, groups=[self.device_group],
-                               lazy_collect=False)
+                               lazy_collect=False, ncpu_proc_per_node=ncpu_proc_per_node)
             self.device_mesh = DeviceMesh(**device_mesh)
             self.resource_dict = {}
             self.resource_records: Dict[str, int] = {}
@@ -169,4 +170,4 @@ def build_processor_app(nproc_per_node: int,
             else:
                 return {'result': result}
 
-    return ProcessorManagement.options(**deploy_options).bind(nproc_per_node, device_group, device_mesh)
+    return ProcessorManagement.options(**deploy_options).bind(nproc_per_node, ncpu_proc_per_node, device_group, device_mesh)
