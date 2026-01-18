@@ -23,8 +23,6 @@ _lazy_collect = True
 
 _full_determinism = False
 
-_inited = False
-
 _device_group: Optional[List[DeviceGroup]] = None
 
 _device_mesh = None
@@ -54,7 +52,7 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         global_device_mesh: The global default device mesh.
         lazy_collect: Lazy collect all outputs in workers, default `True`.
     """
-    global _mode, _device_group, _seed, _full_determinism, _lazy_collect, _device_mesh, _inited
+    global _mode, _device_group, _seed, _full_determinism, _lazy_collect, _device_mesh
     assert mode in ('local', 'ray')
     _mode = mode
     _full_determinism = full_determinism
@@ -72,6 +70,7 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         framework_util.seed_everything(seed, full_determinism)
     if _mode == 'ray':
         requires('ray')
+        from .ray import RayHelper
         if groups is not None:
             _device_group = groups
         else:
@@ -85,7 +84,6 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         RayHelper.initialize(nproc_per_node=nproc_per_node,
                              ncpu_proc_per_node=ncpu_proc_per_node,
                              device_groups=_device_group)
-        _inited = True
     else:
         if groups is not None:
             _device_group = groups
@@ -97,12 +95,11 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
                     device_type=Platform.get_platform().device_prefix(),
                 )
             ]
-        _inited = True 
 
 
 def is_master():
     if _mode == 'ray':
-        if _inited:
+        if 'TWINKLE_MODE' in os.environ:
             return True
     elif _mode == 'local':
         if Platform.is_master():
@@ -361,6 +358,7 @@ def _get_device_mesh_param(args, kwargs):
 def _prepare_lazy_collect(args, kwargs):
     # if a worker received an actor handle,
     # lazy collect should be false to prevent any outer function receives an object ref
+    from .ray import RayHelper
     if not RayHelper.is_worker():
         return args, kwargs
     for arg in list(args) + list(kwargs.values()):
@@ -415,7 +413,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                         device_group._device_mesh[self.__class__.__name__] = device_mesh
 
                 def __iter__(_self):
-                    if not _inited:
+                    if is_master():
                         _iter = _self.__iter_origin__()
                         assert _iter is not _self
                         _self._iter = _iter
