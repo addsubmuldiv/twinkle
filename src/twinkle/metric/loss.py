@@ -13,6 +13,8 @@ class LossMetric(Metric):
         self.total_count = 0
 
     def accumulate(self, inputs, outputs):
+        if 'loss' not in outputs:
+            return
         loss = outputs["loss"]
 
         self.total_loss += loss.item() if hasattr(loss, "item") else loss

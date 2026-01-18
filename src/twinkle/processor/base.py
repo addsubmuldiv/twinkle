@@ -77,6 +77,9 @@ class InputProcessor:
                 if isinstance(values[0], np.ndarray):
                     values = [torch.from_numpy(v) for v in values]
                     result[key] = InputProcessor._pad_sequence(values, self.padding_map[key], self.padding_side)
+                elif isinstance(values[0], list) and isinstance(values[0][0], (int, float)):
+                    values = [torch.tensor(v) for v in values]
+                    result[key] = InputProcessor._pad_sequence(values, self.padding_map[key], self.padding_side)
                 elif isinstance(values[0], torch.Tensor):
                     result[key] = InputProcessor._pad_sequence(values, self.padding_map[key], self.padding_side)
                 else:

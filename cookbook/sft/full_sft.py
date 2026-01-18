@@ -24,7 +24,7 @@ device_mesh = DeviceMesh(
     mesh_dim_names=('dp', 'fsdp')
 )
 
-twinkle.initialize(mode='ray', groups=device_group, global_device_mesh=device_mesh)
+twinkle.initialize(mode='ray', nproc_per_node=4, groups=device_group, global_device_mesh=device_mesh)
 
 
 def train():

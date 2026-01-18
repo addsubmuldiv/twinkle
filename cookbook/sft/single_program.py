@@ -1,18 +1,13 @@
 from peft import LoraConfig
-
+import twinkle
 from twinkle import get_device_placement, get_logger, is_master
 from twinkle.dataloader import DataLoader
 from twinkle.dataset import Dataset, DatasetMeta
 from twinkle.model import TransformersModel
-import wandb
+
+twinkle.initialize(mode='local')
 
 logger = get_logger()
-
-
-wandb.init(
-    project="my-project",
-    name="experiment-1",
-)
 
 
 def eval(model: TransformersModel):
@@ -23,14 +18,15 @@ def eval(model: TransformersModel):
     dataloader = DataLoader(dataset=dataset, batch_size=8)
     for step, batch in enumerate(dataloader):
         model.forward_only(inputs=batch)
-    metrics = model.calculate_metrics()
+        model.calculate_loss()
+    metrics = model.calculate_metric()
     return metrics
 
 def train():
     dataset = Dataset(dataset_meta=DatasetMeta('ms://modelscope/competition_math'))
     dataset.set_template('Qwen3Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
     dataset.map('CompetitionMathProcessor')
-    dataset.encode(batched=True)
+    dataset.encode(batched=True, load_from_cache_file=False)
     dataloader = DataLoader(dataset=dataset, batch_size=8)
 
     model = TransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
@@ -50,9 +46,8 @@ def train():
         model.clip_grad_and_step()
         if step % 50 == 0:
             metrics = eval(model)
+            logger.info(f'Current is step {step // 16}, metrics: {metrics}')
             metrics['step'] = step
-            if is_master():
-                wandb.log(metrics)
             if loss_metric > metrics['loss']:
                 model.save(f'checkpoint-{step}')
                 loss_metric = metrics['loss']

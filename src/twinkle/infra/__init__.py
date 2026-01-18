@@ -7,7 +7,6 @@ from typing import TypeVar
 
 import numpy as np
 
-from .ray import RayHelper
 from ..utils import DeviceGroup, DeviceMesh, Platform
 from ..utils import requires, framework_util, check_unsafe
 
@@ -26,19 +25,9 @@ _full_determinism = False
 
 _inited = False
 
-_device_group: Optional[List[DeviceGroup]] = [
-    DeviceGroup(
-        name='default',
-        ranks=list(range(Platform.get_world_size())),
-        device_type=Platform.get_platform().device_prefix(),
-    )
-]
+_device_group: Optional[List[DeviceGroup]] = None
 
-_device_mesh = DeviceMesh(
-    device_type=Platform.get_platform().device_prefix(),
-    mesh=np.arange(Platform.get_world_size()),
-    mesh_dim_names=('dp',)
-)
+_device_mesh = None
 
 _remote_components: dict = {}
 
@@ -72,6 +61,12 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
     _lazy_collect = lazy_collect
     if global_device_mesh is not None:
         _device_mesh = global_device_mesh
+    else:
+        _device_mesh = DeviceMesh(
+            device_type=Platform.get_platform().device_prefix(),
+            mesh=np.arange(Platform.get_world_size()),
+            mesh_dim_names=('dp',)
+        )
     if seed is not None:
         _seed = seed
         framework_util.seed_everything(seed, full_determinism)
@@ -79,10 +74,30 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         requires('ray')
         if groups is not None:
             _device_group = groups
+        else:
+            _device_group = [
+                DeviceGroup(
+                    name='default',
+                    ranks=list(range(Platform.get_world_size())),
+                    device_type=Platform.get_platform().device_prefix(),
+                )
+            ]
         RayHelper.initialize(nproc_per_node=nproc_per_node,
                              ncpu_proc_per_node=ncpu_proc_per_node,
                              device_groups=_device_group)
         _inited = True
+    else:
+        if groups is not None:
+            _device_group = groups
+        else:
+            _device_group = [
+                DeviceGroup(
+                    name='default',
+                    ranks=list(range(Platform.get_world_size())),
+                    device_type=Platform.get_platform().device_prefix(),
+                )
+            ]
+        _inited = True 
 
 
 def is_master():
@@ -385,36 +400,46 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                 caller_file = frame.f_code.co_filename.replace(os.sep, '_').replace('.', '_')
                 caller_line = frame.f_lineno
                 instance_id = kwargs.pop('instance_id', '') + f"{caller_file}_{caller_line}"
-                remote_group = kwargs.pop('remote_group', None)
+                remote_group = kwargs.get('remote_group')
                 check_unsafe(*args, **kwargs)
 
                 device_mesh = _get_device_mesh_param(args, kwargs)
-                if remote_group and device_mesh_name:
+                if device_mesh_name:
                     # If it's a remote component
                     if device_mesh is None:
                         device_mesh = _device_mesh
                         kwargs[device_mesh_name] = _device_mesh
 
-                    device_group = [dg for dg in _device_group if dg.name == remote_group][0]
-                    device_group._device_mesh[self.__class__.__name__] = device_mesh
+                    if _device_group and remote_group:
+                        device_group = [dg for dg in _device_group if dg.name == remote_group][0]
+                        device_group._device_mesh[self.__class__.__name__] = device_mesh
 
                 def __iter__(_self):
-                    _iter = _self.__iter_origin__()
-                    assert _iter is not _self
-                    _self._iter = _iter
+                    if not _inited:
+                        _iter = _self.__iter_origin__()
+                        assert _iter is not _self
+                        _self._iter = _iter
+                    else:
+                        breakpoint()
+                        return _self.__iter_origin__()
 
                 def __next__(_self):
-                    return next(_self._iter)
+                    try:
+                        return next(_self._iter)
+                    except:
+                        breakpoint()
 
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
                     # remote_group is None when it's worker and remote_group not passed through arguments
                     # Seed when a remote class is created.
-                    framework_util.seed_everything(int(os.environ['TWINKLE_SEED']),
-                                                    bool(int(os.environ['TWINKLE_FULL_DETERMINISM'])))
+                    seed = int(os.environ.get('TWINKLE_SEED', _seed))
+                    determinism = int(os.environ.get('TWINKLE_FULL_DETERMINISM', int(_full_determinism)))
+                    framework_util.seed_everything(seed, bool(determinism))
                     if not device_mesh_name:
                         args = [arg for arg in args if not isinstance(arg, DeviceMesh)]
                         kwargs = {key: value for key, value in kwargs.items() if not isinstance(value, DeviceMesh)}
                     args, kwargs = _prepare_lazy_collect(args, kwargs)
+                    kwargs.pop('remote_group', None)
                     init_method(self, *args, **kwargs)
                 else:
                     if hasattr(cls, '__iter__'):
@@ -492,10 +517,11 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
             elif _mode == 'ray':
                 check_unsafe(*args, **kwargs)
                 if not hasattr(self, '_actors'):
+                    from .ray import RayHelper
+                    args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
                     return func(self, *args, **kwargs)
                 else:
                     from .ray import RayHelper
-                    args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
                     _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), dispatch,
                                                        execute, device_mesh, args, kwargs)
                     result = RayHelper.execute_all_async(func.__name__, _workers_and_args)

@@ -134,7 +134,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             assert len(self.optimizer_group) == 1
             optimizer = self.optimizer_group[_default_adapter_name].optimizer
             if optimizer is None:
-                optimizer = AdamW(self._get_trainable_parameters(_default_adapter_name).values(), lr=1e-5)
+                optimizer = AdamW(self._create_param_group(_default_adapter_name, 1e-5, 0.01), lr=1e-5)
                 self.optimizer_group[_default_adapter_name].optimizer = optimizer
             self.model, optimizer = self.strategy.wrap_model(self.model, optimizer)
             self.optimizer_group[_default_adapter_name].optimizer = optimizer
@@ -356,13 +356,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         optimizer_grouped_parameters = [
             {
                 "params": [
-                    p for n, p in params if (n in decay_parameters and p.requires_grad)
+                    p for n, p in params.items() if (n in decay_parameters and p.requires_grad)
                 ],
                 "weight_decay": weight_decay, 'lr': lr
             },
             {
                 "params": [
-                    p for n, p in params if (n not in decay_parameters and p.requires_grad)
+                    p for n, p in params.items() if (n not in decay_parameters and p.requires_grad)
                 ],
                 "weight_decay": 0.0, 'lr': lr
             },
@@ -714,10 +714,14 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         else:
             config = {}
         config = {key: str(value) for key, value in config.items() if value is not None}
-        expr += (f'Adapter config:\n'
-                 f'{json.dumps(config, indent=2, ensure_ascii=False)}\n'
-                 f'Optimizer: {optimizer_config.optimizer.__class__.__name__}\n'
-                 f'Learning rate: {optimizer_config.optimizer.defaults.get("lr", "No default lr")}\n'
-                 f'Lr scheduler: {optimizer_config.lr_scheduler.__class__.__name__}\n'
-                 f'Gradient accumulation steps: {optimizer_config.gradient_accumulation_steps}\n')
+        if optimizer_config.optimizer is not None:
+            expr += (f'Adapter config:\n'
+                    f'{json.dumps(config, indent=2, ensure_ascii=False)}\n'
+                    f'Optimizer: {optimizer_config.optimizer.__class__.__name__}\n'
+                    f'Learning rate: {optimizer_config.optimizer.defaults.get("lr", "No default lr")}\n'
+                    f'Lr scheduler: {optimizer_config.lr_scheduler.__class__.__name__}\n'
+                    f'Gradient accumulation steps: {optimizer_config.gradient_accumulation_steps}\n')
+        else:
+            expr += (f'Adapter config:\n'
+                    f'{json.dumps(config, indent=2, ensure_ascii=False)}\n')
         return expr

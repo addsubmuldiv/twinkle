@@ -16,7 +16,7 @@ class Template:
     def __init__(self,
                  model_id: str,
                  use_chat_template: bool = True,
-                 max_length: Optional[int] = 2048,
+                 max_length: Optional[int] = 8192,
                  truncation_strategy: Literal['raise', 'left', 'right', 'split'] = 'raise',
                  default_system: Optional[str] = None,
                  **kwargs):
@@ -32,7 +32,7 @@ class Template:
         ]
         self.post_pipeline = [
             self._check_max_length, # Check and split input_features
-            self._add_default_system, # Add useful fields
+            self._add_attention_fields, # Add useful fields
             self._roll_labels, # roll labels
         ]
 
@@ -44,7 +44,7 @@ class Template:
         outputs = self.tokenizer.apply_chat_template(conversation=dummy_inputs,
                                                      return_assistant_tokens_mask=True, return_dict=True)
         assistant_masks = outputs['assistant_masks']
-        self._template_support_assistant_tokens_mask = not all(np.array(assistant_masks).flatten())
+        self._template_support_assistant_tokens_mask = (0 < np.array(assistant_masks).sum() < len(assistant_masks))
 
     def _invoke_pre_pipeline(self, trajectories: List[Trajectory]) -> List[Trajectory]:
         current = trajectories
@@ -160,9 +160,9 @@ class Template:
         trajectories = self._invoke_pre_pipeline(trajectories)
         for trajectory in trajectories:
             output.append(self.encode(trajectory))
+        output = self._invoke_post_pipeline(output)
         if _transfer:
             output = self.map_row_to_col(output)
-        output = self._invoke_post_pipeline(output)
         return output
 
     def check(self, trajectory: Trajectory) -> Optional[Trajectory]:

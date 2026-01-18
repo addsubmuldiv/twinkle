@@ -33,6 +33,7 @@ class HubOperation:
         if source_type == 'hf' and os.environ.get('TWINKLE_FORBID_HF', '0') != '0':
             # Preventing from hang
             raise ValueError(f'Using hf as hub backend is not supported.')
+        return source_type
     
     @staticmethod
     def remove_source_type(resource_name: str):
@@ -164,8 +165,7 @@ class HubOperation:
         elif cls.source_type(dataset_id) == 'ms':
             return MSHub.load_dataset(cls.remove_source_type(dataset_id), subset_name, split, streaming, revision)
         else:
-            import datasets
-            datasets.load_dataset()
+            raise NotImplementedError()
 
     @classmethod
     def download_model(cls,
