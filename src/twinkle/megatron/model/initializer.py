@@ -249,14 +249,8 @@ class MegatronModelInitializer:
                 qk_layernorm=qk_layernorm,
                 multi_latent_attention=multi_latent_attention,
             )
-        except Exception:
-            # Fallback to local spec without TE
-            return get_gpt_layer_local_spec(
-                num_experts=num_experts,
-                moe_grouped_gemm=moe_grouped_gemm,
-                qk_layernorm=qk_layernorm,
-                multi_latent_attention=multi_latent_attention,
-            )
+        except (ImportError, AttributeError):
+            raise RuntimeError("TransformerEngine is not installed or not compatible with this version of Megatron-Core.")
 
     def load_from_hf(
         self,

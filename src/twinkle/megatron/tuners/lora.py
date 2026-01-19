@@ -639,7 +639,4 @@ def dispatch_megatron(
 
 
 # Register dispatch function with PEFT
-try:
-    model.dispatch_megatron = dispatch_megatron
-except Exception:
-    pass
+model.dispatch_megatron = dispatch_megatron

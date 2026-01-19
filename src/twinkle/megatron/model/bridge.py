@@ -423,7 +423,7 @@ class TwinkleGPTBridge:
                 self.ep_group = mpu.get_expert_model_parallel_group()
                 self.etp_rank = mpu.get_expert_tensor_parallel_rank()
                 self.etp_group = mpu.get_expert_tensor_parallel_group()
-            except:
+            except (AttributeError, AssertionError):
                 self.ep_rank = 0
                 self.ep_group = None
                 self.etp_rank = 0
@@ -1927,13 +1927,8 @@ class TwinkleBridgeInitializer:
                 moe_grouped_gemm=moe_grouped_gemm,
                 qk_layernorm=mg_config_dict.get('qk_layernorm', False),
             )
-        except Exception:
-            from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_local_spec
-            layer_spec = get_gpt_layer_local_spec(
-                num_experts=mg_config_dict.get('num_experts'),
-                moe_grouped_gemm=moe_grouped_gemm,
-                qk_layernorm=mg_config_dict.get('qk_layernorm', False),
-            )
+        except (ImportError, AttributeError):
+            raise RuntimeError("TransformerEngine is not installed or not compatible with this version of Megatron-Core.")
 
         # Create model
         max_seq_length = getattr(hf_config, 'max_position_embeddings', 4096)
