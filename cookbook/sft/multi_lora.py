@@ -30,7 +30,7 @@ device_mesh = DeviceMesh(
 )
 
 
-twinkle.initialize(mode='ray', nproc_per_node=4, groups=device_group, global_device_mesh=device_mesh, lazy_collect=False)
+twinkle.initialize(mode='local', nproc_per_node=4, groups=device_group, global_device_mesh=device_mesh, lazy_collect=False)
 
 
 def train():
