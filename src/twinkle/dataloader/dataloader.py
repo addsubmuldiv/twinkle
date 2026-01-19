@@ -70,8 +70,12 @@ class DataLoader:
         _iter = self.dataloader.__iter__()
         from torch.utils.data import IterableDataset
         if isinstance(self.dataset, IterableDataset):
-            from .device_mesh_fetcher import _IterableDatasetFetcher
-            _iter._dataset_fetcher = _IterableDatasetFetcher(_iter._dataset_fetcher, self.batch_size, self.device_mesh)
+            from .device_mesh_fetcher import DeviceMeshIterableFetcher
+            _iter._dataset_fetcher = DeviceMeshIterableFetcher(_iter._dataset_fetcher.dataset,
+                                                               _iter._dataset_fetcher.auto_collation,
+                                                               _iter._dataset_fetcher.collate_fn,
+                                                               _iter._dataset_fetcher.drop_last,
+                                                               self.batch_size, self.device_mesh)
         return _iter
 
     def _repeat_sample_and_shard(self):

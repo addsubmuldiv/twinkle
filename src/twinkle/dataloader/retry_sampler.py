@@ -27,7 +27,7 @@ class RetrySampler(Sampler):
             for _ in range(self.max_retries):
                 try:
                     if isinstance(self.dataset, IterableDataset):
-                        data = next(self._data_iter)
+                        data = -1 # any value
                     else:
                         # Skip None values and raises
                         data = self.dataset[idx]
@@ -35,7 +35,6 @@ class RetrySampler(Sampler):
                         continue
                     yield idx
                     total += 1
-                    print(total, flush=True)
                     break
                 except Exception: # noqa
                     continue
