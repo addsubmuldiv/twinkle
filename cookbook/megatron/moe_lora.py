@@ -27,7 +27,7 @@ from twinkle.dataset import Dataset, DatasetMeta
 from twinkle.loss import MegatronCrossEntropyLoss
 from twinkle.model import MegatronModel
 from twinkle.processor import InputProcessor
-
+GAS = 16 # gradient accumulation steps
 # Parse arguments first to determine mode
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode',
@@ -197,7 +197,7 @@ def train():
     adapter_name = 'lora'
     model.add_adapter_to_model(adapter_name,
                                lora_config,
-                               gradient_accumulation_steps=16)
+                               gradient_accumulation_steps=GAS)
     model.set_template('Qwen3Template', adapter_name=adapter_name)
     model.set_processor(InputProcessor,
                         padding_side='right',
@@ -212,19 +212,19 @@ def train():
     for step, batch in enumerate(dataloader):
         output = model.forward_backward(inputs=batch,
                                         adapter_name=adapter_name)
-        if step % 16 == 0:
-            logger.info(f'Step {step // 16}, loss: {output}')
+        if step % GAS == 0:
+            logger.info(f'Step {step // GAS}, loss: {output}')
         model.clip_grad_norm(1.0, adapter_name=adapter_name)
         model.step(adapter_name=adapter_name)
         model.zero_grad(adapter_name=adapter_name)
         model.lr_step(adapter_name=adapter_name)
-        if step > 0 and step % 100 == 0:
+        if step > 0 and step % (100 * GAS) == 0:
             model.save('./output/megatron_moe_lora', adapter_name=adapter_name)
         # Early stop for testing
-        if args.max_steps and step >= args.max_steps * 16:
+        if args.max_steps and step >= args.max_steps * GAS:
             logger.info(f'Reached max_steps ({args.max_steps}), stopping.')
             break
-
+    model.save('./output/megatron_moe_lora', adapter_name=adapter_name)
     logger.info('Training completed!')
 
 
