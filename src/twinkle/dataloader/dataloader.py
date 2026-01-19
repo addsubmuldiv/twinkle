@@ -67,7 +67,11 @@ class DataLoader:
             self._repeat_sample_and_shard()
             self.dataloader.__initialized = True
 
-        return self.dataloader.__iter__()
+        _iter = self.dataloader.__iter__()
+        from torch.utils.data import IterableDataset
+        if isinstance(self.dataset, IterableDataset):
+            from .device_mesh_fetcher import _IterableDatasetFetcher
+            _iter._dataset_fetcher = _IterableDatasetFetcher(_iter._dataset_fetcher, self.batch_size, self.device_mesh)
 
     def _repeat_sample_and_shard(self):
         if self.dataloader.batch_sampler is not None and hasattr(self.dataloader.batch_sampler, 'sampler'):
@@ -75,8 +79,3 @@ class DataLoader:
             self.dataloader.batch_sampler = DeviceMeshSampler(self.dataloader.batch_sampler, self.device_mesh)
         elif self.dataloader.sampler is not None:
             self.dataloader.sampler = RetrySampler(self.dataloader.sampler, self.dataset, max_retries=self.max_retries)
-
-        from torch.utils.data import IterableDataset
-        if isinstance(self.dataset, IterableDataset):
-            from .device_mesh_fetcher import _IterableDatasetFetcher
-            self.dataloader._dataset_fetcher = _IterableDatasetFetcher(self.dataloader._dataset_fetcher, self.batch_size, self.device_mesh)
