@@ -7,6 +7,7 @@ from twinkle import remote_class
 from twinkle.dataset import Dataset
 from .retry_sampler import RetrySampler
 from .device_mesh_sampler import DeviceMeshSampler
+from .device_mesh_fetcher import DeviceMeshIterableFetcher
 
 
 @remote_class()
@@ -57,20 +58,19 @@ class DataLoader:
 
     @remote_function(collect='flatten')
     def __iter__(self):
-        from torch.utils.data import DataLoader as TorchDataLoader
+        from torch.utils.data import DataLoader as TorchDataLoader, IterableDataset
         if self.dataloader is None:
             if 'collate_fn' not in self.dataloader_params:
                 self.dataloader_params['collate_fn'] = lambda x: x
             self.dataloader = TorchDataLoader(self.dataset, **self.dataloader_params)
 
-            self.dataloader.__initialized = False
-            self._repeat_sample_and_shard()
-            self.dataloader.__initialized = True
+            if not isinstance(self.dataset, IterableDataset):
+                self.dataloader.__initialized = False
+                self._repeat_sample_and_shard()
+                self.dataloader.__initialized = True
 
         _iter = self.dataloader.__iter__()
-        from torch.utils.data import IterableDataset
         if isinstance(self.dataset, IterableDataset):
-            from .device_mesh_fetcher import DeviceMeshIterableFetcher
             _iter._dataset_fetcher = DeviceMeshIterableFetcher(_iter._dataset_fetcher.dataset,
                                                                _iter._dataset_fetcher.auto_collation,
                                                                _iter._dataset_fetcher.collate_fn,

@@ -18,19 +18,15 @@ class RetrySampler(Sampler):
         self.original_sampler = original_sampler
         self.dataset = dataset
         self.max_retries = max_retries
-        if isinstance(self.dataset, IterableDataset):
-            self._data_iter = iter(self.dataset)
 
     def __iter__(self):
         total = 0
         for idx in self.original_sampler:
             for _ in range(self.max_retries):
                 try:
-                    if isinstance(self.dataset, IterableDataset):
-                        data = -1 # any value
-                    else:
-                        # Skip None values and raises
-                        data = self.dataset[idx]
+                    assert not isinstance(self.dataset, IterableDataset)
+                    # Skip None values and raises
+                    data = self.dataset[idx]
                     if not data:
                         continue
                     yield idx
@@ -41,26 +37,25 @@ class RetrySampler(Sampler):
             else:
                 raise StopIteration(f'Max retries exceeded: {self.max_retries}, no valid data found.')
 
-        if hasattr(self.dataset, '__len__'):
-            origin_dataset_len = len(self.dataset)
-            if total >= origin_dataset_len:
-                return
+        origin_dataset_len = len(self.dataset)
+        if total >= origin_dataset_len:
+            return
 
-            for idx in np.random.RandomState().permutation(len(self.dataset)).tolist():
-                if total >= origin_dataset_len:
-                    break
-                for _ in range(self.max_retries):
-                    try:
-                        # Skip None values and raises
-                        data = self.dataset[idx]
-                        if not data:
-                            continue
-                        yield idx
-                        total += 1
-                    except Exception: # noqa
+        for idx in np.random.RandomState().permutation(len(self.dataset)).tolist():
+            if total >= origin_dataset_len:
+                break
+            for _ in range(self.max_retries):
+                try:
+                    # Skip None values and raises
+                    data = self.dataset[idx]
+                    if not data:
                         continue
-                else:
-                    raise ValueError(f'Max retries exceeded: {self.max_retries}, no valid data found.')
+                    yield idx
+                    total += 1
+                except Exception: # noqa
+                    continue
+            else:
+                raise ValueError(f'Max retries exceeded: {self.max_retries}, no valid data found.')
 
     def __len__(self):
         return len(self.dataset)
