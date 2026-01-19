@@ -12,7 +12,7 @@ class _IterableDatasetFetcher(_BaseDatasetFetcher):
     def fetch(self, possibly_batched_index):
         batch = self._base_dataset_fetcher.fetch(list(range(self.batch_size)))
         if not self.device_mesh:
-            yield batch
+            return batch
         else:
             data = batch[self.device_mesh.get_slice(len(batch))]
-            yield data
+            return data

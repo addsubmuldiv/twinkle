@@ -35,11 +35,12 @@ class RetrySampler(Sampler):
                         continue
                     yield idx
                     total += 1
+                    print(total, flush=True)
                     break
                 except Exception: # noqa
                     continue
             else:
-                raise ValueError(f'Max retries exceeded: {self.max_retries}, no valid data found.')
+                raise StopIteration(f'Max retries exceeded: {self.max_retries}, no valid data found.')
 
         if hasattr(self.dataset, '__len__'):
             origin_dataset_len = len(self.dataset)

@@ -72,6 +72,7 @@ class DataLoader:
         if isinstance(self.dataset, IterableDataset):
             from .device_mesh_fetcher import _IterableDatasetFetcher
             _iter._dataset_fetcher = _IterableDatasetFetcher(_iter._dataset_fetcher, self.batch_size, self.device_mesh)
+        return _iter
 
     def _repeat_sample_and_shard(self):
         if self.dataloader.batch_sampler is not None and hasattr(self.dataloader.batch_sampler, 'sampler'):
