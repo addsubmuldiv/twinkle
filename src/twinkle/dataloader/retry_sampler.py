@@ -1,6 +1,6 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import numpy as np
-from torch.utils.data import Sampler
+from torch.utils.data import Sampler, IterableDataset
 
 from twinkle.dataset import Dataset
 
@@ -18,14 +18,19 @@ class RetrySampler(Sampler):
         self.original_sampler = original_sampler
         self.dataset = dataset
         self.max_retries = max_retries
+        if isinstance(self.dataset, IterableDataset):
+            self._data_iter = iter(self.dataset)
 
     def __iter__(self):
         total = 0
         for idx in self.original_sampler:
             for _ in range(self.max_retries):
                 try:
-                    # Skip None values and raises
-                    data = self.dataset[idx]
+                    if isinstance(self.dataset, IterableDataset):
+                        data = next(self._data_iter)
+                    else:
+                        # Skip None values and raises
+                        data = self.dataset[idx]
                     if not data:
                         continue
                     yield idx
