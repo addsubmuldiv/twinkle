@@ -11,7 +11,7 @@ logger = get_logger()
 
 
 def eval(model: TransformersModel):
-    dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition'))
+    dataset = IterableDataset(dataset_meta=DatasetMeta('ms://swift/self-cognition'))
     dataset.set_template('Qwen3Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct', max_length=512)
     dataset.map('SelfCognitionProcessor')
     dataset.encode(batched=True)
@@ -23,7 +23,7 @@ def eval(model: TransformersModel):
     return metrics
 
 def train():
-    dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition'))
+    dataset = IterableDataset(dataset_meta=DatasetMeta('ms://swift/self-cognition'))
     dataset.set_template('Qwen3Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct', max_length=512)
     dataset.map('SelfCognitionProcessor')
     dataset.encode(batched=True)
