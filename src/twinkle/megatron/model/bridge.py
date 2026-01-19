@@ -905,8 +905,8 @@ class TwinkleGPTBridge:
                         experts_module.weight1.data.copy_(fc1_stacked)
                     else:
                         # Handle TP split
-                        tp_rank = self.tp_rank
-                        tp_size = self.tp_size
+                        tp_rank = self.etp_rank
+                        tp_size = self.etp_size
                         if tp_size > 1:
                             # Split along last dim for weight1
                             chunk_size = fc1_stacked.shape[1] // tp_size
@@ -921,8 +921,8 @@ class TwinkleGPTBridge:
                         experts_module.weight2.data.copy_(fc2_stacked)
                     else:
                         # Handle TP split
-                        tp_rank = self.tp_rank
-                        tp_size = self.tp_size
+                        tp_rank = self.etp_rank
+                        tp_size = self.etp_size
                         if tp_size > 1:
                             # Split along first dim for weight2
                             chunk_size = fc2_stacked.shape[0] // tp_size

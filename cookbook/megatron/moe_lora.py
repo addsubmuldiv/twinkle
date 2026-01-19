@@ -219,8 +219,8 @@ def cleanup():
         from megatron.core import parallel_state as mpu
         if mpu.is_initialized():
             mpu.destroy_model_parallel()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Error during cleanup: {e}")
     if dist.is_initialized():
         dist.destroy_process_group()
 
