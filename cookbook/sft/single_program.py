@@ -11,10 +11,11 @@ logger = get_logger()
 
 
 def eval(model: TransformersModel):
-    dataset = PackingDataset(dataset_meta=DatasetMeta('ms://modelscope/competition_math', data_slice=range(100)))
+    dataset = PackingDataset(dataset_meta=DatasetMeta('ms://swift/self-cognition', data_slice=range(1000)))
     dataset.set_template('Qwen3Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
-    dataset.map('CompetitionMathProcessor')
+    dataset.map('SelfCognitionProcessor')
     dataset.encode(batched=True)
+    dataset.pack_dataset()
     dataloader = DataLoader(dataset=dataset, batch_size=8)
     for step, batch in enumerate(dataloader):
         model.forward_only(inputs=batch)
@@ -23,10 +24,11 @@ def eval(model: TransformersModel):
     return metrics
 
 def train():
-    dataset = PackingDataset(dataset_meta=DatasetMeta('ms://modelscope/competition_math'))
+    dataset = PackingDataset(dataset_meta=DatasetMeta('ms://swift/self-cognition', data_slice=range(5000)))
     dataset.set_template('Qwen3Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
-    dataset.map('CompetitionMathProcessor')
+    dataset.map('SelfCognitionProcessor')
     dataset.encode(batched=True)
+    dataset.pack_dataset()
     dataloader = DataLoader(dataset=dataset, batch_size=8)
 
     model = TransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')

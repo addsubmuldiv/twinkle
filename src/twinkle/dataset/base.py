@@ -117,7 +117,7 @@ class Dataset(TorchDataset):
                 for idx in dataset_meta.data_slice:
                     if idx >= _data_len:
                         idx = idx % _data_len
-                        yield idx
+                    yield idx
 
             dataset = dataset.select(_iter())
         return dataset
