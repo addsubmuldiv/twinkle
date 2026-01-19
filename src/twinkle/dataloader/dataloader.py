@@ -74,3 +74,7 @@ class DataLoader:
             self.dataloader.batch_sampler = DeviceMeshSampler(self.dataloader.batch_sampler, self.device_mesh)
         elif self.dataloader.sampler is not None:
             self.dataloader.sampler = RetrySampler(self.dataloader.sampler, self.dataset, max_retries=self.max_retries)
+        
+        if isinstance(self.dataset, IterableDataset):
+            from 
+            self.dataloader._dataset_fetcher = IterableDatasetFetcher(self.dataloader._dataset_fetcher)
