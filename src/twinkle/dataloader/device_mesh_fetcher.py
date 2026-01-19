@@ -39,5 +39,9 @@ class DeviceMeshIterableFetcher(_BaseDatasetFetcher):
             data = next(self.dataset_iter)
 
         if self.device_mesh:
-            data = data[self.device_mesh.get_slice(self.batch_size)]
+            _data = data[self.device_mesh.get_slice(self.batch_size)]
+        if not _data:
+            data = data[self.device_mesh.get_slice(self.batch_size, 0)]
+        else:
+            data = _data
         return self.collate_fn(data)
