@@ -490,7 +490,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         with torch.no_grad():
             return self.forward(inputs=inputs, **kwargs)
 
-    @remote_function(collect='avg')
+    @remote_function(collect='mean')
     def calculate_loss(self, **kwargs):
         """Calculate loss from forward outputs.
 
@@ -535,7 +535,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         loss_value.backward()
         optimizer_config.cur_step += 1
 
-    @remote_function(dispatch='all', collect='avg', sync=True)
+    @remote_function(dispatch='all', collect='mean', sync=True)
     def forward_backward(self,
                          *,
                          inputs: Union[InputFeature, List[InputFeature],

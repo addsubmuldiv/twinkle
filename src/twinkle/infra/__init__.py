@@ -525,38 +525,27 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                     from ._ray import RayHelper
                     _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), dispatch,
                                                        execute, device_mesh, args, kwargs)
-                    
-                    # Use sync execution for methods requiring NCCL synchronization
-                    if sync:
-                        result = RayHelper.execute_all_sync(func.__name__, _workers_and_args)
-                        return _collect_func(collect, result)
-                    else:
-                        result = RayHelper.execute_all_async(func.__name__, _workers_and_args)
-                        result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
-                        lazy_collect = _lazy_collect
-                        if hasattr(self, '_lazy_collect'):
-                            lazy_collect = self._lazy_collect
-                        result = result_func if lazy_collect else result_func()
-                        if func.__name__ == '__iter__':
-                            return self
-                        if func.__name__ == '__next__':
-                            import ray
-                            for _res in result:
-                                # raise when any worker raises StopIteration
-                                resolved_results = ray.get(result)
-                            for _res in resolved_results:
-                                stop = _res[1]
-                                if stop:
-                                    raise StopIteration()
-                                stop = ray.get(_res[1])
-                                if stop:
-                                    raise StopIteration()
-                            result = [_res[0] for _res in result]
-                            result_func._futures = result
-                        if hasattr(self, '_lazy_collect'):
-                            lazy_collect = self._lazy_collect
-                        result = result_func if lazy_collect else result_func()
-                        return result
+                    execute_method = RayHelper.execute_all_async if not sync else RayHelper.execute_all_sync
+                    result = execute_method(func.__name__, _workers_and_args)
+                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
+                    lazy_collect = _lazy_collect
+                    if func.__name__ == '__iter__':
+                        return self
+
+                    if func.__name__ == '__next__':
+                        import ray
+                        for _res in result:
+                            # raise when any worker raises StopIteration
+                            stop = ray.get(_res[1])
+                            if stop:
+                                raise StopIteration()
+                        result = [_res[0] for _res in result]
+                        result_func._futures = result
+
+                    if hasattr(self, '_lazy_collect'):
+                        lazy_collect = self._lazy_collect
+                    result = result_func if lazy_collect else result_func()
+                    return result
             else:
                 raise NotImplementedError(f'Unsupported mode {_mode}')
 
