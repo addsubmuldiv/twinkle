@@ -543,6 +543,11 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                             import ray
                             for _res in result:
                                 # raise when any worker raises StopIteration
+                                resolved_results = ray.get(result)
+                            for _res in resolved_results:
+                                stop = _res[1]
+                                if stop:
+                                    raise StopIteration()
                                 stop = ray.get(_res[1])
                                 if stop:
                                     raise StopIteration()
