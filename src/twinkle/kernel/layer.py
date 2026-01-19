@@ -1,5 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-"""Kernel module layer - 层级别替换（HF kernels 集成）"""
+"""Kernel module layer - Layer-level replacement with HF kernels integration."""
 from logging import getLogger
 from pathlib import Path
 from typing import Optional, Union, Any
@@ -27,17 +27,17 @@ def register_layer_kernel(
     device: DeviceType = "cuda",
     mode: Optional[ModeType] = None,
 ) -> None:
-    """注册层级别 kernel
+    """Register a layer kernel with the registry.
 
     Args:
-        kernel_name: Kernel 名称（相同 kernel_name 可以注册多个 mode）
-        repo_id: Hub 仓库 ID
-        repo_path: 本地仓库路径
-        package_name: 本仓包名（使用 repo_path 时必需）
-        layer_name: 层名称（默认为 kernel_name）
-        version: 版本约束
-        device: 设备类型
-        mode: 模式（train/inference/compile），None 表示 FALLBACK
+        kernel_name: Unique kernel name (can register multiple modes with same name)
+        repo_id: Hub repository ID
+        repo_path: Local repository path
+        package_name: Package name (required when using repo_path)
+        layer_name: Layer name (defaults to kernel_name)
+        version: Version constraint
+        device: Device type
+        mode: Mode (train/inference/compile), None means FALLBACK
     """
     if not is_kernels_available():
         logger.warning(f"HF kernels package not available. Skipping registration for kernel: {kernel_name}")
@@ -72,7 +72,7 @@ def register_layer_kernel(
 
 
 def _to_hf_mode(mode: Optional[ModeType]) -> Any:
-    """将 Twinkle mode 转换为 HF kernels Mode"""
+    """Convert Twinkle mode to HF kernels Mode."""
     if mode is None:
         from kernels import Mode
         return Mode.FALLBACK
@@ -80,12 +80,11 @@ def _to_hf_mode(mode: Optional[ModeType]) -> Any:
 
 
 def apply_layer_kernel(model, mode: ModeType = "inference", device: Optional[DeviceType] = None) -> Any:
-    """应用层级别 kernel 到模型"""
+    """Apply layer kernels to model."""
     if not is_kernels_enabled():
         logger.debug("Kernels not enabled, returning original model")
         return model
 
-    # 同步到 HF kernels
     get_global_layer_registry().sync_to_hf_kernels()
 
     if device is None:
@@ -103,7 +102,7 @@ def apply_layer_kernel(model, mode: ModeType = "inference", device: Optional[Dev
 
 
 def register_layer_batch(mapping: dict, default_device: DeviceType = "cuda") -> None:
-    """批量注册层级别 kernel"""
+    """Batch register layer kernels."""
     for kernel_name, spec in mapping.items():
         device = spec.pop("device", default_device)
         register_layer_kernel(kernel_name=kernel_name, device=device, **spec)

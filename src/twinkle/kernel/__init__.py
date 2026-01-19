@@ -1,5 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-"""Twinkle Kernel Module - Kernel 编排层"""
+"""Twinkle Kernel Module - Kernel orchestration layer."""
 from typing import Optional, Union, Any, Dict
 from logging import getLogger
 
@@ -24,11 +24,10 @@ __all__ = [
 
 
 def kernelize_model(model, mode: ModeType = "inference", device: Optional[DeviceType] = None) -> Any:
-    """Kernelize 模型（主入口）"""
-    # 1. 应用层级别 kernel
+    """Apply kernels to model (main entry point)."""
     model = apply_layer_kernel(model, mode=mode, device=device)
 
-    # TODO: 2. 应用函数级别 kernel (Monkey Patch)
+    # TODO: apply function-level kernel (Monkey Patch)
     # from .function import apply_function_kernel
     # model = apply_function_kernel(model, mode=mode, device=device)
 
@@ -40,7 +39,7 @@ def register_external_layer(layer_class: type, kernel_name: str) -> None:
 
 
 def register_kernels(config: Dict[str, Dict[str, Any]]) -> None:
-    """批量注册 kernels（框架集成 API）"""
+    """Batch register kernels (framework integration API)."""
     if "layers" in config:
         for kernel_name, spec in config["layers"].items():
             device = spec.pop("device", "cuda")
