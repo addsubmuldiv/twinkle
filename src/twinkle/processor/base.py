@@ -15,6 +15,7 @@ class InputProcessor:
         'labels': -100,
         'loss_scale': 0.0,
         'position_ids': -1,
+        'length': -1,
     }
 
     def __init__(self, device_mesh: Optional[DeviceMesh] = None, padding_free: bool = False, **kwargs):
