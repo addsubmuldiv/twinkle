@@ -14,11 +14,6 @@ from twinkle.processor import InputProcessor
 
 logger = get_logger()
 
-# import debugpy
-# debugpy.listen(5678)
-# debugpy.wait_for_client()
-
-
 # Runtime defaults for local NPU training.
 os.environ.setdefault('TRUST_REMOTE_CODE', '1')
 os.environ.setdefault('TWINKLE_SEED', '42')
