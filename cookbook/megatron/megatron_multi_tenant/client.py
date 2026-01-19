@@ -2,7 +2,9 @@
 Multi-Tenant Megatron LoRA Training - Client Example.
 
 Simple training loop using remote multi-tenant server.
-Inspired by tinker-cookbook's minimal training scripts.
+
+Usage:
+    python client.py --server-url http://localhost:8080
 """
 
 import logging

@@ -591,6 +591,18 @@ class MegatronModel(TwinkleModel, nn.Module):
         if len(microbatch_list) > 1:
             num_microbatches = len(microbatch_list)
 
+        # Helper to convert list/numpy to tensor
+        def ensure_tensor(value):
+            if value is None:
+                return None
+            if isinstance(value, torch.Tensor):
+                return value
+            if isinstance(value, list):
+                return torch.tensor(value)
+            if hasattr(value, '__array__'):  # numpy array
+                return torch.from_numpy(value)
+            return value
+
         # Process each microbatch
         processed_batches = []
         for batch in microbatch_list:
@@ -604,6 +616,12 @@ class MegatronModel(TwinkleModel, nn.Module):
             if processor is not None:
                 batch = processor(batch)
 
+            # Ensure all tensor fields are proper tensors
+            if isinstance(batch, dict):
+                for key in ['input_ids', 'attention_mask', 'labels', 'position_ids']:
+                    if key in batch:
+                        batch[key] = ensure_tensor(batch[key])
+
             processed_batches.append(batch)
 
         # Get first batch for shape info (all batches should have same shape)
@@ -614,10 +632,13 @@ class MegatronModel(TwinkleModel, nn.Module):
         cp_rank = mpu.get_context_parallel_rank() if cp_size > 1 else 0
 
         # Get sequence length and batch size from first batch
-        original_seq_length = first_batch['input_ids'].shape[
-            1] if 'input_ids' in first_batch else 1
-        micro_batch_size = first_batch['input_ids'].shape[
-            0] if 'input_ids' in first_batch else 1
+        input_ids = first_batch.get('input_ids')
+        if input_ids is not None and isinstance(input_ids, torch.Tensor):
+            original_seq_length = input_ids.shape[1] if input_ids.dim() > 1 else input_ids.shape[0]
+            micro_batch_size = input_ids.shape[0] if input_ids.dim() > 1 else 1
+        else:
+            original_seq_length = 1
+            micro_batch_size = 1
 
         # For CP > 1, pad seq_length to be divisible by 2*cp_size
         if cp_size > 1:

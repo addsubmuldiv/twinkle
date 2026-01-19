@@ -2,6 +2,9 @@
 Multi-Tenant Megatron LoRA Training - Server.
 
 Creates a shared base model and provides APIs for multi-tenant training.
+
+Usage:
+    python server.py --model-id Qwen/Qwen2.5-7B --tp 2 --port 8080
 """
 
 import argparse
@@ -149,8 +152,9 @@ class MultiTenantServer:
         self._heartbeat(tenant_id)
         self.model.lr_step(tenant_id)
     
-    def list_tenants(self) -> List[str]:
-        return self.model.list_tenants()
+    def tenant_count(self) -> int:
+        """Get number of active tenants (does not expose tenant IDs for privacy)."""
+        return self.model.tenant_count()
 
 
 # ============ FastAPI App ============
@@ -205,9 +209,10 @@ def create_app(server: MultiTenantServer) -> FastAPI:
         server.lr_step(get_tenant(request))
         return TenantResponse()
     
-    @app.get("/tenants")
-    def tenants():
-        return {"tenants": server.list_tenants()}
+    @app.get("/stats")
+    def stats():
+        """Server statistics (does not expose tenant IDs for privacy)."""
+        return {"tenant_count": server.tenant_count()}
     
     @app.get("/health")
     def health():

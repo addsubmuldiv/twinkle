@@ -2,7 +2,12 @@
 """
 Tenant Manager for multi-tenant LoRA training.
 
-This module provides tenant lifecycle management
+This module provides tenant lifecycle management including:
+- Tenant registration/deregistration
+- LoRA adapter management (via PEFT)
+- Optimizer/scheduler creation
+- Tenant context switching
+
 """
 
 import logging
@@ -263,6 +268,3 @@ class TenantManager:
     def count(self) -> int:
         """Number of tenants (does not expose tenant IDs for privacy)."""
         return len(self._tenants)
-    
-    # Note: list() method intentionally not exposed to clients to prevent
-    # information leakage. Only server-side code should enumerate tenants.

@@ -1,5 +1,6 @@
 # Copyright (c) twinkle authors. All rights reserved.
 """
+[WIP]
 Distributed training utilities for multi-tenant Megatron LoRA.
 
 Core components:
@@ -13,6 +14,15 @@ from .tenant_context import (TenantInfo, generate_tenant_id,
                              get_current_tenant, require_tenant,
                              set_current_tenant, tenant_scope)
 from .tenant_manager import TenantManager, TenantState
+from .clock_cycle_scheduler import (
+    ClockCycleScheduler,
+    ClockCycleTrainingClient,
+    CycleStats,
+    RequestType,
+    TrainingRequest,
+    ModelInterfaceError,
+    validate_model_interface,
+)
 
 __all__ = [
     # Context
@@ -25,7 +35,15 @@ __all__ = [
     # Manager
     'TenantManager',
     'TenantState',
-    # DDP
+    # DDP (Twinkle mode)
     'MultiTenantLoRADDP',
     'TenantDDPState',
+    # Clock Cycle Scheduler
+    'ClockCycleScheduler',
+    'ClockCycleTrainingClient',
+    'CycleStats',
+    'RequestType',
+    'TrainingRequest',
+    'ModelInterfaceError',
+    'validate_model_interface',
 ]
