@@ -1,5 +1,7 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import re
+import os
+from contextlib import contextmanager
 from typing import Dict, Any, List, Literal
 from typing import Type, Optional, Union
 
@@ -48,17 +50,21 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
 
         self.multi_adapter = MultiAdapter()
         self.model: PreTrainedModel = self.multi_adapter(self.model)
-        import os 
+        with self._no_ddp_context():
+            self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, device_mesh=None)
+            self.model = self.strategy.wrap_model(self.model)
+        self.add_adapter_to_model(MultiLoraTransformersModel.DUMMY_ADAPTER_NAME, LoraConfig(r=1, target_modules='all-linear'))
+        self._inited = True
+
+    @contextmanager
+    def _no_ddp_context(self):
         origin_local_rank = os.environ['LOCAL_RANK']
         origin_world_size = os.environ['WORLD_SIZE']
         os.environ['WORLD_SIZE'] = '1'
         os.environ['LOCAL_RANK'] = '-1'
-        self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, device_mesh=None)
-        self.model = self.strategy.wrap_model(self.model)
+        yield
         os.environ['LOCAL_RANK'] = origin_local_rank
         os.environ['WORLD_SIZE'] = origin_world_size
-        self.add_adapter_to_model(MultiLoraTransformersModel.DUMMY_ADAPTER_NAME, LoraConfig(r=1, target_modules='all-linear'))
-        self._inited = True
 
     def _check_adapter_valid(self, adapter_name: str):
         if self._inited:
