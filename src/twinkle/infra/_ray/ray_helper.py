@@ -236,6 +236,20 @@ class RayHelper:
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
 
         if device_config.device_type.upper() != 'CPU':
+            visible_env = Platform.get_platform(device_config.device_type.upper()).visible_device_env()
+
+            @ray.remote
+            def get_node_visible_env(env_name: str):
+                return os.environ.get(env_name)
+
+            def _map_visible_devices(base_visible: Optional[str], gpu_ranks: List[int]) -> str:
+                if not base_visible:
+                    return ','.join(str(r) for r in gpu_ranks)
+                base_list = [item.strip() for item in base_visible.split(',') if item.strip()]
+                if base_list and max(gpu_ranks) < len(base_list):
+                    return ','.join(base_list[r] for r in gpu_ranks)
+                return ','.join(str(r) for r in gpu_ranks)
+
             for rank, (deploy_pg, gpu) in enumerate(zip(placement_groups, ranks)):
                 deploy_pg: Dict
                 cluster_name = group
@@ -252,12 +266,21 @@ class RayHelper:
                     cluster_name,
                     'WORKER_NAME':
                     worker_name,
-                    Platform.get_platform(device_config.device_type.upper()).visible_device_env():
-                    ','.join([str(r) for r in deploy_pg['gpu_rank']]),
+                    # Platform.get_platform(device_config.device_type.upper()).visible_device_env():
+                    # ','.join([str(r) for r in deploy_pg['gpu_rank']]),
                     'TWINKLE_MODE': 'ray',
                     'TWINKLE_SEED': str(seed),
                     'TWINKLE_FULL_DETERMINISM': str(int(full_determinism)),
                 })
+                base_visible = ray.get(get_node_visible_env.options(
+                    placement_group=deploy_pg['placement_group']).remote(visible_env))
+                if not base_visible:
+                    # Fixes "ASCEND_RT_VISIBLE_DEVICES=8,9,10,11 but still uses 0-3".
+                    base_visible = env_vars.get(visible_env)
+
+                # Map local ranks to physical IDs; avoids binding to wrong cards.
+                env_vars[visible_env] = _map_visible_devices(base_visible, deploy_pg['gpu_rank'])
+                
 
                 env_vars['MASTER_ADDR'] = ip
                 env_vars['MASTER_PORT'] = str(port)
@@ -275,9 +298,13 @@ class RayHelper:
                     runtime_env,
                     'num_cpus':
                     0.01,
-                    'num_gpus':
-                    0.01,
                 }
+                device_type = device_config.device_type.upper()
+                if device_type == 'GPU':
+                    worker_options['num_gpus'] = 0.01
+                else:
+                    # Use custom resource key for non-GPU accelerators (e.g., NPU).
+                    worker_options['resources'] = {device_type: 0.01}
 
                 worker = worker_cls.options(**worker_options).remote(*args, **kwargs)
                 workers.append(worker)

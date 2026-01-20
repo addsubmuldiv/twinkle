@@ -278,7 +278,8 @@ def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first
         if isinstance(result[0], np.ndarray):
             return np.array(flatten)
         return type(result[0])(flatten)
-    elif method == 'mean':
+    elif method in ('avg', 'mean'):
+        # Fixes "Unsupported collect method: mean" by aliasing to avg.
         return np.mean(result)
     elif method == 'sum':
         return np.sum(result)
