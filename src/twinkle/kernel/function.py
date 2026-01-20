@@ -100,7 +100,13 @@ def apply_function_kernel(
     use_fallback: bool = True,
     strict: bool = False,
 ) -> List[str]:
-    """Apply registered function kernels by monkey-patching target modules."""
+    """Apply registered function kernels by monkey-patching target modules.
+    target_module: If specified, only apply kernels targeting this module.
+    device: If specified, only apply kernels matching this device or with no device.
+    mode: If specified, only apply kernels matching this mode or with no mode.
+    use_fallback: Whether to use fallback implementations when mode conditions are not met.
+    strict: If True, raise errors on failures; otherwise log warnings.
+    """
     applied = []
 
     if mode is not None:
@@ -109,6 +115,7 @@ def apply_function_kernel(
         validate_device_type(device)
 
     for spec in get_global_function_registry().list_specs():
+        # Filter by target module and device/mode constraints.
         if target_module is not None and spec.target_module != target_module:
             continue
         if device is not None and spec.device is not None and spec.device != device:
@@ -126,6 +133,7 @@ def apply_function_kernel(
             continue
 
         try:
+            # Import the module that will be monkey-patched.
             module = importlib.import_module(spec.target_module)
         except Exception as exc:
             if strict:
@@ -137,6 +145,7 @@ def apply_function_kernel(
             )
             continue
 
+        # Resolve implementation and capability target for mode checks.
         if spec.func_impl is not None:
             impl = spec.func_impl
             support_target = impl
@@ -149,6 +158,7 @@ def apply_function_kernel(
                 func_name=spec.func_name,
             )
         if mode is not None:
+            # Apply with fallback-aware checks for compile/backward support.
             conditionally_apply_function(
                 func_name=spec.func_name,
                 target=module,
@@ -157,8 +167,10 @@ def apply_function_kernel(
                 mode=mode,
                 use_fallback=use_fallback and not strict,
             )
+            # Skip recording if fallback kept the original function.
             if getattr(module, spec.func_name) is not impl:
                 continue
+        # Final patch (or reapply when no mode gating is used).
         setattr(module, spec.func_name, impl)
         applied.append(f"{spec.target_module}.{spec.func_name}")
 

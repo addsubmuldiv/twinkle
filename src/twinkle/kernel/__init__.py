@@ -6,6 +6,7 @@ from logging import getLogger
 from .base import (
     ModeType,
     DeviceType,
+    is_kernels_enabled,
 )
 from .layer import register_layer_kernel, apply_layer_kernel, register_layer_batch
 from .registry import (
@@ -43,9 +44,9 @@ def kernelize_model(
     """
     model = apply_layer_kernel(model, mode=mode, device=device, use_fallback=use_fallback)
 
-    # TODO: apply function-level kernel (Monkey Patch)
-    # from .function import apply_function_kernel
-    # model = apply_function_kernel(model, mode=mode, device=device)
+    if is_kernels_enabled():
+        from .function import apply_function_kernel
+        apply_function_kernel(device=device, mode=mode, use_fallback=use_fallback)
 
     return model
 
@@ -62,4 +63,17 @@ def register_kernels(config: Dict[str, Dict[str, Any]]) -> None:
             register_layer_kernel(kernel_name=kernel_name, device=device, **spec)
 
     if "functions" in config:
-        logger.info("Function-level kernel registration is not implemented yet.")
+        from .function import register_function_batch
+
+        functions = config["functions"]
+        if isinstance(functions, dict):
+            function_specs = []
+            for func_name, spec in functions.items():
+                if not isinstance(spec, dict):
+                    raise TypeError(f"Function spec for {func_name} must be a dict.")
+                if "func_name" not in spec:
+                    spec["func_name"] = func_name
+                function_specs.append(spec)
+            register_function_batch(function_specs)
+        else:
+            register_function_batch(functions)
