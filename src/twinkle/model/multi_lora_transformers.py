@@ -14,12 +14,15 @@ from twinkle.data_format import InputFeature, Trajectory
 from twinkle.loss import Loss
 from twinkle.patch.multi_adapter import MultiAdapter
 from twinkle.processor import InputProcessor
+from .strategy import AccelerateStrategy
 from .transformers import TransformersModel
 from ..metric import Metric
 
 
 @remote_class()
 class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
+
+    DUMMY_ADAPTER_NAME = '__dummy_adapter__'
 
     def __init__(self, # noqa
                  model_id: Optional[str] = None,
@@ -38,11 +41,15 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
                         ddp_config=ddp_config, 
                         fsdp_config=fsdp_config, 
                         grad_scaler_config=grad_scaler_config, **kwargs)
+
         self.multi_adapter = MultiAdapter()
         self.model: PreTrainedModel = self.multi_adapter(self.model)
+        self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, device_mesh=device_mesh)
+        self.model = self.strategy.wrap_model(self.model)
+        self.add_adapter_to_model(MultiLoraTransformersModel.DUMMY_ADAPTER_NAME, LoraConfig(r=1, target_modules='all'))
 
     def _check_adapter_valid(self, adapter_name: str):
-        assert adapter_name and adapter_name != '__dummy_adapter__' and adapter_name in self.optimizer_group, f'Use a valid adapter_name first, current is: {adapter_name}'
+        assert adapter_name and adapter_name != MultiLoraTransformersModel.DUMMY_ADAPTER_NAME and adapter_name in self.optimizer_group, f'Use a valid adapter_name first, current is: {adapter_name}'
 
     def _activate_adapter(self, adapter_name: str):
         self.multi_adapter.set_current_adapter_name(adapter_name)
