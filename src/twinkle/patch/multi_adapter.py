@@ -7,6 +7,8 @@ from .base import Patch
 
 
 class MultiAdapter(Patch):
+    """Support thread-local loras in one base model, make each user forward and backward with the unique lora name.
+    """
 
     _adapter_var = contextvars.ContextVar('adapter_names', default=None)
 

@@ -40,6 +40,12 @@ class DeviceMesh:
     mesh: np.ndarray
     mesh_dim_names: Optional[tuple[str, ...]] = None
 
+    @staticmethod
+    def from_sizes(data_parallel_size: int,
+                   tensor_model_parallel_size: int,
+                   ) -> "DeviceMesh":
+
+
     def __post_init__(self):
         if not isinstance(self.mesh, np.ndarray):
             self.mesh = np.array(self.mesh)

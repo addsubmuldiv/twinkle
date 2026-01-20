@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Vocab-parallel cross entropy loss for Megatron backend with Tensor Parallelism."""
 import torch
 

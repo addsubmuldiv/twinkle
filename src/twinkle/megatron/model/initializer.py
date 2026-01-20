@@ -1,23 +1,12 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Megatron model initialization from HuggingFace checkpoints."""
 from dataclasses import fields
-from typing import Any, Dict, Optional, Type
+from typing import Any, Optional
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
-from packaging import version
-
-# Direct imports - assume megatron is installed
-import megatron.core
-from megatron.core import parallel_state as mpu
-from megatron.core.models.gpt import GPTModel
-from megatron.core.transformer import TransformerConfig
 
 from ..utils import convert_hf_config
-
-mcore_013 = version.parse(
-    megatron.core.__version__) >= version.parse('0.13.0rc0')
 
 
 def _get_transformer_config_fields() -> set:
@@ -26,6 +15,7 @@ def _get_transformer_config_fields() -> set:
     Returns:
         Set of valid field names.
     """
+    from megatron.core.transformer import TransformerConfig
     return {f.name for f in fields(TransformerConfig)}
 
 
@@ -89,6 +79,7 @@ class MegatronModelInitializer:
         Returns:
             Megatron TransformerConfig.
         """
+        from megatron.core.transformer import TransformerConfig
         # Convert HuggingFace config to dict
         mg_config_dict = convert_hf_config(hf_config)
 
@@ -172,6 +163,8 @@ class MegatronModelInitializer:
         Returns:
             Megatron GPTModel.
         """
+        from megatron.core import parallel_state as mpu
+        from megatron.core.models.gpt import GPTModel
         # Create config (also sets self._rotary_base, etc.)
         config = self.create_transformer_config(hf_config, **config_overrides)
 
@@ -275,9 +268,9 @@ class MegatronModelInitializer:
         # Calculate padded vocab size
         padded_vocab_size = self._pad_vocab_size(hf_config.vocab_size)
 
-        # Use TwinkleBridgeAdapter
-        from .bridge import TwinkleBridgeAdapter
-        adapter = TwinkleBridgeAdapter(
+        # Use BridgeAdapter
+        from .bridge import BridgeAdapter
+        adapter = BridgeAdapter(
             hf_config=hf_config,
             tp_size=self.tp_size,
             pp_size=self.pp_size,

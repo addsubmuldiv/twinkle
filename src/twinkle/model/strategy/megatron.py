@@ -1,34 +1,22 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Megatron training strategy for distributed model parallelism."""
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 
 from .base import TrainStrategy
+from twinkle import DeviceMesh, exists
 
-try:
-    from twinkle import DeviceMesh
-except ImportError:
-    DeviceMesh = None
 
-try:
-    import megatron.core
-    from megatron.core import parallel_state
-    from megatron.core.distributed import DistributedDataParallel as MegatronDDP
-    from packaging import version
-    MEGATRON_AVAILABLE = True
-    mcore_013 = version.parse(
-        megatron.core.__version__) >= version.parse('0.13.0rc0')
-except ImportError:
-    MEGATRON_AVAILABLE = False
-    mcore_013 = False
+_megatron_available = exists('megatron_core')
+_mcore_013 = exists('megatron_core>=0.13')
 
 
 def check_megatron_available():
     """Check if Megatron-Core is available."""
-    if not MEGATRON_AVAILABLE:
+    if not _megatron_available:
         raise ImportError(
             'Megatron-Core is not installed. Please install it with: '
             'pip install megatron-core')

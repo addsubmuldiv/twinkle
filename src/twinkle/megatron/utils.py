@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Utility functions for Megatron-Core integration."""
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple

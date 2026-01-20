@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Megatron-Core integration for twinkle training framework.
 
 This module provides independent implementation for Megatron support,
@@ -6,7 +6,7 @@ This module provides independent implementation for Megatron support,
 
 from .model import (BridgeConfig, LazyTensor, MegatronModelInitializer,
                     Qwen3ModelMeta, SafetensorLoader, StreamingSafetensorSaver,
-                    TwinkleBridgeAdapter, TwinkleGPTBridge,
+                    BridgeAdapter, GPTBridge,
                     create_megatron_args, get_model_default_config,
                     initialize_megatron_model, is_last_rank,
                     load_hf_weights_to_megatron, mock_megatron_args,
@@ -49,8 +49,8 @@ __all__ = [
     # Training state
     'MegatronTrainerState',
     # Bridge classes
-    'TwinkleBridgeAdapter',
-    'TwinkleGPTBridge',
+    'BridgeAdapter',
+    'GPTBridge',
     'BridgeConfig',
     'SafetensorLoader',
     'StreamingSafetensorSaver',

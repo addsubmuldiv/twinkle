@@ -1,11 +1,10 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 # GPT Bridge for HuggingFace to Megatron-Core weight conversion.
 import glob
 import json
-import math
 import os
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple, Union
 
@@ -379,7 +378,7 @@ class BridgeConfig:
         )
 
 
-class TwinkleGPTBridge:
+class GPTBridge:
     """Bridge for converting weights between HuggingFace and Megatron-Core formats.
 
     Supports Qwen2.5 / Qwen3 model families.
@@ -1316,7 +1315,7 @@ class TwinkleGPTBridge:
     ) -> Generator[Tuple[str, torch.Tensor], None, None]:
         """Export LoRA weights from a layer."""
         # Check if LoRA is applied
-        from twinkle.megatron.tuners import LoraParallelLinear
+        from ..tuners import LoraParallelLinear
 
         # Attention LoRA
         if isinstance(mg_attn.linear_qkv, LoraParallelLinear):
@@ -1495,8 +1494,8 @@ class TwinkleGPTBridge:
             dist.barrier()
 
 
-class TwinkleBridgeAdapter:
-    """Adapter for weight loading using TwinkleGPTBridge.
+class BridgeAdapter:
+    """Adapter for weight loading using GPTBridge.
 
     Provides a simple interface for loading HF weights into Megatron models.
     """
@@ -1528,10 +1527,10 @@ class TwinkleBridgeAdapter:
 
         self._bridge = None
 
-    def _get_bridge(self) -> TwinkleGPTBridge:
+    def _get_bridge(self) -> GPTBridge:
         """Get or create the bridge instance."""
         if self._bridge is None:
-            self._bridge = TwinkleGPTBridge(
+            self._bridge = GPTBridge(
                 config=self.config,
                 hf_config=self.hf_config,
             )
@@ -1563,17 +1562,17 @@ class TwinkleBridgeAdapter:
         bridge.save_weights(mg_models, output_dir, is_peft_format)
 
 
-class TwinkleBridgeInitializer:
+class BridgeInitializer:
     """
     Megatron model initializer.
 
     This class provides complete model initialization flow including:
     - Megatron parallel state initialization
     - Model creation from HuggingFace config
-    - Weight loading using TwinkleGPTBridge
+    - Weight loading using GPTBridge
 
     Example:
-        initializer = TwinkleBridgeInitializer(
+        initializer = BridgeInitializer(
             tp_size=2,
             pp_size=1,
             params_dtype=torch.bfloat16,
@@ -1596,7 +1595,7 @@ class TwinkleBridgeInitializer:
         recompute_method: Optional[str] = None,
         recompute_num_layers: Optional[int] = None,
     ):
-        """Initialize TwinkleBridgeInitializer.
+        """Initialize BridgeInitializer.
 
         Args:
             tp_size: Tensor parallel size.
@@ -1730,7 +1729,6 @@ class TwinkleBridgeInitializer:
         Returns:
             Megatron GPT model.
         """
-        import torch.distributed as dist
         from megatron.core import parallel_state as mpu
         from megatron.core.transformer import TransformerConfig
         from megatron.core.transformer.enums import AttnBackend
@@ -1991,7 +1989,7 @@ class TwinkleBridgeInitializer:
 
         # Load weights
         if load_weights:
-            bridge_adapter = TwinkleBridgeAdapter(
+            bridge_adapter = BridgeAdapter(
                 hf_config=self._hf_config,
                 tp_size=self.tp_size,
                 pp_size=self.pp_size,
@@ -2032,7 +2030,7 @@ class TwinkleBridgeInitializer:
             raise ValueError('Must call create_model first')
 
         padded_vocab_size = self._pad_vocab_size(self._hf_config.vocab_size)
-        bridge_adapter = TwinkleBridgeAdapter(
+        bridge_adapter = BridgeAdapter(
             hf_config=self._hf_config,
             tp_size=self.tp_size,
             pp_size=self.pp_size,
@@ -2071,17 +2069,17 @@ def create_megatron_args(*args, **kwargs) -> SimpleNamespace:
 
 
 def set_megatron_args(args: SimpleNamespace) -> None:
-    """Legacy function - no longer needed with TwinkleGPTBridge."""
+    """Legacy function - no longer needed with GPTBridge."""
     pass
 
 
 def restore_megatron_args() -> None:
-    """Legacy function - no longer needed with TwinkleGPTBridge."""
+    """Legacy function - no longer needed with GPTBridge."""
     pass
 
 
 def mock_megatron_args(args: SimpleNamespace):
-    """Legacy function - no longer needed with TwinkleGPTBridge."""
+    """Legacy function - no longer needed with GPTBridge."""
     from contextlib import contextmanager
 
     @contextmanager
@@ -2101,7 +2099,7 @@ def load_hf_weights_to_megatron(
     padded_vocab_size: Optional[int] = None,
 ) -> None:
     """Convenience function to load HF weights into Megatron model."""
-    adapter = TwinkleBridgeAdapter(
+    adapter = BridgeAdapter(
         hf_config=hf_config,
         tp_size=tp_size,
         pp_size=pp_size,

@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Megatron-Core MoE (Mixture of Experts) LoRA training example.
 
 Supports Expert Parallel (EP) training in both local (torchrun) and Ray modes.

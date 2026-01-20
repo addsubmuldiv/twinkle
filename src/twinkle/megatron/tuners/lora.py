@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Megatron-compatible LoRA implementation with Tensor Parallel support."""
 import math
 import warnings

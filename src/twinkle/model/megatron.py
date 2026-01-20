@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 """Megatron-Core model wrapper for twinkle training framework."""
 import contextlib
 import json
@@ -141,15 +141,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         self._model_path = model_path
 
         # Create Megatron strategy
-        self.strategy = MegatronStrategy(
-            tensor_model_parallel_size=tensor_model_parallel_size,
-            pipeline_model_parallel_size=pipeline_model_parallel_size,
-            context_parallel_size=context_parallel_size,
-            expert_model_parallel_size=expert_model_parallel_size,
-            sequence_parallel=sequence_parallel,
-            use_distributed_optimizer=use_distributed_optimizer,
-            mixed_precision=mixed_precision,
-        )
+        self.strategy = MegatronStrategy.from_device_mesh(self.device_mesh)
 
         # Initialize parallel state (skip if using bridge init, as it handles this)
         if not use_megatron_bridge:
