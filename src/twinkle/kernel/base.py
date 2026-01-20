@@ -1,8 +1,8 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """Kernel module base - Base classes, env vars, device detection."""
+import logging
 import os
-from typing import Optional, Literal, Any
-
+from typing import Optional, Literal, Any, Callable
 from ..utils import exists
 
 
@@ -64,3 +64,66 @@ def to_kernels_mode(mode: ModeType) -> Any:
         "compile": Mode.TORCH_COMPILE,
     }
     return mode_map.get(mode, Mode.INFERENCE)
+
+
+def validate_mode(mode: str) -> None:
+    from kernels.layer.mode import Mode
+    mode = to_kernels_mode(mode)
+
+    if mode == Mode.FALLBACK:
+        raise ValueError("Mode.FALLBACK can only be used to register kernel mappings.")
+    if Mode.INFERENCE not in mode and Mode.TRAINING not in mode:  # type: ignore[operator]
+        raise ValueError("kernelize mode must contain Mode.INFERENCE or Mode.TRAINING.")
+
+
+def supports_mode(target: object, mode: str) -> bool:
+    from kernels.layer.mode import Mode
+    mode = to_kernels_mode(mode)
+    if Mode.TORCH_COMPILE in mode and not getattr(target, "can_torch_compile", False):
+        return False
+    if Mode.TRAINING in mode and not getattr(target, "has_backward", True):
+        return False
+    return True
+
+
+def conditionally_apply_function(
+    *,
+    func_name: str,
+    target: object,
+    impl: Callable,
+    support_target: object,
+    mode: str,
+    use_fallback: bool,
+) -> None:
+    from kernels.layer.mode import Mode
+    mode=to_kernels_mode(mode)
+
+    needs_fallback_for_compile = Mode.TORCH_COMPILE in mode and not getattr(
+        support_target, "can_torch_compile", False
+    )
+    needs_fallback_for_backward = Mode.TRAINING in mode and not getattr(
+        support_target, "has_backward", True
+    )
+
+    if needs_fallback_for_compile or needs_fallback_for_backward:
+        if use_fallback:
+            if needs_fallback_for_compile:
+                logging.info("Function does not support torch.compile, using fallback")
+            if needs_fallback_for_backward:
+                logging.info("Function does not support backward, using fallback")
+        else:
+            raise ValueError(f"Available kernel does not support mode: {mode}")
+    else:
+        setattr(target, func_name, impl)
+
+
+def validate_device_type(device_type: str) -> None:
+    supported_devices = {"cpu", "cuda", "mps", "npu", "rocm", "xpu"}
+    if device_type not in supported_devices:
+        raise ValueError(
+            "Unsupported device type "
+            f"'{device_type}'. Supported device types are: "
+            f"{', '.join(sorted(supported_devices))}"
+        )
+
+

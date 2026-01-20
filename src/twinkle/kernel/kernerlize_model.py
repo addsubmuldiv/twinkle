@@ -5,7 +5,7 @@ from typing import Dict, Iterable, Optional
 from kernels.layer.kernelize import kernelize, register_kernel_mapping
 from kernels.layer.mode import Mode
 from kernels.layer.repos import RepositoryProtocol
-from function import apply_function_kernel, register_function_kernel
+from .function import apply_function_kernel, register_function_batch
 
 
 def kernelize_model(
@@ -39,17 +39,7 @@ def kernelize_model(
         model = kernelize(model, mode=mode, device=device)
 
     if function_registry:
-        for spec in function_registry:
-            register_function_kernel(
-                func_name=spec["func_name"],
-                target_module=spec["target_module"],
-                func_impl=spec.get("func_impl"),
-                repo=spec.get("repo"),
-                repo_id=spec.get("repo_id"),
-                revision=spec.get("revision"),
-                version=spec.get("version"),
-                device=spec.get("device"),
-            )
+        register_function_batch(function_registry)
 
         apply_function_kernel(
             target_module=function_target_module,

@@ -1,8 +1,13 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import Dict, Any, Optional, Type, List, Tuple
+
+from dataclasses import dataclass, Tuple
 from logging import getLogger
+from typing import Dict, Any, Optional, Type, List, Callable, TYPE_CHECKING
 
 from .base import DeviceType, is_kernels_available
+from kernels.layer.func import FuncRepositoryProtocol
+
+
 
 logger = getLogger(__name__)
 
@@ -101,6 +106,41 @@ class ExternalLayerRegistry:
 _global_external_layer_registry = ExternalLayerRegistry()
 
 
+@dataclass(frozen=True)
+class FunctionKernelSpec:
+    func_name: str
+    target_module: str
+    func_impl: Optional[Callable]
+    repo: Optional[FuncRepositoryProtocol]
+    repo_id: Optional[str]
+    revision: Optional[str]
+    version: Optional[str]
+    device: Optional[str]
+    mode: Optional[str]
+
+
+
+class FunctionRegistry:
+    """Manages function-level kernel registrations."""
+
+    def __init__(self) -> None:
+        self._registry: List[FunctionKernelSpec] = []
+
+    def register(self, spec: FunctionKernelSpec) -> None:
+        if spec in self._registry:
+            return
+        self._registry.append(spec)
+
+    def list_specs(self) -> List[FunctionKernelSpec]:
+        return list(self._registry)
+
+    def _clear(self) -> None:
+        self._registry.clear()
+
+
+_global_function_registry = FunctionRegistry()
+
+
 def register_layer(kernel_name: str, repo_spec: Any, device: DeviceType = "cuda", mode: Any = None) -> None:
     _global_layer_registry.register(kernel_name, repo_spec, device, mode)
 
@@ -141,3 +181,7 @@ def get_global_layer_registry() -> LayerRegistry:
 
 def get_global_external_layer_registry() -> ExternalLayerRegistry:
     return _global_external_layer_registry
+
+
+def get_global_function_registry() -> FunctionRegistry:
+    return _global_function_registry

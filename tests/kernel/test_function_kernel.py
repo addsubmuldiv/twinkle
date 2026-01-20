@@ -24,6 +24,29 @@ def _install_kernel_stubs():
 
     func_mod.FuncRepositoryProtocol = DummyProtocol
 
+    mode_mod = types.ModuleType("kernels.layer.mode")
+    from enum import Flag, auto
+
+    class Mode(Flag):
+        FALLBACK = auto()
+        TRAINING = auto()
+        INFERENCE = auto()
+        TORCH_COMPILE = auto()
+
+        def __or__(self, other):
+            union = super().__or__(other)
+            if Mode.INFERENCE in union and Mode.TRAINING in union:
+                raise ValueError(
+                    "Mode.INFERENCE and Mode.TRAINING are mutually exclusive."
+                )
+            if Mode.FALLBACK in union and union != Mode.FALLBACK:
+                raise ValueError(
+                    "Mode.FALLBACK cannot be combined with other modes."
+                )
+            return union
+
+    mode_mod.Mode = Mode
+
     versions_mod = types.ModuleType("kernels._versions")
 
     def select_revision_or_version(repo_id, revision, version):
@@ -41,15 +64,28 @@ def _install_kernel_stubs():
     sys.modules["kernels"] = kernels_mod
     sys.modules["kernels.layer"] = layer_mod
     sys.modules["kernels.layer.func"] = func_mod
+    sys.modules["kernels.layer.mode"] = mode_mod
     sys.modules["kernels._versions"] = versions_mod
     sys.modules["kernels.utils"] = utils_mod
 
 
+def _install_twinkle_stubs():
+    if "twinkle" not in sys.modules:
+        twinkle_mod = types.ModuleType("twinkle")
+        twinkle_mod.__path__ = [str(ROOT / "twinkle")]
+        sys.modules["twinkle"] = twinkle_mod
+    if "twinkle.kernel" not in sys.modules:
+        kernel_mod = types.ModuleType("twinkle.kernel")
+        kernel_mod.__path__ = [str(ROOT / "twinkle" / "kernel")]
+        sys.modules["twinkle.kernel"] = kernel_mod
+
+
 def _load_function_kernel():
     _install_kernel_stubs()
+    _install_twinkle_stubs()
     path = ROOT / "twinkle" / "kernel" / "function.py"
     spec = importlib.util.spec_from_file_location(
-        "function_kernel_under_test",
+        "twinkle.kernel.function",
         path,
     )
     module = importlib.util.module_from_spec(spec)
@@ -64,10 +100,10 @@ function_kernel = _load_function_kernel()
 
 class TestFunctionKernel(unittest.TestCase):
     def setUp(self):
-        function_kernel._FUNCTION_REGISTRY.clear()
+        function_kernel.get_global_function_registry()._clear()
 
     def tearDown(self):
-        function_kernel._FUNCTION_REGISTRY.clear()
+        function_kernel.get_global_function_registry()._clear()
 
     def test_apply_function_kernel_replaces_target(self):
         module_name = "tests.kernel._tmp_module"
@@ -120,17 +156,22 @@ class TestFunctionKernel(unittest.TestCase):
             )
 
     def test_register_function_kernel_appends_spec(self):
+        from kernels.layer.mode import Mode
+
         function_kernel.register_function_kernel(
             func_name="f",
             target_module="m",
             func_impl=lambda x: x,
             device="cpu",
+            mode=Mode.TRAINING,
         )
-        self.assertEqual(len(function_kernel._FUNCTION_REGISTRY), 1)
-        spec = function_kernel._FUNCTION_REGISTRY[0]
+        registry = function_kernel.get_global_function_registry()
+        self.assertEqual(len(registry.list_specs()), 1)
+        spec = registry.list_specs()[0]
         self.assertEqual(spec.func_name, "f")
         self.assertEqual(spec.target_module, "m")
         self.assertEqual(spec.device, "cpu")
+        self.assertEqual(spec.mode, Mode.TRAINING)
 
     def test_load_from_hub_with_repo(self):
         class DummyModule:
@@ -145,7 +186,7 @@ class TestFunctionKernel(unittest.TestCase):
             def load(self):
                 return DummyModule
 
-        impl = function_kernel._load_from_hub(
+        impl, _ = function_kernel._load_from_hub(
             repo=DummyRepo(),
             repo_id=None,
             revision=None,
@@ -176,7 +217,7 @@ class TestFunctionKernel(unittest.TestCase):
         function_kernel.select_revision_or_version = fake_select
         function_kernel.get_kernel = fake_get_kernel
         try:
-            impl = function_kernel._load_from_hub(
+            impl, _ = function_kernel._load_from_hub(
                 repo=None,
                 repo_id="repo",
                 revision="rev",
@@ -242,6 +283,115 @@ class TestFunctionKernel(unittest.TestCase):
             device="cpu",
         )
         self.assertEqual(applied, [])
+        sys.modules.pop(module_name, None)
+
+    def test_apply_function_kernel_mode_filter(self):
+        from kernels.layer.mode import Mode
+
+        module_name = "tests.kernel._tmp_module_mode"
+        temp_module = types.ModuleType(module_name)
+        temp_module.target = lambda x: x
+        sys.modules[module_name] = temp_module
+
+        function_kernel.register_function_kernel(
+            func_name="target",
+            target_module=module_name,
+            func_impl=lambda x: x + 3,
+            mode=Mode.TRAINING,
+        )
+
+        applied = function_kernel.apply_function_kernel(
+            target_module=module_name,
+            mode=Mode.INFERENCE,
+        )
+        self.assertEqual(applied, [])
+        sys.modules.pop(module_name, None)
+
+    def test_apply_function_kernel_mode_requires_mode(self):
+        from kernels.layer.mode import Mode
+
+        module_name = "tests.kernel._tmp_module_mode_required"
+        temp_module = types.ModuleType(module_name)
+        temp_module.target = lambda x: x
+        sys.modules[module_name] = temp_module
+
+        function_kernel.register_function_kernel(
+            func_name="target",
+            target_module=module_name,
+            func_impl=lambda x: x + 2,
+            mode=Mode.INFERENCE,
+        )
+
+        applied = function_kernel.apply_function_kernel(
+            target_module=module_name,
+            mode=None,
+        )
+        self.assertEqual(applied, [])
+        sys.modules.pop(module_name, None)
+
+    def test_apply_function_kernel_fallback_on_unsupported_mode(self):
+        from kernels.layer.mode import Mode
+
+        module_name = "tests.kernel._tmp_module_mode_fallback"
+        temp_module = types.ModuleType(module_name)
+
+        def original(x):
+            return x
+
+        temp_module.target = original
+        sys.modules[module_name] = temp_module
+
+        class KernelImpl:
+            can_torch_compile = False
+            has_backward = True
+
+            def __call__(self, x):
+                return x + 5
+
+        function_kernel.register_function_kernel(
+            func_name="target",
+            target_module=module_name,
+            func_impl=KernelImpl(),
+            mode=Mode.INFERENCE | Mode.TORCH_COMPILE,
+        )
+
+        applied = function_kernel.apply_function_kernel(
+            target_module=module_name,
+            mode=Mode.INFERENCE | Mode.TORCH_COMPILE,
+            use_fallback=True,
+        )
+        self.assertEqual(applied, [])
+        self.assertIs(temp_module.target, original)
+        sys.modules.pop(module_name, None)
+
+    def test_apply_function_kernel_no_fallback_raises(self):
+        from kernels.layer.mode import Mode
+
+        module_name = "tests.kernel._tmp_module_mode_strict"
+        temp_module = types.ModuleType(module_name)
+        temp_module.target = lambda x: x
+        sys.modules[module_name] = temp_module
+
+        class KernelImpl:
+            can_torch_compile = False
+            has_backward = True
+
+            def __call__(self, x):
+                return x + 5
+
+        function_kernel.register_function_kernel(
+            func_name="target",
+            target_module=module_name,
+            func_impl=KernelImpl(),
+            mode=Mode.INFERENCE | Mode.TORCH_COMPILE,
+        )
+
+        with self.assertRaises(ValueError):
+            function_kernel.apply_function_kernel(
+                target_module=module_name,
+                mode=Mode.INFERENCE | Mode.TORCH_COMPILE,
+                use_fallback=False,
+            )
         sys.modules.pop(module_name, None)
 
 
