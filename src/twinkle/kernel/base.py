@@ -1,7 +1,7 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """Kernel module base - Base classes, env vars, device detection."""
 import os
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 
 from ..utils import exists
 
@@ -53,7 +53,7 @@ def is_kernels_enabled() -> bool:
     return _kernels_enabled() and is_kernels_available()
 
 
-def to_kernels_mode(mode: ModeType) -> str:
+def to_kernels_mode(mode: ModeType) -> Any:
     """Convert Twinkle mode to HF kernels mode."""
     if not is_kernels_available():
         return None

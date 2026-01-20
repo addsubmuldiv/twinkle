@@ -1,5 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import Dict, Any, Optional, Type, List
+from typing import Dict, Any, Optional, Type, List, Tuple
 from logging import getLogger
 
 from .base import DeviceType, is_kernels_available
@@ -91,7 +91,7 @@ class ExternalLayerRegistry:
     def has(self, layer_class: Type) -> bool:
         return layer_class in self._map
 
-    def list_mappings(self) -> list[tuple[Type, str]]:
+    def list_mappings(self) -> List[Tuple[Type, str]]:
         return list(self._map.items())
 
     def _clear(self) -> None:
