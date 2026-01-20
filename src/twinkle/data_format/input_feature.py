@@ -38,14 +38,11 @@ class InputFeature(TypedDict, total=False):
 def to_transformers_dict(feature: InputFeature) -> dict:
     """Transfer the InputFeature object to a dict needed by `transformers` models."""
     import torch
-    output = dict(feature)
+    output = {}
     _keys = ['input_ids', 'input_embeddings', 'attention_mask', 'position_ids', 'labels', 'completion_mask', 'logits_to_keep', 'num_items_in_batch']
     for key in list(feature.keys()):
         if key in _keys:
-            try:
-                output[key] = np.array(feature[key]) if not isinstance(feature[key], torch.Tensor) else feature[key]
-            except:
-                print()
+            output[key] = np.array(feature[key]) if not isinstance(feature[key], torch.Tensor) else feature[key]
     return output
 
 

@@ -160,7 +160,6 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         Returns:
             The output of the model forward.
         """
-        # breakpoint()
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
         self._lazy_wrap_model()
