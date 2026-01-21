@@ -1,6 +1,7 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 # GPT Bridge for HuggingFace to Megatron-Core weight conversion.
 import glob
+import inspect
 import json
 import os
 from copy import copy
@@ -1658,7 +1659,7 @@ class BridgeInitializer:
         self,
         hf_config: Any,
         padded_vocab_size: int,
-    ) -> nn.Module:
+    ) -> List[nn.Module]:
         """Create Megatron GPT model from HuggingFace config.
 
         Args:
@@ -1870,20 +1871,42 @@ class BridgeInitializer:
         max_seq_length = getattr(hf_config, 'max_position_embeddings', 4096)
         rotary_base = mg_config_dict.get('rotary_base', 10000)
 
-        model = GPTModel(
-            config=config,
-            transformer_layer_spec=layer_spec,
-            vocab_size=padded_vocab_size,
-            max_sequence_length=max_seq_length,
-            pre_process=mpu.is_pipeline_first_stage(),
-            post_process=mpu.is_pipeline_last_stage(),
-            parallel_output=True,
-            share_embeddings_and_output_weights=getattr(
-                hf_config, 'tie_word_embeddings', False),
-            position_embedding_type='rope',
-            rotary_base=rotary_base,
-        )
-
+        if mpu.get_virtual_pipeline_model_parallel_world_size() > 1:
+            model = []
+            has_vp_stage = inspect.signature(mpu.is_pipeline_first_stage).parameters.get("vp_stage", None) is not None
+            for i in range(mpu.get_virtual_pipeline_model_parallel_world_size()):
+                mpu.set_virtual_pipeline_model_parallel_rank(i)
+                extra_kwargs = {} if not has_vp_stage else {"ignore_virtual": False, "vp_stage": i}
+                _model = GPTModel(
+                    config=config,
+                    transformer_layer_spec=layer_spec,
+                    vocab_size=padded_vocab_size,
+                    max_sequence_length=max_seq_length,
+                    pre_process=mpu.is_pipeline_first_stage(**extra_kwargs),
+                    post_process=mpu.is_pipeline_last_stage(**extra_kwargs),
+                    parallel_output=True,
+                    share_embeddings_and_output_weights=getattr(
+                        hf_config, 'tie_word_embeddings', False),
+                    position_embedding_type='rope',
+                    rotary_base=rotary_base,
+                )
+                model.append(_model)
+            mpu.set_virtual_pipeline_model_parallel_rank(0)
+        else:
+            model = GPTModel(
+                config=config,
+                transformer_layer_spec=layer_spec,
+                vocab_size=padded_vocab_size,
+                max_sequence_length=max_seq_length,
+                pre_process=mpu.is_pipeline_first_stage(),
+                post_process=mpu.is_pipeline_last_stage(),
+                parallel_output=True,
+                share_embeddings_and_output_weights=getattr(
+                    hf_config, 'tie_word_embeddings', False),
+                position_embedding_type='rope',
+                rotary_base=rotary_base,
+            )
+            model = [model]
         return model
 
     def _pad_vocab_size(self, vocab_size: int) -> int:
@@ -1896,7 +1919,7 @@ class BridgeInitializer:
         model_path: str,
         load_weights: bool = True,
         **kwargs,
-    ) -> nn.Module:
+    ) -> List[nn.Module]:
         """Create Megatron model from HuggingFace checkpoint.
 
         Args:
@@ -1937,7 +1960,8 @@ class BridgeInitializer:
                 model_path=model_path,
                 padded_vocab_size=padded_vocab_size,
             )
-            bridge_adapter.load_weights(self._model, model_path)
+            for _model in self._model:
+                bridge_adapter.load_weights(_model, model_path)
             self._bridge = bridge_adapter._get_bridge()
 
         # Synchronize all ranks after model creation and weight loading

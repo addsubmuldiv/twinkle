@@ -132,7 +132,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         model_path: str,
         load_weights: bool = True,
         **kwargs,
-    ) -> nn.Module:
+    ) -> List[nn.Module]:
         """Create Megatron model from HuggingFace checkpoint.
 
         Args:
@@ -158,7 +158,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         load_weights: bool,
         params_dtype: torch.dtype,
         **kwargs,
-    ) -> nn.Module:
+    ) -> List[nn.Module]:
         """Create Megatron model using bridge-based initialization flow.
 
         This approach uses TwinkleBridgeInitializer for independent initialization
@@ -201,7 +201,9 @@ class MegatronModel(TwinkleModel, nn.Module):
             model_path, load_weights=load_weights)
 
         self._transformer_config = self._bridge_initializer.config
-        return self._move_model_to_gpu(model)
+        for _model in model:
+            return self._move_model_to_gpu(_model)
+        return model
 
     @staticmethod
     def _move_model_to_gpu(model: nn.Module) -> nn.Module:
@@ -455,9 +457,12 @@ class MegatronModel(TwinkleModel, nn.Module):
         # - PP > 1: forward_backward_pipelining_without_interleaving (or with interleaving if VPP)
         # - PP = 1: forward_backward_no_pipelining
         forward_backward_func = get_forward_backward_func()
-
-        # Create single-item iterator
-        data_iter = iter([inputs])
+        vpp_size = self.device_mesh.vpp_size
+        inputs = [inputs[i:i + micro_batch_size] for i in range(0, len(inputs), micro_batch_size)]
+        if vpp_size is None or vpp_size == 1:
+            data_iter = [iter(inputs)]
+        else:
+            data_iter = [iter(inputs) for _ in range(0, vpp_size)]
 
         # Run forward-backward with Megatron's scheduler
         # Megatron handles all communication internally using proper process groups
