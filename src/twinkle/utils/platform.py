@@ -269,13 +269,25 @@ class DeviceMesh:
         end = (rank + 1) * k + min(rank + 1, m)
         return slice(start, end)
 
-    @property
-    def is_first_pp_stage(self) -> bool:
-        return self.pp_rank == 0
+    def get_pp_stage_ranks(self, stage: int) -> list[int]:
+        pp_dim_idx = self._get_dim_index("pp")
 
-    @property
-    def is_last_pp_stage(self) -> bool:
-        return self.pp_rank == self.pp_world_size - 1
+        if pp_dim_idx is None:
+            if stage == 0:
+                return self.mesh.flatten().tolist()
+            raise ValueError("No PP dimension, only stage 0 exists")
+
+        indices = [slice(None)] * len(self.mesh.shape)
+        indices[pp_dim_idx] = stage
+
+        return sorted(self.mesh[tuple(indices)].flatten().tolist())
+
+    def get_pp_first_ranks(self) -> list[int]:
+        return self.get_pp_stage_ranks(0)
+
+    def get_pp_last_ranks(self) -> list[int]:
+        pp_world_size = self.pp_world_size or 1
+        return self.get_pp_stage_ranks(pp_world_size - 1)
 
     def get_ranks_in_dim(self, dim_name: str) -> list[int]:
         dim_idx = self._get_dim_index(dim_name)

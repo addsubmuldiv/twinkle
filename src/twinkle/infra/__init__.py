@@ -2,7 +2,7 @@
 import functools
 import inspect
 import os
-from typing import Literal, List, Optional, Union, Callable
+from typing import Literal, List, Optional, Union, Callable, Any
 from typing import TypeVar
 
 import numpy as np
@@ -257,7 +257,7 @@ def _get_workers(workers, execute):
         raise ValueError(f'Unsupported execute method: {execute}')
 
 
-def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first'], Callable], result):
+def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first', 'last_pp'], Callable], result: List[Any], device_mesh: DeviceMesh=None):
     if not result:
         return result
 
@@ -265,7 +265,7 @@ def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first
         output = []
         for i in range(len(result[0])):
             _single_result = [r[i] for r in result]
-            output.append(_collect_func(method, _single_result))
+            output.append(_collect_func(method, _single_result, device_mesh=device_mesh))
         return output
     if method == 'none':
         if isinstance(result, list) and len(result) == 1:
@@ -284,6 +284,9 @@ def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first
         return np.sum(result)
     elif method == 'first':
         return result[0]
+    elif method == 'last_pp':
+        assert device_mesh is not None
+        return [r for i, r in enumerate(result) if i in device_mesh.get_pp_last_ranks()]
     elif isinstance(method, Callable):
         # Callable
         return method(result)
@@ -484,7 +487,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
 
 def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice',
                     execute: Literal['first', 'peer', 'all'] = 'all',
-                    collect: Union[Literal['none', 'flatten', 'mean', 'sum', 'first'], Callable] = 'none',
+                    collect: Union[Literal['none', 'flatten', 'mean', 'sum', 'first', 'last_pp'], Callable] = 'none',
                     sync: bool = False):
     """Patch each method called from remote(which class should be decorated with `remote_class`) with this decorator.
 
@@ -527,7 +530,8 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                                                        execute, device_mesh, args, kwargs)
                     execute_method = RayHelper.execute_all_async if not sync else RayHelper.execute_all_sync
                     result = execute_method(func.__name__, _workers_and_args)
-                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
+                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result,
+                                                                    getattr(self, 'device_mesh', None))
                     lazy_collect = _lazy_collect
                     if func.__name__ == '__iter__':
                         return self

@@ -421,7 +421,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
-        if not optimizer_config.do_grad_sync(kwargs.get('gradient_accumulation_steps')):
+        if not optimizer_config.do_grad_sync(kwargs.pop('gradient_accumulation_steps', None)):
             return
         optimizer = optimizer_config.optimizer
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before forwarding'
@@ -438,7 +438,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
-        if not optimizer_config.do_grad_sync(kwargs.get('gradient_accumulation_steps')):
+        if not optimizer_config.do_grad_sync(kwargs.pop('gradient_accumulation_steps', None)):
             return
         if optimizer_config.scaler_has_nan:
             return
@@ -577,6 +577,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 self.model = _adapted_model
             else:
                 assert isinstance(unwrapped_model, PeftModel)
+            config = _adapted_model.peft_config
         else:
             config = config_or_dir
             if not isinstance(unwrapped_model, PeftModel):
@@ -586,17 +587,19 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 unwrapped_model.add_adapter(adapter_name, config)
 
         self.optimizer_group[train_group] = self._construct_default_optimizer_group()
-        self._default_tokenizer = self.optimizer_group[train_group].template.tokenizer
         self.optimizer_group[train_group].adapter_name = adapter_name
         self.optimizer_group[train_group].adapter_config = config
         _gas_default = kwargs.get('gradient_accumulation_steps', 1)
         self.optimizer_group[train_group].gradient_accumulation_steps = _gas_default
-        default_config = self.optimizer_group[train_group]
+        default_config = self.optimizer_group[_default_adapter_name]
         if default_config.template:
             self.optimizer_group[train_group].template = default_config.template
         if default_config.processor:
             self.optimizer_group[train_group].processor = default_config.processor
+        if default_config.loss_instance:
+            self.optimizer_group[train_group].loss_instance = default_config.loss_instance
         dp_group = self.optimizer_group[train_group]._dp_group
+        self._default_tokenizer = self.optimizer_group[train_group].template.tokenizer
         self.optimizer_group[train_group].metrics = [
                 LossMetric(self.device_mesh, dp_group),
                 Accuracy(self.device_mesh, dp_group),
@@ -628,7 +631,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
-        kwargs['model_id'] = self.model_id
+        kwargs['model_id'] = self.tokenizer_id
         template = construct_class(template_cls, Template, twinkle.template, **kwargs)
         optimizer_config.template = template
 
