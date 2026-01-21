@@ -1,8 +1,7 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """Kernel module base - Base classes, env vars, device detection."""
-import logging
 import os
-from typing import Optional, Literal, Any, Callable
+from typing import Optional, Literal, Any
 from ..utils import exists
 
 
@@ -63,7 +62,7 @@ def to_kernels_mode(mode: ModeType) -> Any:
     mode_map = {
         "train": Mode.TRAINING,
         "inference": Mode.INFERENCE,
-        "compile": Mode.INFERENCE | Mode.TORCH_COMPILE,
+        "compile": Mode.TORCH_COMPILE,
     }
     return mode_map.get(mode, Mode.INFERENCE)
 
@@ -86,37 +85,6 @@ def supports_mode(target: object, mode: str) -> bool:
     if Mode.TRAINING in mode and not getattr(target, "has_backward", True):
         return False
     return True
-
-
-def conditionally_apply_function(
-    *,
-    func_name: str,
-    target: object,
-    impl: Callable,
-    support_target: object,
-    mode: str,
-    use_fallback: bool,
-) -> None:
-    from kernels.layer.mode import Mode
-    mode=to_kernels_mode(mode)
-
-    needs_fallback_for_compile = Mode.TORCH_COMPILE in mode and not getattr(
-        support_target, "can_torch_compile", False
-    )
-    needs_fallback_for_backward = Mode.TRAINING in mode and not getattr(
-        support_target, "has_backward", True
-    )
-
-    if needs_fallback_for_compile or needs_fallback_for_backward:
-        if use_fallback:
-            if needs_fallback_for_compile:
-                logging.info("Function does not support torch.compile, using fallback")
-            if needs_fallback_for_backward:
-                logging.info("Function does not support backward, using fallback")
-        else:
-            raise ValueError(f"Available kernel does not support mode: {mode}")
-    else:
-        setattr(target, func_name, impl)
 
 
 def validate_device_type(device_type: str) -> None:

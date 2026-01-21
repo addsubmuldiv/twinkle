@@ -14,8 +14,6 @@ from .base import (
     is_kernels_available,
     validate_device_type,
     validate_mode,
-    conditionally_apply_function,
-    to_kernels_mode,
 )
 
 logger = getLogger(__name__)
@@ -105,21 +103,15 @@ def apply_function_kernel(
     target_module: Optional[str] = None,
     device: Optional[str] = None,
     mode: Optional[ModeType] = None,
-    use_fallback: bool = True,
     strict: bool = False,
 ) -> List[str]:
     """Apply registered function kernels by monkey-patching target modules.
     target_module: If specified, only apply kernels targeting this module.
     device: If specified, only apply kernels matching this device or with no device.
     mode: If specified, only apply kernels matching this mode or with no mode.
-    use_fallback: Whether to use fallback implementations when mode conditions are not met.
     strict: If True, raise errors on failures; otherwise log warnings.
     """
     applied = []
-
-    if mode is not None:
-        validate_mode(mode)
-        mode = to_kernels_mode(mode)
     if device is not None:
         validate_device_type(device)
 
@@ -138,7 +130,7 @@ def apply_function_kernel(
                 raise ValueError(msg)
             logger.warning(msg)
             continue
-        if spec.mode is not None and mode is not None and to_kernels_mode(spec.mode) not in mode:
+        if spec.mode is not None and mode is not None and spec.mode != mode:
             continue
 
         try:
@@ -157,7 +149,6 @@ def apply_function_kernel(
         # Resolve implementation and capability target for mode checks.
         if spec.func_impl is not None:
             impl = spec.func_impl
-            support_target = impl
         else:
             if not is_kernels_available():
                 msg = (
@@ -166,28 +157,18 @@ def apply_function_kernel(
                     "Install it with `pip install kernels`."
                 )
                 raise RuntimeError(msg)
-            impl, support_target = _load_from_hub(
+            impl, _ = _load_from_hub(
                 repo=spec.repo,
                 repo_id=spec.repo_id,
                 revision=spec.revision,
                 version=spec.version,
                 func_name=spec.func_name,
             )
-        if mode is not None:
-            # Apply with fallback-aware checks for compile/backward support.
-            conditionally_apply_function(
-                func_name=spec.func_name,
-                target=module,
-                impl=impl,
-                support_target=support_target,
-                mode=mode,
-                use_fallback=use_fallback and not strict,
-            )
-            # Skip recording if fallback kept the original function.
-            if getattr(module, spec.func_name) is not impl:
-                continue
         # Final patch (or reapply when no mode gating is used).
         setattr(module, spec.func_name, impl)
         applied.append(f"{spec.target_module}.{spec.func_name}")
+
+    if strict and not applied:
+        raise ValueError("No function kernels applied for the given filters.")
 
     return applied

@@ -93,7 +93,6 @@ applied = apply_function_kernel(
     target_module=TARGET_MODULE,
     device="cpu",
     mode="inference",
-    use_fallback=True,
     strict=False,
 )
 

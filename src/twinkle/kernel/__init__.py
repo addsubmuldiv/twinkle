@@ -44,7 +44,7 @@ def kernelize_model(
     """
     model = apply_layer_kernel(model, mode=mode, device=device, use_fallback=use_fallback)
 
-    apply_function_kernel(device=device, mode=mode, use_fallback=use_fallback)
+    apply_function_kernel(device=device, mode=mode)
 
     return model
 
