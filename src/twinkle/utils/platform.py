@@ -17,7 +17,7 @@ class DeviceMesh:
     - fsdp: Fully Sharded Data Parallel
     - tp: Tensor Parallel
     - pp: Pipeline Parallel
-    - sp: Sequence Parallel
+    - ulysses: ulysses sequence parallel
     - cp: Context Parallel
     - ep: Expert Parallel
     - vpp: Virtual Pipeline Parallel
@@ -39,12 +39,12 @@ class DeviceMesh:
     mesh_dim_names: Optional[tuple[str, ...]]
     ep_size: Optional[int] = None
     vpp_size: Optional[int] = None
-    sp_size: Optional[int] = None
+    ulysses_size: Optional[int] = None
     device_type: str = 'cuda'
 
     @staticmethod
     def from_sizes(dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
-                   pp_size: int = None, sp_size: int = None, cp_size: int = None, ep_size: int = None,
+                   pp_size: int = None, ulysses_size: int = None, cp_size: int = None, ep_size: int = None,
                    vpp_size: int = None, device_type: str = 'cuda') -> "DeviceMesh":
 
         origin_world_size = Platform.get_world_size()
@@ -91,7 +91,7 @@ class DeviceMesh:
             mesh_dim_names=tuple(mesh_dim_names),
             vpp_size=vpp_size,
             ep_size=ep_size,
-            sp_size=sp_size,
+            ulysses_size=ulysses_size,
         )
 
     def __post_init__(self):
@@ -188,10 +188,6 @@ class DeviceMesh:
         return self._get_rank_for_dim("pp")
 
     @property
-    def sp_rank(self) -> Optional[int]:
-        return self._get_rank_for_dim("sp")
-
-    @property
     def cp_rank(self) -> Optional[int]:
         return self._get_rank_for_dim("cp")
 
@@ -212,10 +208,6 @@ class DeviceMesh:
         return self._get_world_size_for_dim("pp")
 
     @property
-    def sp_world_size(self) -> Optional[int]:
-        return self._get_world_size_for_dim("sp")
-
-    @property
     def cp_world_size(self) -> Optional[int]:
         return self._get_world_size_for_dim("cp")
 
@@ -224,22 +216,23 @@ class DeviceMesh:
         return self.mesh.flatten().shape[0]
 
     @property
-    def data_parallel_rank(self) -> Optional[int]:
+    def data_rank(self) -> Optional[int]:
         dp_rank = self.dp_rank
         fsdp_rank = self.fsdp_rank
         fsdp_world_size = self.fsdp_world_size
 
+        data_rank = dp_rank
         if fsdp_world_size is not None and fsdp_world_size > 1:
             if dp_rank is not None and fsdp_rank is not None:
-                return dp_rank * fsdp_world_size + fsdp_rank
+                data_rank = dp_rank * fsdp_world_size + fsdp_rank
             elif fsdp_rank is not None:
-                return fsdp_rank
+                data_rank = fsdp_rank
 
-        # dp or edp
-        return dp_rank
+        ulysses_size = self.ulysses_size or 1
+        return data_rank // ulysses_size
 
     @property
-    def data_parallel_world_size(self) -> int:
+    def data_world_size(self) -> int:
         dp_world_size = self.dp_world_size
         fsdp_world_size = self.fsdp_world_size
         if fsdp_world_size is not None and fsdp_world_size > 1:
@@ -248,13 +241,14 @@ class DeviceMesh:
             else:
                 return fsdp_world_size
 
-        # dp or edp
-        return dp_world_size
+        ulysses_size = self.ulysses_size or 1
+        assert dp_world_size % ulysses_size == 0, f'dp_world_size: {dp_world_size} cannot be divided by ulysses_size: {ulysses_size}.'
+        return dp_world_size // ulysses_size
 
     def get_slice(self, total_length: int, rank: Optional[int] = None) -> slice:
-        world_size = self.data_parallel_world_size
+        world_size = self.data_world_size
         if rank is None:
-            rank = self.data_parallel_rank
+            rank = self.data_rank
             if rank is None:
                 rank = 0
                 world_size = 1

@@ -18,21 +18,13 @@ from twinkle.hub import HubOperation
 from twinkle.loss import Loss, MegatronCrossEntropyLoss
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
-
+from twinkle import exists, requires
 from twinkle.model.base import TwinkleModel
-from twinkle.model.transformers.strategy import MegatronStrategy
+from .strategy import MegatronStrategy
 
-try:
-    import megatron.core
-    from megatron.core import parallel_state as mpu
-    from megatron.core.distributed import DistributedDataParallel as MegatronDDP
-    from packaging import version
-    MEGATRON_AVAILABLE = True
-    mcore_013 = version.parse(
-        megatron.core.__version__) >= version.parse('0.13.0rc0')
-except ImportError:
-    MEGATRON_AVAILABLE = False
-    mcore_013 = False
+
+_megatron_available = exists('megatron_core')
+_mcore_013 = exists('megatron_core>=0.13')
 
 
 @dataclass
@@ -71,57 +63,21 @@ class MegatronOptimizerGroup:
 _default_adapter_name = ''
 
 
-def check_megatron_available():
-    """Check if Megatron-Core is available."""
-    if not MEGATRON_AVAILABLE:
-        raise ImportError(
-            'Megatron-Core is not installed. Please install it with: '
-            'pip install megatron-core')
-
-
 @remote_class(execute='all')
 class MegatronModel(TwinkleModel, nn.Module):
-    """Megatron-Core model wrapper for twinkle training framework.
 
-    Note: Uses execute='all' to create workers on all ranks, which is required
-    for Megatron's TP/DP parallelism where all ranks must participate in
-    collective operations like gradient all-reduce.
-
-    This class provides a similar API to TransformersModel but uses Megatron-Core
-    as the training backend, supporting TP/PP/CP/EP parallelism.
-
-    Args:
-        pretrained_model_name_or_path: HuggingFace model path or ID.
-        device_mesh: Twinkle DeviceMesh for distributed training.
-        tensor_model_parallel_size: Tensor parallel size.
-        pipeline_model_parallel_size: Pipeline parallel size.
-        context_parallel_size: Context parallel size.
-        expert_model_parallel_size: Expert parallel size.
-        sequence_parallel: Enable sequence parallelism.
-        mixed_precision: Mixed precision mode.
-        use_distributed_optimizer: Use Megatron's distributed optimizer.
-        **kwargs: Additional arguments passed to model initialization.
-    """
     def __init__(
         self,
         pretrained_model_name_or_path: str,
         device_mesh: Optional[DeviceMesh] = None,
-        tensor_model_parallel_size: int = 1,
-        pipeline_model_parallel_size: int = 1,
-        context_parallel_size: int = 1,
-        expert_model_parallel_size: int = 1,
-        sequence_parallel: bool = False,
         mixed_precision: Literal['no', 'fp16', 'bf16'] = 'bf16',
-        use_distributed_optimizer: bool = True,
         load_weights: bool = True,
-        use_megatron_bridge:
-        bool = True,  # Use bridge-based initialization (recommended)
-        recompute_granularity: Optional[
-            str] = 'selective',  # Activation checkpointing
+        use_megatron_bridge: bool = True,
+        recompute_granularity: Optional[str] = 'selective',  # Activation checkpointing
         recompute_modules: Optional[list] = None,  # Modules to recompute
         **kwargs,
     ):
-        check_megatron_available()
+        requires('megatron_core')
         nn.Module.__init__(self)
 
         self.model_id = pretrained_model_name_or_path
@@ -133,7 +89,9 @@ class MegatronModel(TwinkleModel, nn.Module):
 
         # Load HuggingFace config first
         model_path = HubOperation.download_model(pretrained_model_name_or_path)
-        self._load_hf_config(model_path)
+
+        from transformers import AutoConfig
+        self.hf_config = AutoConfig.from_pretrained(model_path)
 
         # Store model_path for later use
         self._model_path = model_path
@@ -145,7 +103,6 @@ class MegatronModel(TwinkleModel, nn.Module):
         if not use_megatron_bridge:
             self.strategy.initialize()
 
-        # Create Megatron model
         self.model = self._create_megatron_model(model_path, load_weights,
                                                  **kwargs)
 
@@ -155,11 +112,6 @@ class MegatronModel(TwinkleModel, nn.Module):
             _default_adapter_name:
             MegatronOptimizerGroup(loss_instance=MegatronCrossEntropyLoss())
         }
-
-    def _load_hf_config(self, model_path: str):
-        """Load HuggingFace model config."""
-        from transformers import AutoConfig
-        self.hf_config = AutoConfig.from_pretrained(model_path)
 
     def _create_megatron_model(
         self,

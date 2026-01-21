@@ -1637,18 +1637,6 @@ class BridgeInitializer:
         self._hf_config = None
         self._model_path = None
 
-    def _download_model(self, model_path: str) -> str:
-        """Download model if it's a model ID."""
-        if os.path.isdir(model_path):
-            return model_path
-
-        try:
-            from modelscope import snapshot_download
-            return snapshot_download(model_path)
-        except ImportError:
-            from huggingface_hub import snapshot_download
-            return snapshot_download(model_path)
-
     def _initialize_megatron(self, hf_config: Any = None):
         """Initialize Megatron parallel state.
 
