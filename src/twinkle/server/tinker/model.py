@@ -7,6 +7,7 @@ import traceback
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, Request
+from flask import app
 from peft import LoraConfig
 from ray import serve
 from tinker import types
@@ -161,6 +162,40 @@ def build_model_app(nproc_per_node: int,
 
             return await schedule_task(self.state, _do_unload(), model_id=body.model_id)
 
+        @app.post("/forward")
+        async def forward(self, request: Request, body: types.ForwardRequest) -> types.UntypedAPIFuture:
+            async def _do_forward():
+                if not self.model:
+                    return types.RequestFailedResponse(
+                        error="Model not loaded, please load model first",
+                        category=types.RequestErrorCategory.User,
+                    )
+
+                try:
+                    adapter_name = self.get_adapter_name(request, adapter_name=body.model_id)
+                    self.assert_adapter_exists(adapter_name=adapter_name)
+                    
+                    datum_list = body.forward_input.data
+                    loss_fn = body.forward_input.loss_fn
+                    loss_fn_config = body.forward_input.loss_fn_config or {}
+                    
+                    output = self.model.forward_only(inputs=datum_list, adapter_name=adapter_name)
+                    loss = self.model.calculate_loss(adapter_name=adapter_name, **loss_fn_config)
+                    return types.ForwardBackwardOutput(
+                        loss_fn_output_type="CrossEntropyLossReturn",
+                        loss_fn_outputs=output,
+                        metrics={"loss:sum": loss},
+                    )
+                except Exception:
+                    logger.error(traceback.format_exc())
+                    return types.RequestFailedResponse(
+                        error=traceback.format_exc(),
+                        category=types.RequestErrorCategory.Server,
+                    )
+
+            return await schedule_task(
+                self.state, _do_forward(), model_id=body.model_id
+            )
 
         @app.post("/forward_backward")
         async def forward_backward(self, request: Request, body: types.ForwardBackwardRequest) -> types.UntypedAPIFuture:
@@ -223,14 +258,14 @@ def build_model_app(nproc_per_node: int,
             async def _do_save():
                 suffix = body.path or f"checkpoint-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
                 path = f"tinker://{body.model_id}/{suffix}"
-                return types.SaveWeightsResponse(path=path)
+                return types.SaveWeightsResponse(path=path, type='save_weights')
 
             return await schedule_task(self.state, _do_save(), model_id=body.model_id)
 
         @app.post("/load_weights")
         async def load_weights(self, request: Request, body: types.LoadWeightsRequest) -> types.UntypedAPIFuture:
             async def _do_load():
-                return types.LoadWeightsResponse(path=body.path)
+                return types.LoadWeightsResponse(path=body.path, type='load_weights')
 
             return await schedule_task(self.state, _do_load(), model_id=body.model_id)
 

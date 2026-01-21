@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import time
+import traceback
 import uuid
 import asyncio
 from datetime import datetime
@@ -135,9 +136,9 @@ async def schedule_task(
         try:
             val = await coro
             state.store_future(request_id, val, model_id)
-        except Exception as e:
+        except Exception:
             # Structure the error so the client SDK can interpret it
-            err_payload = {"error": str(e), "category": "Internal"}
+            err_payload = {"error": traceback.format_exc(), "category": "Server"}
             state.store_future(request_id, err_payload, model_id)
             
     # Schedule execution in the background

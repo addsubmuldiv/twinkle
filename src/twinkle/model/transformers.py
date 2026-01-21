@@ -214,7 +214,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             inputs['labels'] = labels
         optimizer_config.inputs = inputs
         optimizer_config.outputs = outputs
-        return outputs
+        # only return logits on cpu for remote call
+        return {'logits': outputs['logits'].detach().cpu()}  
 
     @staticmethod
     def _accumulate_metric(optimizer_config: OptimizerGroup):

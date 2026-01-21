@@ -160,6 +160,10 @@ def build_server_app(
         async def unload_model(self, request: Request) -> Any:
             return await self._proxy(request, "/model/unload_model")
 
+        @app.post("/forward")
+        async def forward(self, request: Request) -> Any:
+            return await self._proxy(request, "/model/forward")
+
         @app.post("/forward_backward")
         async def forward_backward(self, request: Request) -> Any:
             return await self._proxy(request, "/model/forward_backward")
