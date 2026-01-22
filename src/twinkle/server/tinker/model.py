@@ -61,7 +61,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
             self.config_registry: ConfigRegistryProxy = init_config_registry()
             self.state = get_server_state()
             self.per_token_model_limit = int(
-                os.environ.get('TWINKLE_PER_USER_MODEL_LIMIT', 30))
+                os.environ.get('TWINKLE_PER_USER_MODEL_LIMIT', 3))
             self.key_token_dict = {}
 
         def countdown(self):
