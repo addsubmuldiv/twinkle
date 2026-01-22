@@ -8,7 +8,38 @@ from .datum import datum_to_input_feature
 
 @remote_class()
 class TwinkleCompatTransformersModel(MultiLoraTransformersModel):
+    """
+    Compatibility wrapper around :class:`MultiLoraTransformersModel` for Twinkle/Tinker.
 
+    This class adapts the core `MultiLoraTransformersModel` API to the data types and
+    remote-call semantics used by Twinkle:
+
+    * Inputs to :meth:`forward` and :meth:`forward_only` are provided as
+      ``List[types.Datum]`` and are converted to the underlying model's
+      ``InputFeature`` format via :func:`datum_to_input_feature`.
+    * The outputs of :meth:`forward` and :meth:`forward_only` are not the raw
+      transformer outputs; instead they are a list of dictionaries, one per
+      input example, containing:
+
+        - ``"logprobs"``: token-level log-probabilities as ``types.TensorData``.
+        - ``"elementwise_loss"``: per-token (masked) NLL loss as ``types.TensorData``.
+
+      These are derived from the underlying logits by applying ``log_softmax``
+      and slicing to the label sequence length.
+    * :meth:`calculate_loss` returns a Python scalar (via ``tensor.item()``)
+      and is exposed as a remote function with ``collect='sum'``, so the
+      distributed caller receives an aggregated scalar loss instead of a
+      tensor object.
+    * :meth:`step` accepts optimizer hyperparameters as :class:`types.AdamParams`,
+      performs optional gradient clipping, translates them into the optimizer
+      configuration expected by the base class, invokes the base ``step``
+      implementation, and finally zeros gradients.
+
+    Overall, this wrapper ensures that callers using Twinkle's higher-level
+    ``Datum``/``TensorData`` abstractions and remote functions can interact
+    with a ``MultiLoraTransformersModel`` instance without needing to know its
+    internal input feature schema, output structure, or optimizer API.
+    """
     @remote_function(collect='flatten')
     def forward(self, *, inputs: List[types.Datum], **kwargs):
         # Convert Datum to InputFeature
