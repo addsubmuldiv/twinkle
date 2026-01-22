@@ -2,7 +2,7 @@
 import functools
 import inspect
 import os
-from typing import Literal, List, Optional, Union, Callable
+from typing import Literal, List, Optional, Union, Callable, Any
 from typing import TypeVar
 
 import numpy as np
@@ -71,7 +71,18 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
     if seed is not None:
         _seed = seed
         framework_util.seed_everything(seed, full_determinism)
-    if _mode == 'ray':
+    if _mode == 'local':
+        if groups is not None:
+            _device_group = groups
+        else:
+            _device_group = [
+                DeviceGroup(
+                    name='default',
+                    ranks=list(range(Platform.get_world_size())),
+                    device_type=Platform.get_platform().device_prefix(),
+                )
+            ]
+    else:
         requires('ray')
         from ._ray import RayHelper
         if groups is not None:
@@ -87,18 +98,6 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         RayHelper.initialize(nproc_per_node=nproc_per_node,
                              ncpu_proc_per_node=ncpu_proc_per_node,
                              device_groups=_device_group)
-    else:
-        if groups is not None:
-            _device_group = groups
-        else:
-            _device_group = [
-                DeviceGroup(
-                    name='default',
-                    ranks=list(range(Platform.get_world_size())),
-                    device_type=Platform.get_platform().device_prefix(),
-                )
-            ]
-
 
 def is_master():
     if _mode == 'ray':
@@ -261,7 +260,7 @@ def _get_workers(workers, execute):
         raise ValueError(f'Unsupported execute method: {execute}')
 
 
-def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first'], Callable], result):
+def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first', 'last_pp'], Callable], result: List[Any], device_mesh: DeviceMesh=None):
     if not result:
         return result
 
@@ -269,7 +268,7 @@ def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first
         output = []
         for i in range(len(result[0])):
             _single_result = [r[i] for r in result]
-            output.append(_collect_func(method, _single_result))
+            output.append(_collect_func(method, _single_result, device_mesh=device_mesh))
         return output
     if method == 'none':
         if isinstance(result, list) and len(result) == 1:
@@ -288,6 +287,9 @@ def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first
         return np.sum(result)
     elif method == 'first':
         return result[0]
+    elif method == 'last_pp':
+        assert device_mesh is not None
+        return [r for i, r in enumerate(result) if i in device_mesh.get_pp_last_ranks()]
     elif isinstance(method, Callable):
         # Callable
         return method(result)
@@ -488,7 +490,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
 
 def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice',
                     execute: Literal['first', 'peer', 'all'] = 'all',
-                    collect: Union[Literal['none', 'flatten', 'mean', 'sum', 'first'], Callable] = 'none',
+                    collect: Union[Literal['none', 'flatten', 'mean', 'sum', 'first', 'last_pp'], Callable] = 'none',
                     sync: bool = False):
     """Patch each method called from remote(which class should be decorated with `remote_class`) with this decorator.
 
@@ -540,7 +542,8 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                     logger.info(f'Execution of remote function {func.__name__} completed with result: {result}')
                     
                     logger.info(f'Collecting results for remote function {func.__name__} with method {collect}')
-                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
+                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result,
+                                                                    getattr(self, 'device_mesh', None))
                     logger.info(f'Collection of results for remote function {func.__name__} completed with result: {result_func}')
 
                     lazy_collect = _lazy_collect
