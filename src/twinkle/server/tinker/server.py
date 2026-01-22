@@ -13,12 +13,12 @@ from tinker import types
 
 from twinkle.server.twinkle.validation import verify_request_token
 from .state import get_server_state, schedule_task
-from .common.io_utils import list_training_runs, load_train_info, delete_checkpoint_file
+from .common.io_utils import list_training_runs, get_training_run, get_run_checkpoints, delete_checkpoint_file
 
 
 def build_server_app(
-    deploy_options: Dict[str, Any], 
-    supported_models: Optional[List[types.SupportedModel]] = None, 
+    deploy_options: Dict[str, Any],
+    supported_models: Optional[List[types.SupportedModel]] = None,
     **kwargs
 ):
     app = FastAPI()
@@ -26,7 +26,6 @@ def build_server_app(
     @app.middleware("http")
     async def verify_token(request: Request, call_next):
         return await verify_request_token(request=request, call_next=call_next)
-
 
     @serve.deployment(name="TinkerCompatServer")
     @serve.ingress(app)
@@ -43,17 +42,17 @@ def build_server_app(
 
         async def _proxy(self, request: Request, target_path: str) -> Response:
             # Construct target URL on the same host
-            # Ensure we respect the current route prefix (e.g. /api/v1) 
+            # Ensure we respect the current route prefix (e.g. /api/v1)
             # when forwarding to sub-routes like /api/v1/model/...
             prefix = self.route_prefix.rstrip("/") if self.route_prefix else ""
             base_url = f"{request.url.scheme}://{request.url.netloc}"
             target_url = f"{base_url}{prefix}{target_path}"
-            
+
             # Prepare headers
             headers = dict(request.headers)
             headers.pop("host", None)
             headers.pop("content-length", None)
-            
+
             try:
                 rp_ = await self.client.request(
                     method=request.method,
@@ -73,7 +72,8 @@ def build_server_app(
 
         @staticmethod
         def _sample_output() -> types.SampleResponse:
-            sequence = types.SampledSequence(stop_reason="stop", tokens=[1, 2, 3], logprobs=[-0.1, -0.2, -0.3])
+            sequence = types.SampledSequence(stop_reason="stop", tokens=[
+                                             1, 2, 3], logprobs=[-0.1, -0.2, -0.3])
             return types.SampleResponse(sequences=[sequence])
 
         # --- Endpoints ---------------------------------------------------------
@@ -103,12 +103,12 @@ def build_server_app(
                 raise HTTPException(status_code=404, detail="Unknown session")
             return types.SessionHeartbeatResponse()
 
-
         @app.post("/create_sampling_session")
         async def create_sampling_session(
             self, request: Request, body: types.CreateSamplingSessionRequest
         ) -> types.CreateSamplingSessionResponse:
-            sampling_session_id = self.state.create_sampling_session(body.model_dump())
+            sampling_session_id = self.state.create_sampling_session(
+                body.model_dump())
             return types.CreateSamplingSessionResponse(sampling_session_id=sampling_session_id)
 
         @app.post("/asample")
@@ -149,25 +149,23 @@ def build_server_app(
 
         @app.get("/training_runs")
         async def get_training_runs(self, request: Request, limit: int = 20, offset: int = 0) -> types.TrainingRunsResponse:
-            runs_data, total = list_training_runs(limit=limit, offset=offset)
-            training_runs = [types.TrainingRun(**r) for r in runs_data]
-            cursor = types.Cursor(limit=limit, offset=offset, total=total)
-            return types.TrainingRunsResponse(training_runs=training_runs, cursor=cursor)
+            return list_training_runs(limit=limit, offset=offset)
 
         @app.get("/training_runs/{run_id}")
         async def get_training_run(self, request: Request, run_id: str) -> types.TrainingRun:
-            run_data = load_train_info(run_id)
-            if not run_data:
-                raise HTTPException(status_code=404, detail="Training run not found")
-            return types.TrainingRun(**run_data)
+            run = get_training_run(run_id)
+            if not run:
+                raise HTTPException(
+                    status_code=404, detail=f"Training run {run_id} not found")
+            return run
 
         @app.get("/training_runs/{run_id}/checkpoints")
         async def get_run_checkpoints(self, request: Request, run_id: str) -> types.CheckpointsListResponse:
-            run_data = load_train_info(run_id)
-            if not run_data:
-                raise HTTPException(status_code=404, detail="Training run not found")
-            checkpoints = [types.Checkpoint(**c) for c in run_data.get("checkpoints", [])]
-            return types.CheckpointsListResponse(checkpoints=checkpoints, cursor=None)
+            response = get_run_checkpoints(run_id)
+            if not response:
+                raise HTTPException(
+                    status_code=404, detail=f"Training run {run_id} not found")
+            return response
 
         @app.delete("/training_runs/{run_id}/checkpoints/{checkpoint_id:path}")
         async def delete_run_checkpoint(self, request: Request, run_id: str, checkpoint_id: str) -> Any:
@@ -176,7 +174,7 @@ def build_server_app(
             return None
 
     # --- Proxy Endpoints ---------------------------------------------------------
-    
+
     # --- Model Proxy Endpoints ----------------------------------------
 
         @app.post("/create_model")
