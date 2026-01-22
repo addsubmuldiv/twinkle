@@ -24,7 +24,7 @@ truncation_strategy = 'right'
 def build_template_kwargs(include_model_id: bool = False):
     kwargs = {}
     if include_model_id:
-        kwargs['model_id'] = 'Qwen/Qwen3-0.6B'
+        kwargs['model_id'] = '/home/zyh/model/Qwen3-0.6B'
     if max_length > 0:
         kwargs['max_length'] = max_length
         kwargs['truncation_strategy'] = truncation_strategy
@@ -90,14 +90,14 @@ class ActorGroup:
     def __init__(self, lora_config=None, adapter_name=None, **kwargs):
         # Use TorchSampler instead of VLLMSampler - no engine_args needed
         self.sampler = TorchSampler(
-            'Qwen/Qwen3-0.6B',
+            '/home/zyh/model/Qwen3-0.6B',
             device_mesh=actor_device_mesh,
         )
         self.sampler.add_adapter_to_sampler(adapter_name, lora_config)
         self.sampler.set_template('Qwen3Template', adapter_name=adapter_name, **build_template_kwargs())
 
         self.model = TransformersModel(
-            model_id='Qwen/Qwen3-0.6B', 
+            model_id='/home/zyh/model/Qwen3-0.6B', 
             remote_group='actor', 
             device_mesh=actor_device_mesh
         )
@@ -190,7 +190,7 @@ def train():
     ref_model = None
     if use_ref_model:
         ref_model = TransformersModel(
-            model_id='Qwen/Qwen3-0.6B', 
+            model_id='/home/zyh/model/Qwen3-0.6B', 
             remote_group='ref', 
             device_mesh=ref_device_mesh
         )

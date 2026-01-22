@@ -48,6 +48,9 @@ class MathReward(Reward):
     def compare_consecutive(first, second):
         cleaned_list = [MathReward.clean_latex(latex) for latex in [first, second]]
         parsed_exprs = [MathReward.parse_expression(latex) for latex in cleaned_list]
+        if parsed_exprs[0] is None or parsed_exprs[1] is None:
+            # Fallback to cleaned string comparison when LaTeX parsing fails.
+            return cleaned_list[0] == cleaned_list[1]
         if hasattr(parsed_exprs[0], 'equals') and hasattr(parsed_exprs[1], 'equals'):
             value = parsed_exprs[0].equals(parsed_exprs[1])
         else:
@@ -65,8 +68,17 @@ class MathReward(Reward):
                 return traj['messages'][-1]['content']
             return traj.messages[-1].content
 
+        def _ground_truth_content(traj):
+            if isinstance(traj, dict):
+                user_data = traj.get('user_data')
+                if isinstance(user_data, list):
+                    for item in user_data:
+                        if isinstance(item, (list, tuple)) and len(item) == 2 and item[0] == 'solution':
+                            return item[1]
+            return _last_content(traj)
+
         predictions = [_last_content(trajectory) for trajectory in trajectories]
-        ground_truths = [_last_content(trajectory) for trajectory in ground_truths]
+        ground_truths = [_ground_truth_content(trajectory) for trajectory in ground_truths]
         for prediction, ground_truth in zip(predictions, ground_truths):
             if '# Answer' in prediction:
                 prediction = prediction.split('# Answer')[1]
@@ -77,5 +89,10 @@ class MathReward(Reward):
             prediction = MathReward.extract_boxed_result(prediction)
             ground_truth = MathReward.extract_boxed_result(ground_truth)
             reward = MathReward.compare_consecutive(prediction, ground_truth)
+            reward = 1.0 if reward else -1.0
+            print(
+                f"[reward] pred_boxed='{prediction}' gt_boxed='{ground_truth}' match={reward}",
+                flush=True,
+            )
             rewards.append(float(reward))
         return rewards

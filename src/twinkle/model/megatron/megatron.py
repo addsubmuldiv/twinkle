@@ -22,7 +22,7 @@ from twinkle.hub import HubOperation
 from twinkle.loss import Loss, MegatronCrossEntropyLoss
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
-from twinkle import exists, requires
+from twinkle import requires
 import twinkle.metric
 from twinkle import torch_util
 from twinkle.model.base import TwinkleModel
