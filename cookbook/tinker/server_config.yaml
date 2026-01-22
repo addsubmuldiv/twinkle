@@ -17,6 +17,8 @@ applications:
           target_ongoing_requests: 128
         ray_actor_options:
           num_cpus: 0.1
+        logging_config:
+          log_level: DEBUG
 
   - name: models
     route_prefix: /api/v1/model
@@ -25,11 +27,11 @@ applications:
       nproc_per_node: 2
       device_group:
         name: model
-        ranks: [ 0,1 ]
+        ranks: [0, 1]
         device_type: cuda
       device_mesh:
         device_type: cuda
-        mesh: [0,1 ]
+        mesh: [0, 1]
         mesh_dim_names: ['dp']
     deployments:
       - name: ModelManagement
@@ -39,4 +41,5 @@ applications:
           target_ongoing_requests: 16
         ray_actor_options:
           num_cpus: 0.1
-
+        logging_config:
+          log_level: DEBUG

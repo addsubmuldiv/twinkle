@@ -2,16 +2,16 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from tinker import types
 
-
-DEFAULT_SAVE_DIR = os.environ.get('TWINKLE_DEFAULT_SAVE_DIR', './outputs')
+TWINKLE_DEFAULT_SAVE_DIR = os.environ.get('TWINKLE_DEFAULT_SAVE_DIR',
+                                          './outputs')
 
 
 def get_base_dir() -> Path:
-    return Path(DEFAULT_SAVE_DIR)
+    return Path(TWINKLE_DEFAULT_SAVE_DIR)
 
 
 def get_model_dir(model_id: str) -> Path:
@@ -28,7 +28,7 @@ def get_dir_size(path: Path) -> int:
 
 
 def _read_metadata(model_id: str) -> Dict[str, Any]:
-    metadata_path = get_model_dir(model_id) / "tinker_metadata.json"
+    metadata_path = get_model_dir(model_id) / 'tinker_metadata.json'
     if not metadata_path.exists():
         return {}
     try:
@@ -41,7 +41,7 @@ def _read_metadata(model_id: str) -> Dict[str, Any]:
 def _write_metadata(model_id: str, data: Dict[str, Any]):
     model_dir = get_model_dir(model_id)
     model_dir.mkdir(parents=True, exist_ok=True)
-    metadata_path = model_dir / "tinker_metadata.json"
+    metadata_path = model_dir / 'tinker_metadata.json'
     with open(metadata_path, 'w') as f:
         json.dump(data, f, indent=2)
 
@@ -49,11 +49,11 @@ def _write_metadata(model_id: str, data: Dict[str, Any]):
 def save_train_info(model_id: str, run: types.TrainingRun):
     # Preserve checkpoints if they exist in file but not in run object (which doesn't have checks list)
     current_data = _read_metadata(model_id)
-    checkpoints = current_data.get("checkpoints", [])
+    checkpoints = current_data.get('checkpoints', [])
 
     new_data = run.model_dump(mode='json')
     # Restore the checkpoints list which is stored alongside run metadata
-    new_data["checkpoints"] = checkpoints
+    new_data['checkpoints'] = checkpoints
 
     _write_metadata(model_id, new_data)
 
@@ -77,12 +77,13 @@ def save_checkpoint_info(model_id: str, checkpoint: types.Checkpoint):
     if not info:
         return
 
-    checkpoints = info.get("checkpoints", [])
+    checkpoints = info.get('checkpoints', [])
     ckpt_data = checkpoint.model_dump(mode='json')
 
     # Update existing or append new
     existing_idx = next((i for i, c in enumerate(checkpoints)
-                        if c['checkpoint_id'] == checkpoint.checkpoint_id), -1)
+                         if c['checkpoint_id'] == checkpoint.checkpoint_id),
+                        -1)
     if existing_idx >= 0:
         checkpoints[existing_idx] = ckpt_data
     else:
@@ -94,29 +95,34 @@ def save_checkpoint_info(model_id: str, checkpoint: types.Checkpoint):
     _write_metadata(model_id, info)
 
 
-def get_run_checkpoints(model_id: str) -> Optional[types.CheckpointsListResponse]:
+def get_run_checkpoints(
+        model_id: str) -> Optional[types.CheckpointsListResponse]:
     info = _read_metadata(model_id)
     if not info:
         return None
-    checkpoints = [types.Checkpoint(**c) for c in info.get("checkpoints", [])]
+    checkpoints = [types.Checkpoint(**c) for c in info.get('checkpoints', [])]
     return types.CheckpointsListResponse(checkpoints=checkpoints, cursor=None)
 
 
-def list_training_runs(limit: int = 20, offset: int = 0) -> types.TrainingRunsResponse:
+def list_training_runs(limit: int = 20,
+                       offset: int = 0) -> types.TrainingRunsResponse:
     base_dir = get_base_dir()
     if not base_dir.exists():
-        return types.TrainingRunsResponse(training_runs=[], cursor=types.Cursor(limit=limit, offset=offset, total_count=0))
+        return types.TrainingRunsResponse(training_runs=[],
+                                          cursor=types.Cursor(limit=limit,
+                                                              offset=offset,
+                                                              total_count=0))
 
     candidates = []
     for d in base_dir.iterdir():
-        if d.is_dir() and (d / "tinker_metadata.json").exists():
+        if d.is_dir() and (d / 'tinker_metadata.json').exists():
             candidates.append(d)
 
-    candidates.sort(key=lambda d: (
-        d / "tinker_metadata.json").stat().st_mtime, reverse=True)
+    candidates.sort(key=lambda d: (d / 'tinker_metadata.json').stat().st_mtime,
+                    reverse=True)
 
     total = len(candidates)
-    selected = candidates[offset: offset + limit]
+    selected = candidates[offset:offset + limit]
 
     runs = []
     for d in selected:
@@ -124,11 +130,14 @@ def list_training_runs(limit: int = 20, offset: int = 0) -> types.TrainingRunsRe
         if info:
             runs.append(types.TrainingRun(**info))
 
-    return types.TrainingRunsResponse(training_runs=runs, cursor=types.Cursor(limit=limit, offset=offset, total_count=total))
+    return types.TrainingRunsResponse(training_runs=runs,
+                                      cursor=types.Cursor(limit=limit,
+                                                          offset=offset,
+                                                          total_count=total))
 
 
 def delete_checkpoint_file(model_id: str, checkpoint_id: str) -> bool:
-    if ".." in checkpoint_id:
+    if '..' in checkpoint_id:
         return False
 
     model_dir = get_model_dir(model_id)
@@ -144,13 +153,15 @@ def delete_checkpoint_file(model_id: str, checkpoint_id: str) -> bool:
     # Update metadata
     info = _read_metadata(model_id)
     if info:
-        checkpoints = info.get("checkpoints", [])
+        checkpoints = info.get('checkpoints', [])
         new_ckpts = [
-            c for c in checkpoints if c['checkpoint_id'] != checkpoint_id]
+            c for c in checkpoints if c['checkpoint_id'] != checkpoint_id
+        ]
         info['checkpoints'] = new_ckpts
 
         # If we deleted the "last_checkpoint", reset it
-        if info.get('last_checkpoint') and info['last_checkpoint'].get('checkpoint_id') == checkpoint_id:
+        if info.get('last_checkpoint') and info['last_checkpoint'].get(
+                'checkpoint_id') == checkpoint_id:
             info['last_checkpoint'] = new_ckpts[-1] if new_ckpts else None
 
         _write_metadata(model_id, info)
