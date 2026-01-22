@@ -2,7 +2,7 @@
 """Twinkle Kernel Module - Kernel orchestration layer."""
 from typing import Optional, Union, Any, Dict
 from logging import getLogger
-from .function import apply_function_kernel
+from .function import apply_function_kernel, register_function_kernel
 from .base import (
     ModeType,
     DeviceType,
@@ -19,6 +19,7 @@ logger = getLogger(__name__)
 __all__ = [
     "kernelize_model",
     "register_layer_kernel",
+    "register_function_kernel",
     "register_external_layer",
     "register_kernels",
 ]
