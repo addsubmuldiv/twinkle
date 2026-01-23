@@ -219,12 +219,9 @@ class MyFuncRepo:
     def load(self):
         return MyKernelFunc
 
-class MyKernelFunc:
-    can_torch_compile = True
-    has_backward = True
-
-    def __call__(self, x, y):
-        return x + y + 2
+class MyKernelFunc(nn.Module):
+    def forward(self, x, y):
+        return x * y
 
 register_function_kernel(
     func_name="mul",

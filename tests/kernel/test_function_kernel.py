@@ -4,6 +4,7 @@ import unittest
 
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 
 from twinkle.kernel.base import is_kernels_available
 from twinkle.kernel.function import register_function_kernel, apply_function_kernel
@@ -26,7 +27,7 @@ def _reference_silu_and_mul(x: torch.Tensor) -> torch.Tensor:
     return F.silu(x[..., :d]) * x[..., d:]
 
 
-class TestFlattenedBuildFunctionKernel(unittest.TestCase):
+class TestFunctionKernel(unittest.TestCase):
     def setUp(self):
         if not is_kernels_available():
             self.skipTest("kernels package not available in this environment.")
@@ -173,5 +174,50 @@ class TestFlattenedBuildFunctionKernel(unittest.TestCase):
                     mode="inference",
                     strict=True,
                 )
+        finally:
+            sys.modules.pop(module_name, None)
+
+    def test_repo_object_loads_module_class(self):
+        _ensure_test_packages()
+        module_name = "tests.kernel._tmp_repo_object"
+        temp_module = types.ModuleType(module_name)
+
+        def original(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            return x + y
+
+        temp_module.add = original
+        temp_module.__path__ = []
+        sys.modules[module_name] = temp_module
+
+        class MyKernelFunc(nn.Module):
+            def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+                return x + y + 2
+
+        class MyFuncRepo:
+            func_name = "add"
+
+            def load(self):
+                return MyKernelFunc
+
+        try:
+            register_function_kernel(
+                func_name="add",
+                target_module=module_name,
+                repo=MyFuncRepo(),
+                device="cuda",
+                mode="inference",
+            )
+
+            applied = apply_function_kernel(
+                target_module=module_name,
+                device="cuda",
+                mode="inference",
+            )
+
+            self.assertEqual(applied, [f"{module_name}.add"])
+            self.assertIsNot(temp_module.add, original)
+            x = torch.tensor([1.0])
+            y = torch.tensor([2.0])
+            self.assertTrue(torch.allclose(temp_module.add(x, y), x + y + 2))
         finally:
             sys.modules.pop(module_name, None)
