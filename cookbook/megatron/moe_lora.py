@@ -32,12 +32,12 @@ GAS = 16 # gradient accumulation steps
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode',
                     type=str,
-                    default='local',
+                    default='ray',
                     choices=['local', 'ray'])
 parser.add_argument('--dp_size', type=int, default=2)
 parser.add_argument('--tp_size', type=int, default=2)
 parser.add_argument('--pp_size', type=int, default=2)
-parser.add_argument('--vpp_size', type=int, default=1)
+parser.add_argument('--vpp_size', type=int, default=2)
 parser.add_argument('--cp_size', type=int, default=2)
 parser.add_argument('--ep_size',
                     type=int,
@@ -88,6 +88,8 @@ def train():
 
     twinkle.initialize(
         mode=args.mode,
+        nproc_per_node=16,
+        ncpu_proc_per_node=16,
         groups=device_group,
         global_device_mesh=device_mesh,
         lazy_collect=True,
@@ -127,7 +129,7 @@ def train():
     for step, batch in enumerate(dataloader):
         output = model.forward_backward(inputs=batch)
         if step % GAS == 0:
-            logger.info(f'Step {step // GAS}, loss: {output}')
+            logger.info(f'Step {step // GAS}, loss: {output()}')
         model.clip_grad_and_step()
         if step > 0 and step % (100 * GAS) == 0:
             model.save('./output/megatron_moe_lora')
