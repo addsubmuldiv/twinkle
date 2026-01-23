@@ -510,12 +510,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         HubOperation.wait_for()
 
     @remote_function()
-    def save(self, name, output_dir=None, **kwargs):
+    def save(self, name, output_dir=None, interval=1, **kwargs):
         """Save model.
 
         Args:
             name: The name of checkpoint to save.
             output_dir: An output_dir to save the model.
+            interval: Save each interval steps.
             **kwargs:
                 adapter_name: Lora adapter name.
         """
@@ -523,6 +524,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             output_dir = 'output'
         checkpoint_dir = os.path.join(output_dir, name)
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        optimizer_config = self.optimizer_group[adapter_name]
+        if optimizer_config.cur_step % interval != 0:
+            return
         model = self.strategy.unwrap_model(self.model)
         state_dict = self._get_trainable_parameters(adapter_name=adapter_name)
         processed_state_dict = {}

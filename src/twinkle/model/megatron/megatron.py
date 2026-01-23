@@ -827,14 +827,18 @@ class MegatronModel(TwinkleModel, nn.Module):
         self.lr_step(**kwargs)
 
     @remote_function(dispatch='all', sync=True)
-    def save(self, output_dir: str, **kwargs):
+    def save(self, output_dir: str, interval=1, **kwargs):
         """Save model checkpoint.
 
         Args:
             output_dir: Output directory.
+            interval: Save each interval steps.
             **kwargs: Additional arguments.
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        optimizer_config = self.optimizer_group[adapter_name]
+        if optimizer_config.cur_step % interval != 0:
+            return
         save_format = kwargs.pop('save_format', 'hf')  # 'hf' or 'megatron'
 
         if save_format == 'hf':

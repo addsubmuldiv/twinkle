@@ -133,8 +133,7 @@ def train():
         if step % GAS == 0:
             logger.info(f'Step {step // GAS}, loss: {output()}')
         model.clip_grad_and_step()
-        if step > 0 and step % (100 * GAS) == 0:
-            model.save('./output/megatron_moe_lora')
+        model.save('./output/megatron_moe_lora', interval=50)
         # Early stop for testing
         if args.max_steps and step >= args.max_steps * GAS:
             logger.info(f'Reached max_steps ({args.max_steps}), stopping.')
