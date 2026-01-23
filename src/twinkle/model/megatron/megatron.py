@@ -18,7 +18,7 @@ import twinkle
 from twinkle import DeviceMesh, remote_class, remote_function, template, Platform
 from twinkle.data_format import InputFeature, Trajectory
 from twinkle.hub import HubOperation
-from twinkle.loss import Loss, MegatronCrossEntropyLoss
+from twinkle.loss import Loss
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
 from twinkle import requires
@@ -52,7 +52,6 @@ class MegatronOptimizerGroup:
     metrics: List[Metric] = field(default_factory=list)
     _device_mesh: DeviceMesh = None
     # Megatron optimizer specific fields
-    is_megatron_optimizer: bool = True
     _last_grad_norm: float = 0.0
     _last_step_success: bool = True
 
@@ -122,7 +121,6 @@ class MegatronModel(TwinkleModel, nn.Module):
 
     def _construct_default_optimizer_group(self):
         return MegatronOptimizerGroup(
-            loss_instance=MegatronCrossEntropyLoss(),
             template=Template(self.tokenizer_id),
             processor=InputProcessor(self.device_mesh),
             _device_mesh=self.device_mesh,
@@ -187,6 +185,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             cp_size=self.device_mesh.cp_world_size,
             ep_size=self.device_mesh.ep_size,
             vpp_size=self.device_mesh.vpp_size,
+            order=self.device_mesh.order,
             params_dtype=params_dtype,
             seed=self._seed,
             use_cpu_initialization=False,
@@ -266,6 +265,7 @@ class MegatronModel(TwinkleModel, nn.Module):
 
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        loss_instance = self.optimizer_group[adapter_name].loss_instance
 
         vpp_size = self.device_mesh.vpp_size
         if vpp_size is None or vpp_size == 1:
@@ -308,6 +308,12 @@ class MegatronModel(TwinkleModel, nn.Module):
             else:
                 seq_length = original_seq_length
 
+        def post_loss_function(output_tensor, inputs):
+            if loss_instance is not None:
+                # TODO
+                loss = loss_instance(inputs, output_tensor)
+            return self.strategy.gather_loss_for_cp(output_tensor, inputs['labels'])
+
         # Define forward step function for Megatron
         # forward_step_func(data_iterator, model) -> (output_tensor, partial(loss_func))
         def forward_step_func(data_iterator, model):
@@ -327,7 +333,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 attention_mask=attention_mask,
                 labels=batch_labels,  # Pass labels to let Megatron compute loss
             )
-            return output_tensor, partial(optimizer_config.loss_instance.__call__, batch)
+            return output_tensor, partial(post_loss_function, inputs=batch)
 
         # Get Megatron's forward-backward function
         # This automatically selects the right scheduler based on PP config:
@@ -347,10 +353,10 @@ class MegatronModel(TwinkleModel, nn.Module):
             forward_step_func=forward_step_func,
             data_iterator=data_iter,
             model=self.model,
-            num_microbatches=1,
+            num_microbatches=len(inputs) if isinstance(inputs, list) else 1,
             seq_length=seq_length,
             micro_batch_size=micro_batch_size,
-            forward_only=False,
+            forward_only=True,
         )
 
         # Extract loss from results (only last PP stage returns non-empty)
@@ -416,6 +422,7 @@ class MegatronModel(TwinkleModel, nn.Module):
 
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        loss_instance = self.optimizer_group[adapter_name].loss_instance
 
         vpp_size = self.device_mesh.vpp_size
         if vpp_size is None or vpp_size == 1:
@@ -457,6 +464,12 @@ class MegatronModel(TwinkleModel, nn.Module):
             else:
                 seq_length = original_seq_length
 
+        def post_loss_function(output_tensor, inputs):
+            if loss_instance is not None:
+                # TODO
+                loss = loss_instance(inputs, output_tensor)
+            return self.strategy.gather_loss_for_cp(output_tensor, inputs['labels'])
+
         # Define forward step function for Megatron
         # forward_step_func(data_iterator, model) -> (output_tensor, partial(loss_func))
         def forward_step_func(data_iterator, model):
@@ -476,7 +489,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 attention_mask=attention_mask,
                 labels=batch_labels,  # Pass labels to let Megatron compute loss
             )
-            return output_tensor, partial(optimizer_config.loss_instance.__call__, batch)
+            return output_tensor, partial(post_loss_function, inputs=batch)
 
         # Get Megatron's forward-backward function
         # This automatically selects the right scheduler based on PP config:
@@ -551,7 +564,8 @@ class MegatronModel(TwinkleModel, nn.Module):
                        max_grad_norm: float = 1.0,
                        norm_type: int = 2,
                        **kwargs):
-        raise NotImplementedError
+        # Megatron optimizer will cover this function.
+        pass
 
     @remote_function(dispatch='all')
     def step(self, **kwargs):
@@ -700,15 +714,13 @@ class MegatronModel(TwinkleModel, nn.Module):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
-        use_megatron_optimizer = kwargs.pop('use_megatron_optimizer', False)
 
         # Check if requesting Megatron distributed optimizer
-        if optimizer_cls == 'MegatronDistributed' or use_megatron_optimizer:
+        if not optimizer_cls or optimizer_cls == 'MegatronDistributed':
             optimizer_config.optimizer = self._create_megatron_optimizer(**kwargs)
             optimizer_config.is_megatron_optimizer = True
         else:
-            optimizer_config.optimizer = construct_class(optimizer_cls, Optimizer, torch.optim, **kwargs)
-            optimizer_config.is_megatron_optimizer = False
+            raise NotImplementedError(f'Unsupported optimizer: {optimizer_cls}, only support MegatronOptimizer currently.')
 
     def _create_megatron_optimizer(self, **kwargs):
         """Create Megatron distributed optimizer.
@@ -804,7 +816,6 @@ class MegatronModel(TwinkleModel, nn.Module):
 
     @remote_function(dispatch='all')
     def clip_grad_and_step(self, max_grad_norm: float=1.0, norm_type=2, **kwargs):
-        # self.clip_grad_norm(max_grad_norm, norm_type, **kwargs)
         self.step(**kwargs)
         self.zero_grad(**kwargs)
         self.lr_step(**kwargs)

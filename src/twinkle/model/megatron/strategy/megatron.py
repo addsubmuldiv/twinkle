@@ -221,6 +221,48 @@ class MegatronStrategy:
             'labels': batch_labels,
         }
 
+    def gather_loss_for_cp(self, output_tensor, labels):
+        import torch
+        from megatron.core import parallel_state as mpu
+        cp_size = mpu.get_context_parallel_world_size()
+        labels_for_mask = labels
+        # output_tensor is per-token loss [batch, seq]
+        # Create loss mask from labels (ignore -100)
+        loss_mask = (labels_for_mask != -100).float()
+
+        # Flatten and compute mean
+        losses = output_tensor.float().view(-1)
+        loss_mask_flat = loss_mask.view(-1)
+
+        # Compute local sum and count
+        local_loss_sum = torch.sum(losses * loss_mask_flat)
+        local_count = loss_mask_flat.sum()
+
+        # For CP > 1, aggregate loss across CP ranks
+        if cp_size > 1:
+            # All-reduce the count across CP ranks
+            total_count = local_count.clone()
+            torch.distributed.all_reduce(
+                total_count,
+                op=torch.distributed.ReduceOp.SUM,
+                group=mpu.get_context_parallel_group()
+            )
+
+            # All-reduce the loss sum
+            total_loss_sum = local_loss_sum.clone()
+            torch.distributed.all_reduce(
+                total_loss_sum,
+                op=torch.distributed.ReduceOp.SUM,
+                group=mpu.get_context_parallel_group()
+            )
+
+            # Return global mean, divided by cp_size to counteract Megatron's multiplication
+            loss = (total_loss_sum / total_count.clamp(min=1)) / cp_size
+        else:
+            loss = local_loss_sum / local_count.clamp(min=1)
+
+        return loss, {'loss': loss.detach()}
+
     def get_model_config(
         self,
         hidden_size: int,

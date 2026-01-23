@@ -16,7 +16,7 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 from tqdm import tqdm
 
-from twinkle import exists, Platform
+from twinkle import exists
 from twinkle.hub import HubOperation
 from twinkle import torch_util
 
@@ -1575,6 +1575,7 @@ class BridgeInitializer:
         ep_size: int = 1,
         etp_size: Optional[int] = None,
         vpp_size: Optional[int] = None,
+        order: str = "tp-cp-ep-dp-pp",
         params_dtype=None,
         seed: int = 42,
         use_cpu_initialization: bool = False,
@@ -1614,6 +1615,7 @@ class BridgeInitializer:
         self.ep_size = ep_size
         self.etp_size = etp_size or tp_size
         self.vpp_size = vpp_size or 1
+        self.order = order
         self.params_dtype = params_dtype if params_dtype is not None else torch.bfloat16
         self.use_cpu_initialization = use_cpu_initialization
         self.attention_backend = attention_backend
@@ -1646,6 +1648,9 @@ class BridgeInitializer:
             'virtual_pipeline_model_parallel_size': self.vpp_size,
             'expert_model_parallel_size': self.ep_size,
         }
+
+        if self.order:
+            init_kwargs['order'] = self.order
 
         if exists('megatron_core>=0.13'):
             init_kwargs['expert_tensor_parallel_size'] = self.etp_size
@@ -1884,7 +1889,7 @@ class BridgeInitializer:
             model = []
             has_vp_stage = inspect.signature(mpu.is_pipeline_first_stage).parameters.get("vp_stage", None) is not None
             for i in range(mpu.get_virtual_pipeline_model_parallel_world_size()):
-                # mpu.set_virtual_pipeline_model_parallel_rank(i)
+                mpu.set_virtual_pipeline_model_parallel_rank(i)
                 extra_kwargs = {} if not has_vp_stage else {"ignore_virtual": False, "vp_stage": i}
                 if has_vp_stage:
                     extra_init_args['vp_stage'] = i
@@ -1903,7 +1908,7 @@ class BridgeInitializer:
                     **extra_init_args
                 )
                 model.append(_model)
-            # mpu.set_virtual_pipeline_model_parallel_rank(0)
+            mpu.set_virtual_pipeline_model_parallel_rank(0)
         else:
             model = GPTModel(
                 config=config,

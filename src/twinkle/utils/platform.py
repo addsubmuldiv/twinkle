@@ -121,6 +121,11 @@ class DeviceMesh:
         ranks = sorted(self.mesh[tuple(slices)].flatten().tolist())
         return dist.new_group(ranks=ranks)
 
+    @property
+    def order(self):
+        # TODO hard coded for now
+        return 'tp-cp-ep-dp-pp'
+
     def to_torch_device_mesh(self):
         import torch
         return torch.distributed.DeviceMesh(
