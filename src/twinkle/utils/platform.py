@@ -43,12 +43,11 @@ class DeviceMesh:
     device_type: str = 'cuda'
 
     @staticmethod
-    def from_sizes(dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
+    def from_sizes(world_size: int = 1, dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
                    pp_size: int = None, ulysses_size: int = None, cp_size: int = None, ep_size: int = None,
                    vpp_size: int = None, device_type: str = 'cuda') -> "DeviceMesh":
 
-        origin_world_size = Platform.get_world_size()
-        world_size = origin_world_size
+        origin_world_size = world_size
         mesh_dim_names = []
         mesh_dim_sizes = []
         if fsdp_size is not None:
