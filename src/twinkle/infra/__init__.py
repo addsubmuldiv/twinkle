@@ -339,7 +339,7 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
 
         args = [dispatch_func(arg, length) for arg in args]
         kwargs = {k: dispatch_func(v, length) for k, v in kwargs.items()}
-        for i in range(length):
+        for i in range(len(workers)):
             sliced_args = tuple(arg[i] for arg in args)
             sliced_kwargs = {k: v[i] for k, v in kwargs.items()}
             result.append((workers[i], sliced_args, sliced_kwargs))
@@ -427,6 +427,10 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                     if device_mesh is None:
                         device_mesh = _device_mesh
                         kwargs[device_mesh_name] = _device_mesh
+                    
+                    if 'dataloader' in cls.__name__.lower():
+                        # Dataloader runs in simple worker mode, so returns all data to driver
+                        kwargs[device_mesh_name] = DeviceMesh.from_sizes(dp_size=1)
 
                     if _device_group and remote_group:
                         device_group = [dg for dg in _device_group if dg.name == remote_group][0]
@@ -552,6 +556,10 @@ def remote_function(dispatch: Union[Literal['slice', 'all'], Callable] = 'slice'
                     lazy_collect = _lazy_collect
                     if func.__name__ == '__iter__':
                         return self
+                    
+                    if func.__name__ == '__len__':
+                        import ray
+                        return ray.get(result[0])
 
                     if func.__name__ == '__next__':
                         import ray

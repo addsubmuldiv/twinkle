@@ -677,6 +677,9 @@ class MegatronModel(TwinkleModel, nn.Module):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        if not self._model_wrapped:
+            self.model = self.strategy.wrap_model(self.model)
+            self._model_wrapped = True
 
         # Check if requesting Megatron distributed optimizer
         if not optimizer_cls or optimizer_cls in ('MegatronDistributedOptimizer', 'default'):
@@ -744,7 +747,9 @@ class MegatronModel(TwinkleModel, nn.Module):
             lr_decay_steps=lr_decay_steps,
             lr_decay_style=kwargs.pop('lr_decay_style', 'cosine'),
             start_wd=kwargs.pop('start_wd', 0.01),
-            end_wd=kwargs.pop('end_wd', 0),
+            end_wd=kwargs.pop('end_wd', 0.01),
+            wd_incr_steps=lr_decay_steps,
+            wd_incr_style=kwargs.pop('wd_incr_style', 'constant'),
             **kwargs,
         )
 
@@ -782,8 +787,9 @@ class MegatronModel(TwinkleModel, nn.Module):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        optimizer = optimizer_config.optimizer
         if not scheduler_cls or scheduler_cls in ('OptimizerParamScheduler', 'default'):
-            optimizer_config.lr_scheduler = self._create_megatron_scheduler(**kwargs) # noqa
+            optimizer_config.lr_scheduler = self._create_megatron_scheduler(optimizer, **kwargs) # noqa
         else:
             raise NotImplementedError(f'Unsupported scheduler: {scheduler_cls}, only support OptimizerParamScheduler currently.')
 
