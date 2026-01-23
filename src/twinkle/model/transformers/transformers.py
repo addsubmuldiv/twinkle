@@ -181,7 +181,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         optimizer_config.outputs = outputs
         return outputs
 
-    @remote_function()
+    @remote_function(dispatch='slice_dp', collect='flatten')
     def forward_only(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
         """Call forward function without grad and record the inputs and outputs.
 
@@ -270,7 +270,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             loss_value.backward()
         optimizer_config.cur_step += 1
 
-    @remote_function(collect='mean')
+    @remote_function(dispatch='slice_dp', collect='mean')
     def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
         """Do forward, calculate loss, and backward.
 

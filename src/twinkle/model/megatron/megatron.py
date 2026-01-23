@@ -210,7 +210,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 **kwargs):
         raise NotImplementedError(f'Megatron only supports `forward_backward` and `forward_only`')
 
-    @remote_function(collect='last_pp')
+    @remote_function(dispatch='slice_dp', collect='last_pp')
     def forward_only(self, *, inputs: Union[InputFeature, List[InputFeature],
                                             List[Trajectory]],
                      micro_batch_size: Optional[int] = None,
@@ -353,7 +353,7 @@ class MegatronModel(TwinkleModel, nn.Module):
     def backward(self, **kwargs):
         raise NotImplementedError(f'Megatron only supports `forward_backward` and `forward_only`')
 
-    @remote_function(dispatch='all', collect='mean', sync=True)
+    @remote_function(dispatch='slice_dp', collect='mean', sync=True)
     def forward_backward(self,
                          *,
                          inputs: Union[InputFeature, List[InputFeature],

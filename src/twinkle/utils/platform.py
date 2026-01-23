@@ -257,7 +257,6 @@ class DeviceMesh:
         world_size = self.data_world_size
         if rank is None:
             rank = self.data_rank
-            from megatron.core import parallel_state as mpu
             if rank is None:
                 rank = 0
                 world_size = 1
@@ -278,23 +277,35 @@ class DeviceMesh:
         end = (rank + 1) * k + min(rank + 1, m)
         return slice(start, end)
 
-    def get_pp_stage_ranks(self, stage: int) -> list[int]:
+    def is_pp_first_rank(self) -> bool:
+        pp_ranks = self.get_pp_first_ranks()
+        if pp_ranks is None:
+            return False
+        return Platform.get_rank() in pp_ranks
+
+    def is_pp_last_rank(self) -> bool:
+        pp_ranks = self.get_pp_last_ranks()
+        if pp_ranks is None:
+            return False
+        return Platform.get_rank() in pp_ranks
+
+    def get_pp_stage_ranks(self, stage: int) -> Optional[list[int]]:
         pp_dim_idx = self._get_dim_index("pp")
 
         if pp_dim_idx is None:
             if stage == 0:
                 return self.mesh.flatten().tolist()
-            raise ValueError("No PP dimension, only stage 0 exists")
+            raise None
 
         indices = [slice(None)] * len(self.mesh.shape)
         indices[pp_dim_idx] = stage
 
         return sorted(self.mesh[tuple(indices)].flatten().tolist())
 
-    def get_pp_first_ranks(self) -> list[int]:
+    def get_pp_first_ranks(self) -> Optional[list[int]]:
         return self.get_pp_stage_ranks(0)
 
-    def get_pp_last_ranks(self) -> list[int]:
+    def get_pp_last_ranks(self) -> Optional[list[int]]:
         pp_world_size = self.pp_world_size or 1
         return self.get_pp_stage_ranks(pp_world_size - 1)
 

@@ -35,6 +35,8 @@ class MegatronStrategy:
             assert self.device_mesh.tp_rank == mpu.get_tensor_model_parallel_rank()
         if self.device_mesh.pp_world_size is not None and self.device_mesh.pp_world_size > 1:
             assert self.device_mesh.pp_rank == mpu.get_pipeline_model_parallel_rank()
+            assert self.device_mesh.is_pp_last_rank() == mpu.is_pipeline_last_stage()
+            assert self.device_mesh.is_pp_first_rank() == mpu.is_pipeline_first_stage()
         if self.device_mesh.vpp_size is not None and self.device_mesh.vpp_size > 1:
             assert self.device_mesh.vpp_size == mpu.get_virtual_pipeline_model_parallel_world_size()
 
