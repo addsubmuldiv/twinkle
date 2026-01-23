@@ -189,8 +189,7 @@ kernelize_model(model=None, mode="inference", device="cuda", use_fallback=True)
 
 Use this when:
 
-* Different functions come from different sources
-* You need compile / backward / torch.compile support
+* Use when different functions come from different sources (impl / repo / hub) or need compile/backward flags.
 
 ```python
 from twinkle.kernel.function import (
