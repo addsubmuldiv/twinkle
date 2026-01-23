@@ -58,7 +58,7 @@ class OptimizerGroup:
         return self.cur_step % gradient_accumulation_steps == 0 and self.cur_step > 0
 
     def __post_init__(self):
-        if self._device_mesh.data_parallel_world_size > 1:
+        if self._device_mesh.data_world_size > 1:
             self._dp_group = self._device_mesh.create_process_group(['dp', 'fsdp'])
             for metric in self.metrics:
                 metric.process_group = self._dp_group
@@ -306,7 +306,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         scaler = optimizer_config.scaler
 
         context = contextlib.nullcontext
-        if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
+        if self.device_mesh is not None and self.device_mesh.tp_world_size is not None and self.device_mesh.tp_world_size > 1:
             from torch.distributed.tensor.experimental import implicit_replication
             context = implicit_replication
 
