@@ -5,8 +5,6 @@ from logging import getLogger
 from typing import Dict, Any, Optional, Type, List, Callable, Tuple
 
 from .base import DeviceType, ModeType, is_kernels_available
-from kernels.layer.func import FuncRepositoryProtocol
-
 
 
 logger = getLogger(__name__)
@@ -111,7 +109,7 @@ class FunctionKernelSpec:
     func_name: str
     target_module: str
     func_impl: Optional[Callable]
-    repo: Optional[FuncRepositoryProtocol]
+    repo: Optional['kernels.layer.func.FuncRepositoryProtocol']
     repo_id: Optional[str]
     revision: Optional[str]
     version: Optional[str]

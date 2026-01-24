@@ -1,6 +1,8 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
+import platform
 import shutil
+import subprocess
 from abc import ABC
 from dataclasses import dataclass, field
 from typing import Optional, Dict
@@ -8,6 +10,7 @@ from typing import Type
 from typing import Union, List
 import torch.distributed as dist
 import numpy as np
+from modelscope.models.science.unifold.data.utils import lru_cache
 
 
 @dataclass
@@ -378,7 +381,7 @@ class Platform(ABC):
 
     @staticmethod
     def get_platform_names() -> List[str]:
-        return ['GPU', 'NPU']
+        return ['GPU', 'NPU', 'MPS']
 
     @staticmethod
     def get_platform(platform: str = None) -> Type['Platform']:
@@ -387,12 +390,16 @@ class Platform(ABC):
                 return NPU
             elif shutil.which("nvidia-smi"):
                 return GPU
+            elif MPS.is_mps_available():
+                return MPS
             else:
                 return GPU
         elif platform.upper() in ("GPU", "CUDA"):
             return GPU
         elif platform.upper() == "NPU":
             return NPU
+        elif platform.upper() == "MPS":
+            return MPS
         else:
             raise ValueError(f"Unsupported platform: {platform}.")
 
@@ -485,7 +492,7 @@ class GPU(Platform):
         return 'cuda'
 
     @staticmethod
-    def get_local_device(idx: int, **kwargs) -> str:
+    def get_local_device(idx, **kwargs) -> str:
         return f'cuda:{idx}'
 
 
@@ -501,5 +508,34 @@ class NPU(Platform):
         return 'npu'
 
     @staticmethod
-    def get_local_device(idx: int, **kwargs) -> str:
+    def get_local_device(idx, **kwargs) -> str:
         return f'npu:{idx}'
+
+
+class MPS(Platform):
+
+    @staticmethod
+    def visible_device_env():
+        return None
+
+    @staticmethod
+    def device_prefix():
+        return 'mps'
+
+    @staticmethod
+    def get_local_device(idx, **kwargs) -> str:
+        return f'mps'
+
+    @lru_cache
+    @staticmethod
+    def is_mps_available():
+        if platform.system() != "Darwin":
+            return False
+        try:
+            output = subprocess.check_output(
+                ["system_profiler", "SPDisplaysDataType"],
+                stderr=subprocess.DEVNULL, text=True
+            )
+            return "Metal Support" in output
+        except Exception: # noqa
+            return False

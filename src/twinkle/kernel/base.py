@@ -2,7 +2,11 @@
 """Kernel module base - Base classes, env vars, device detection."""
 import os
 from typing import Optional, Literal, Any
-from ..utils import exists
+from twinkle import exists
+
+
+ModeType = Literal["train", "inference", "compile"]
+DeviceType = Literal["cuda", "npu", "mps", "cpu", "rocm", "metal"]
 
 
 def _kernels_enabled() -> bool:
@@ -15,24 +19,6 @@ def _trust_remote_code() -> bool:
     """Check if remote code is trusted (default: not trusted)."""
     env_val = os.getenv("TWINKLE_TRUST_REMOTE_CODE", "NO").upper()
     return env_val in ("YES", "TRUE", "1", "ON")
-
-
-ModeType = Literal["train", "inference", "compile"]
-DeviceType = Literal["cuda", "npu", "mps", "cpu", "rocm", "metal"]
-
-
-def get_device_type() -> Optional[DeviceType]:
-    """Auto-detect current device type."""
-    if exists("torch"):
-        import torch
-        if torch.cuda.is_available():
-            return "cuda"
-        if hasattr(torch, "npu") and torch.npu.is_available():
-            return "npu"
-        if hasattr(torch, "backends") and hasattr(torch.backends, "mps"):
-            if torch.backends.mps.is_available():
-                return "mps"
-    return None
 
 
 def detect_backend() -> Optional[str]:
