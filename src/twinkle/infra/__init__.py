@@ -4,16 +4,15 @@ import inspect
 import os
 from typing import Literal, List, Optional, Union, Callable, Any
 from typing import TypeVar
-
+import torch.distributed as dist
 import numpy as np
 
-from ..utils import DeviceGroup, DeviceMesh, Platform
-from ..utils import requires, framework_util, check_unsafe
-from ..utils.logger import get_logger
+from twinkle.utils import DeviceGroup, DeviceMesh, Platform
+from twinkle.utils import requires, framework_util, check_unsafe
+from twinkle.utils import get_logger
 
 logger = get_logger()
 
-import torch.distributed as dist
 
 T1 = TypeVar('T1', bound=object)
 
@@ -65,8 +64,9 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
     if global_device_mesh is not None:
         _device_mesh = global_device_mesh
     else:
+        # groups can be given by default
         _device_mesh = DeviceMesh(
-            device_type=Platform.get_platform().device_prefix(),
+            device_type=Platform.device_prefix(),
             mesh=np.arange(Platform.get_world_size()),
             mesh_dim_names=('dp',)
         )
@@ -87,44 +87,13 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
     else:
         requires('ray')
         from ._ray import RayHelper
-        if groups is not None:
-            _device_group = groups
-        else:
-            _device_group = [
-                DeviceGroup(
-                    name='default',
-                    ranks=list(range(Platform.get_world_size())),
-                    device_type=Platform.get_platform().device_prefix(),
-                )
-            ]
+        assert groups is not None
+        # groups is needed for ray
+        _device_group = groups
         RayHelper.initialize(nproc_per_node=nproc_per_node,
                              ncpu_proc_per_node=ncpu_proc_per_node,
                              device_groups=_device_group)
 
-def is_master():
-    if _mode == 'ray':
-        if 'TWINKLE_MODE' in os.environ:
-            return True
-    elif _mode == 'local':
-        if Platform.is_master():
-            return True
-    return False
-
-def is_last_rank():
-    if not dist.is_initialized():
-        return True
-
-    from megatron.core import parallel_state as mpu
-    if mpu.is_initialized():
-        # Only DP rank 0 writes
-        dp_rank = mpu.get_data_parallel_rank()
-        if dp_rank != 0:
-            return False
-        # For PP, only last stage needs to write certain weights
-        # (handled separately in export_weights)
-        return True
-
-    return dist.get_rank() == dist.get_world_size() - 1
 
 def get_device_placement(device_group=None) -> str:
     """Get the device placement graph, can be used to show the training topology.
@@ -278,27 +247,45 @@ def _get_workers(workers, execute):
 
 
 def _collect_func(method: Union[Literal['none', 'flatten', 'mean', 'sum', 'first', 'last_pp'], Callable], result: List[Any], device_mesh: DeviceMesh=None):
+    """Collect results
+
+    Args:
+        method:
+            none: Return as is.
+            flatten: Flat the nested results.
+            mean: Average the results.
+            sum: Sum the results.
+            first: Only return the first result.
+            last_pp: Only return the results of the last pp rank.
+        result: The results returned by workers.
+        device_mesh: The device_mesh, needed by `last_pp`
+    Returns:
+        The collected results.
+    """
     if not result:
         return result
 
     if isinstance(result[0], tuple):
         output = []
+        # if each result of a worker is a tuple
         for i in range(len(result[0])):
+            # handle each element in a tuple
             _single_result = [r[i] for r in result]
             output.append(_collect_func(method, _single_result, device_mesh=device_mesh))
         return output
     if method == 'none':
         if isinstance(result, list) and len(result) == 1:
+            # unwrap the result
             return result[0]
         else:
             return result
     elif method == 'flatten':
+        # flatten
         flatten = [item for sublist in result for item in sublist]
         if isinstance(result[0], np.ndarray):
             return np.array(flatten)
         return type(result[0])(flatten)
     elif method in ('avg', 'mean'):
-        # Fixes "Unsupported collect method: mean" by aliasing to avg.
         return np.mean(result)
     elif method == 'sum':
         return np.sum(result)
@@ -320,11 +307,13 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
     elif dispatch == 'all':
         return [(worker, args, kwargs) for worker in workers]
     elif dispatch == 'slice':
+        # split arg to workers evenly
         result = []
         length = len(workers)
 
         def dispatch_func(arg, n):
             if isinstance(arg, list):
+                # only list
                 _args = []
                 k, m = divmod(len(arg), n)
                 for i in range(n):
@@ -342,6 +331,7 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
 
         return result
     elif dispatch == 'slice_dp':
+        # split by dp. each worker in one ep will receive the same argument
         result = []
         # if device_mesh is not None:
             # TODO this may occurs error when remote calls remote
@@ -370,7 +360,7 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
         length = len(workers)
         result = []
         for i in range(length):
-            sliced_args, sliced_kwargs = dispatch(length, i, *args, **kwargs)
+            sliced_args, sliced_kwargs = dispatch(length, i, args, kwargs)
             result.append((workers[i], sliced_args, sliced_kwargs))
         return result
     else:
@@ -378,6 +368,7 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
 
 
 def _get_device_mesh_param_name(init_method) -> str:
+    """Try to get the device_mesh param name"""
     sig = inspect.signature(init_method)
     for param in sig.parameters.values():
         ann = param.annotation
@@ -390,6 +381,7 @@ def _get_device_mesh_param_name(init_method) -> str:
 
 
 def _get_device_mesh_param(args, kwargs):
+    """Try to get the device_mesh param instance"""
     for arg in (list(args) + list(kwargs.values())):
         if isinstance(arg, DeviceMesh):
             return arg
@@ -400,16 +392,23 @@ def _prepare_lazy_collect(args, kwargs):
     # if a worker received an actor handle,
     # lazy collect should be false to prevent any outer function receives an object ref
     from ._ray import RayHelper
-    if not RayHelper.is_worker():
+    if 'WORKER_NAME' not in os.environ:
+        # If this is a driver
         return args, kwargs
-    for arg in list(args) + list(kwargs.values()):
-        if hasattr(arg, '_actors'):
-            arg._lazy_collect = False
-    return args, kwargs
+    else:
+        # If this is a worker, collect now
+        for arg in list(args) + list(kwargs.values()):
+            if hasattr(arg, '_actors'):
+                # This arg is an handler, and this is a worker env, so do not do lazy collect
+                arg._lazy_collect = False
+        return args, kwargs
 
 def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
-    """Patch each class used in remote clusters with this decorator."""
+    """Patch each class used in remote clusters with this decorator.
 
+    Use this decorator to wrap your class to enable it to execute in a remote cluster.
+
+    """
     def decorator(cls):
         # Get device mesh parameter name
         device_mesh_name = _get_device_mesh_param_name(cls.__init__)
@@ -422,12 +421,14 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                 device_mesh = _get_device_mesh_param(args, kwargs)
                 if device_mesh_name:
                     if device_mesh is None:
+                        # Local mode can safely assign the default device mesh
                         device_mesh = _device_mesh
                         kwargs[device_mesh_name] = _device_mesh
-                    assert len(_device_group) == 1
+                    assert len(_device_group) == 1 # only one device group is allowed
                     _device_group[0]._device_mesh[self.__class__.__name__] = device_mesh
                     init_method(self, *args, **kwargs)
                 else:
+                    # Pop the device_mesh
                     args = [arg for arg in args if not isinstance(arg, DeviceMesh)]
                     kwargs = {key: value for key, value in kwargs.items() if not isinstance(value, DeviceMesh)}
                     init_method(self, *args, **kwargs)
@@ -435,53 +436,64 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                 from ._ray import RayHelper
 
                 # In case the same class created twice in the same device group
+                # Try to get the caller's line
                 frame = inspect.currentframe().f_back
                 caller_file = frame.f_code.co_filename.replace(os.sep, '_').replace('.', '_')
                 caller_line = frame.f_lineno
+                # Pass an instance_id is recommended
                 instance_id = kwargs.pop('instance_id', '') + f"{caller_file}_{caller_line}"
                 remote_group = kwargs.get('remote_group')
+                # If cannot trust_remote_code, no callable and type can be used.
                 check_unsafe(*args, **kwargs)
 
                 device_mesh = _get_device_mesh_param(args, kwargs)
                 if device_mesh_name:
-                    # If it's a remote component
-                    if device_mesh is None:
-                        device_mesh = _device_mesh
-                        kwargs[device_mesh_name] = _device_mesh
-                    
-                    if 'dataloader' in cls.__name__.lower():
-                        # Dataloader runs in simple worker mode, so returns all data to driver
+                    # If it's a remote component, device_mesh is required
+                    assert device_mesh is not None
+
+                    if execute == 'first':
+                        # Manually create a device_mesh because there is only one worker
                         kwargs[device_mesh_name] = DeviceMesh.from_sizes(dp_size=1)
 
                     if _device_group and remote_group:
+                        # usually this happens in driver because worker does not has a valid _device_group
+                        # this is used to print the device_group info, so pass the worker is ok
                         device_group = [dg for dg in _device_group if dg.name == remote_group][0]
                         device_group._device_mesh[self.__class__.__name__] = device_mesh
 
                 def __iter__(_self):
-                    if is_master():
+                    if 'WORKER_NAME' in os.environ:
+                        # This is a worker, iter keeps in the class, pass nothing to driver
                         _iter = _self.__iter_origin__()
                         assert _iter is not _self
                         _self._iter = _iter
                     else:
+                        # This is executed in driver
                         return _self.__iter_origin__()
 
                 def __next__(_self):
+                    # Use _self._iter to get the next data
+                    # Only one driver can use this at one time
                     try:
+                        # Return a tuple, get the second output in the driver to stop the for loop
                         return next(_self._iter), False
                     except StopIteration:
                         return [], True
 
                 if (not remote_group) or os.environ.get('CLUSTER_NAME') == remote_group:
-                    # remote_group is None when it's worker and remote_group not passed through arguments
-                    # Seed when a remote class is created.
+                    # not remote_group: Ray mode with local component
+                    # os.environ.get('CLUSTER_NAME') == remote_group: a normal worker's init
                     seed = int(os.environ.get('TWINKLE_SEED', _seed))
                     determinism = int(os.environ.get('TWINKLE_FULL_DETERMINISM', int(_full_determinism)))
                     framework_util.seed_everything(seed, bool(determinism))
                     if not device_mesh_name:
+                        # pop the device_mesh
                         args = [arg for arg in args if not isinstance(arg, DeviceMesh)]
                         kwargs = {key: value for key, value in kwargs.items() if not isinstance(value, DeviceMesh)}
+                        # if any handler is passed to other component, lazy collect should be false
+                        # for example, dataset pass to the dataloader
                     args, kwargs = _prepare_lazy_collect(args, kwargs)
-                    kwargs.pop('remote_group', None)
+                    kwargs.pop('remote_group', None) # component does not need this
                     init_method(self, *args, **kwargs)
                 else:
                     if hasattr(cls, '__iter__'):
@@ -493,6 +505,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                         import ray
                         cls.__iter_origin__ = cls.__iter__
                         cls.__iter__ = __iter__
+                        # Return 2 object refs to enable get the stop flag in driver
                         cls.__next__ = ray.method(num_returns=2)(__next__)
 
                     # Create remote workers
@@ -505,6 +518,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                                                        *args, **kwargs)
                     self._actors = _actors
                     if hasattr(cls, '__iter__'):
+                        # wraps again, because ray uses cls method to call remote
                         cls.__iter__ = remote_function(dispatch=_dispatch,
                                                         execute=_execute,
                                                         collect='none')(__iter__)
@@ -512,6 +526,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                                                         execute=_execute,
                                                         collect=_collect)(__next__)
                     for arg in (list(args) + list(kwargs.values())):
+                        # keeps the device_mesh in the handler
                         if isinstance(arg, DeviceMesh):
                             self.device_mesh = arg
                             break
@@ -537,6 +552,7 @@ def remote_function(dispatch: Union[Literal['slice', 'all', 'slice_dp'], Callabl
         dispatch: How to dispatch the arguments.
             'slice': load balance
             'all': all processes do the same thing
+            'slice_dp': Slice the input by data ranks in device_mesh
             Callable: A callable that handles the dispatching
         execute: How to execute
             'first': Only first worker
@@ -548,6 +564,9 @@ def remote_function(dispatch: Union[Literal['slice', 'all', 'slice_dp'], Callabl
             'mean': Return the mean value of all processes
             'sum': Return the sum value of all processes
             'first': Return the first worker's result but executed in each process, usually works for scenarios of all-gather.
+            'mean'/'sum': Avg or sum the results.
+            'first': Return the first worker's result, for example, get length
+            'last_pp': Return the last pp's result.
             Callable: A callable that handles the collection
         sync: If True, use synchronous execution (execute_all_sync) instead of async.
             Required for methods with NCCL collective operations (e.g., Megatron forward_backward).
@@ -563,41 +582,42 @@ def remote_function(dispatch: Union[Literal['slice', 'all', 'slice_dp'], Callabl
             elif _mode == 'ray':
                 check_unsafe(*args, **kwargs)
                 if not hasattr(self, '_actors'):
+                    # This is the worker
                     from ._ray import RayHelper
                     if RayHelper.has_ref(args, kwargs):
                         # In this case, driver dispatch is all, redispatch here
                         args, kwargs = RayHelper.do_get_and_collect(args, kwargs)
                         world_size = Platform.get_world_size()
                         rank = Platform.get_rank()
+                        # Redispatch here
                         _workers_and_args = _dispatch_args(_get_workers([None]*world_size, execute), dispatch,
                                                            execute, device_mesh, args, kwargs)
                         _, args, kwargs = _workers_and_args[rank]
                     return func(self, *args, **kwargs)
                 else:
+                    # This is the driver
                     from ._ray import RayHelper
                     execute_method = RayHelper.execute_all_async if not sync else RayHelper.execute_all_sync
-                    
-                    logger.info(f'Executing remote function {func.__name__} with {_workers_and_args}')
                     if RayHelper.has_ref(args, kwargs):
-                        # dispatch all, slice in worker
+                        # If has any object-ref, dispatch in worker, because we don't know the structure in the ref.
+                        # for example, dataloader returns any data list.
                         _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), 'all',
                                                            execute, device_mesh, args, kwargs)
                     else:
+                        # dispatch now
                         _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), dispatch,
                                                            execute, device_mesh, args, kwargs)
 
                     result = execute_method(func.__name__, _workers_and_args)
-                    logger.info(f'Execution of remote function {func.__name__} completed with result: {result}')
-                    
-                    logger.info(f'Collecting results for remote function {func.__name__} with method {collect}')
-                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
-                    logger.info(f'Collection of results for remote function {func.__name__} completed with result: {result_func}')
-
+                    # This is a result future, call it to get the actual result
+                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result, device_mesh)
                     lazy_collect = _lazy_collect
                     if func.__name__ == '__iter__':
+                        # return self
                         return self
                     
                     if func.__name__ == '__len__':
+                        # Get the first result and ignore the `lazy_collect`
                         import ray
                         return ray.get(result[0])
 
@@ -612,6 +632,7 @@ def remote_function(dispatch: Union[Literal['slice', 'all', 'slice_dp'], Callabl
                         result_func._futures = result
 
                     if hasattr(self, '_lazy_collect'):
+                        # _lazy_collect in class has a higher priority
                         lazy_collect = self._lazy_collect
                     result = result_func if lazy_collect else result_func()
                     return result

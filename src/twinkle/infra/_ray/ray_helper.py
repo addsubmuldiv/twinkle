@@ -164,7 +164,7 @@ class RayHelper:
         return ip, port
 
     @staticmethod
-    def do_get_and_collect_func(collect_func: Callable, method: Union[Literal['none', 'flatten'], Callable], futures, device_mesh):
+    def do_get_and_collect_func(collect_func: Callable, method: Union[str, Callable], futures, device_mesh):
         """Return a callable to collect results in the workers."""
 
         class LazyCollect:

@@ -19,7 +19,6 @@ from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer
 from transformers.modeling_utils import custom_object_save
 
-from twinkle.infra import is_last_rank
 from twinkle.utils import (MxFp4Dequantizer, SafetensorLazyLoader, StreamingSafetensorSaver, deep_getattr, get_logger, 
                             get_multimodal_target_regex, get_modules_to_not_convert)
 from twinkle.model.utils import save_checkpoint
@@ -32,6 +31,23 @@ import os
 logger = get_logger()
 
 mcore_013 = version.parse(megatron.core.__version__) >= version.parse('0.13.0rc0')
+
+
+def is_last_rank():
+    if not dist.is_initialized():
+        return True
+
+    from megatron.core import parallel_state as mpu
+    if mpu.is_initialized():
+        # Only DP rank 0 writes
+        dp_rank = mpu.get_data_parallel_rank()
+        if dp_rank != 0:
+            return False
+        # For PP, only last stage needs to write certain weights
+        # (handled separately in export_weights)
+        return True
+
+    return dist.get_rank() == dist.get_world_size() - 1
 
 
 # Some ideas for LoRA conversion are referenced from: https://github.com/modelscope/ms-swift/pull/6225
