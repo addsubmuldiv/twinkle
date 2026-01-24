@@ -1,12 +1,13 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
 import multiprocessing as mp
-from typing import TypeVar
+from typing import TypeVar, Type, Union
 import numpy as np
 from twinkle.infra import remote_class, remote_function
 from .base import DatasetMeta
 from .iterable_dataset import IterableDataset
 from .packing_dataset import PackingDataset
+from twinkle.template import Template
 
 _T = TypeVar('_T')
 
@@ -41,7 +42,7 @@ class IterablePackingDataset(IterableDataset):
         self.cyclic = cyclic
     
     @remote_function()
-    def set_template(self, template_cls, **kwargs):
+    def set_template(self, template_cls: Union[Type[Template], str, Template], **kwargs):
         super().set_template(template_cls, **kwargs)
         assert self.template.truncation_strategy != 'split', 'Iterable packing does not support truncation_strategy==`split`'
 
