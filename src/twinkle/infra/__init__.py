@@ -9,6 +9,9 @@ import numpy as np
 
 from ..utils import DeviceGroup, DeviceMesh, Platform
 from ..utils import requires, framework_util, check_unsafe
+from ..utils.logger import get_logger
+
+logger = get_logger()
 
 import torch.distributed as dist
 
@@ -573,6 +576,8 @@ def remote_function(dispatch: Union[Literal['slice', 'all', 'slice_dp'], Callabl
                 else:
                     from ._ray import RayHelper
                     execute_method = RayHelper.execute_all_async if not sync else RayHelper.execute_all_sync
+                    
+                    logger.info(f'Executing remote function {func.__name__} with {_workers_and_args}')
                     if RayHelper.has_ref(args, kwargs):
                         # dispatch all, slice in worker
                         _workers_and_args = _dispatch_args(_get_workers(self._actors, execute), 'all',
@@ -582,8 +587,12 @@ def remote_function(dispatch: Union[Literal['slice', 'all', 'slice_dp'], Callabl
                                                            execute, device_mesh, args, kwargs)
 
                     result = execute_method(func.__name__, _workers_and_args)
-                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result,
-                                                                    getattr(self, 'device_mesh', None))
+                    logger.info(f'Execution of remote function {func.__name__} completed with result: {result}')
+                    
+                    logger.info(f'Collecting results for remote function {func.__name__} with method {collect}')
+                    result_func = RayHelper.do_get_and_collect_func(_collect_func, collect, result)
+                    logger.info(f'Collection of results for remote function {func.__name__} completed with result: {result_func}')
+
                     lazy_collect = _lazy_collect
                     if func.__name__ == '__iter__':
                         return self

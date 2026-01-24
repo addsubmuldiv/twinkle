@@ -8,6 +8,8 @@ from .network import find_node_ip, find_free_port
 from .unsafe import trust_remote_code, check_unsafe
 from .plugin import Plugin
 from .logger import get_logger
+from .parallel import processing_lock
+from .io_utils import move_to_cpu_detach
 from .torch_utils import to_device
 from .safetensors import LazyTensor, SafetensorLazyLoader, StreamingSafetensorSaver
 from .utils import copy_files_by_pattern, deep_getattr
