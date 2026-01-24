@@ -1,6 +1,6 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """Kernel module layer - Layer-level replacement with HF kernels integration."""
-from logging import getLogger
+from twinkle import get_logger
 from pathlib import Path
 from typing import Optional, Union, Any
 
@@ -12,9 +12,9 @@ from .base import (
     to_kernels_mode,
 )
 from .registry import register_layer, get_global_layer_registry
-from .. import Platform
+from twinkle import Platform
 
-logger = getLogger(__name__)
+logger = get_logger()
 
 
 def register_layer_kernel(

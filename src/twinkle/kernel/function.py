@@ -1,9 +1,9 @@
+# Copyright (c) ModelScope Contributors. All rights reserved.
 from __future__ import annotations
 
-"""Kernel module function - Function-level replacement with HF kernels integration."""
 import importlib
-from logging import getLogger
-from typing import Callable, Iterable, List, Optional
+from twinkle import get_logger
+from typing import Callable, Iterable, List, Optional, TYPE_CHECKING
 from .registry import FunctionKernelSpec, get_global_function_registry
 from .base import (
     ModeType,
@@ -11,8 +11,10 @@ from .base import (
     validate_device_type,
     validate_mode,
 )
+if TYPE_CHECKING:
+    from kernels.layer.func import FuncRepositoryProtocol
 
-logger = getLogger(__name__)
+logger = get_logger()
 
 
 def _load_from_hub(
