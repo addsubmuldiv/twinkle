@@ -16,6 +16,20 @@ class InputProcessor:
         'loss_scale': 0.0,
         'position_ids': -1,
         'length': -1,
+        'pixel_values': 0.0,
+        'image_grid_thw': 0,
+        'pixel_values_videos': 0.0,
+        'video_grid_thw': 0,
+        'input_features': 0.0,
+        'feature_attention_mask': 0,
+    }
+
+    # VLM fields to concatenate (not pad) in batch
+    VLM_CONCAT_FIELDS = {
+        'pixel_values', 'image_grid_thw',
+        'pixel_values_videos', 'video_grid_thw',
+        'input_features', 'feature_attention_mask',
+        'grid_thws',
     }
 
     def __init__(self, device_mesh: Optional[DeviceMesh] = None, padding_free: bool = False, **kwargs):
@@ -63,11 +77,25 @@ class InputProcessor:
 
     def _collate_macro_batch(self, inputs: List[InputFeature]) -> Dict[str, Any]:
         import torch
-        keys = inputs[0].keys()
+
+        vlm_fields = {k: [] for k in self.VLM_CONCAT_FIELDS}
+        text_inputs = []
+        keys = []
+        for inp in inputs:
+            inp = dict(inp)
+            for field in self.VLM_CONCAT_FIELDS:
+                if field in inp:
+                    # mm keys
+                    vlm_fields[field].append(inp.pop(field))
+                else:
+                    # text keys
+                    keys.append(field)
+            text_inputs.append(inp)
+
         result = {}
         if self.padding_free:
             for key in keys:
-                values = [item[key] for item in inputs]
+                values = [item[key] for item in text_inputs]
                 if isinstance(values[0], np.ndarray):
                     value = np.expand_dims(np.concatenate(values, axis=0), axis=0)
                     value = torch.from_numpy(value)
@@ -82,7 +110,7 @@ class InputProcessor:
             result = InputFeature(**result)
         else:
             for key in keys:
-                values = [item[key] for item in inputs]
+                values = [item[key] for item in text_inputs]
 
                 if isinstance(values[0], np.ndarray):
                     values = [torch.from_numpy(v) for v in values]
@@ -95,6 +123,14 @@ class InputProcessor:
                 else:
                     result[key] = values
             result = InputFeature(**result)
+
+        for field, values in vlm_fields.items():
+            if values:
+                if isinstance(values[0], np.ndarray):
+                    result[field] = torch.from_numpy(np.concatenate(values, axis=0))
+                elif isinstance(values[0], torch.Tensor):
+                    result[field] = torch.cat(values, dim=0)
+
         return to_transformers_dict(result)
 
     @remote_function()
