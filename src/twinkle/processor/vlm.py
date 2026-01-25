@@ -1,9 +1,8 @@
 # Copyright (c) twinkle authors. All rights reserved.
 # TODO: test
 
-from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Union
 import logging
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -12,7 +11,6 @@ import torch.nn as nn
 from twinkle import DeviceMesh, remote_class, remote_function
 from twinkle.data_format import InputFeature
 from twinkle.hub import HubOperation
-
 from .base import InputProcessor
 
 logger = logging.getLogger(__name__)

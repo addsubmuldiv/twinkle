@@ -25,12 +25,15 @@ class InputProcessor:
 
     @remote_function()
     def __call__(self, inputs: Union[InputFeature, List[InputFeature]], **kwargs):
+        _collated = inputs
         if isinstance(inputs, list):
-            inputs = self.collate_fn(inputs, **kwargs)
-        if not isinstance(inputs, list):
-            return self.prepare_inputs(inputs)
+            _collated = self.collate_fn(inputs, **kwargs)
+        if not isinstance(_collated, list):
+            # macro_batch_size is None, so it's a dict
+            return self.prepare_inputs(_collated)
         else:
-            return [self.prepare_inputs(_input) for _input in inputs]
+            # a list of macro batches
+            return [self.prepare_inputs(_macro_batch) for _macro_batch in _collated]
         
 
     @remote_function()
@@ -66,13 +69,13 @@ class InputProcessor:
             for key in keys:
                 values = [item[key] for item in inputs]
                 if isinstance(values[0], np.ndarray):
-                    value = np.concatenate(values, axis=-1).unsqueeze(0)
+                    value = np.expand_dims(np.concatenate(values, axis=0), axis=0)
                     value = torch.from_numpy(value)
                 elif isinstance(values[0], list) and isinstance(values[0][0], (int, float, np.number)):
                     values = [[v for lst in values for v in lst]]
                     value = torch.tensor(values)
                 elif isinstance(values[0], torch.Tensor):
-                    value = torch.cat(values, dim=-1).unsqueeze(0)
+                    value = torch.cat(values, dim=0).unsqueeze(0)
                 else:
                     value = values
                 result[key] = value
@@ -97,14 +100,17 @@ class InputProcessor:
     @remote_function()
     def collate_fn(self, inputs: List[InputFeature], micro_batch_size: Optional[int] = None, variable_seq_lengths=False) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         if micro_batch_size is None:
+            # normal collate
             return self._collate_macro_batch(inputs)
         elif variable_seq_lengths:
+            # each macro batch has its own length
             assert len(inputs) > micro_batch_size
             outputs = []
             for i in range(0, len(inputs), micro_batch_size):
                 outputs.append(self._collate_macro_batch(inputs[i:i + micro_batch_size]))
             return outputs
         else:
+            # each macro batch shares the same length
             res = self._collate_macro_batch(inputs)
             keys = list(res.keys())
             outputs = []
