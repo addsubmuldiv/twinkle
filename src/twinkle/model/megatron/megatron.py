@@ -950,6 +950,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             self.optimizer_group[train_group].processor = default_config.processor
         if default_config.loss_instance:
             self.optimizer_group[train_group].loss_instance = default_config.loss_instance
+        # Fix: use .processor instead of .tokenizer - Template class uses self.processor
         self._default_tokenizer = self.optimizer_group[train_group].template.tokenizer
         dp_group = self.optimizer_group[train_group]._dp_group
         self.optimizer_group[train_group].metrics = [

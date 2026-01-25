@@ -93,9 +93,10 @@ class Template:
         if self.use_chat_template and self.default_system:
             if trajectory['messages'][0]['role'] == 'user':
                 trajectory['messages'].insert(0, Message(role='system', content=self.default_system))
-            for (_, messages) in trajectory['extend_message']:
-                if trajectory['messages'][0]['role'] == 'user':
-                    trajectory['messages'].insert(0, Message(role='system', content=self.default_system))
+            # Fix: use .get() to avoid KeyError - extend_message is optional in Trajectory (TypedDict total=False)
+            for (_, messages) in trajectory.get('extend_message', []):
+                if messages and messages[0]['role'] == 'user':
+                    messages.insert(0, Message(role='system', content=self.default_system))
         return [trajectory]
 
     def _check_max_length(self, input_feature: InputFeature) -> List[InputFeature]:
@@ -211,7 +212,10 @@ class Template:
                 return None
             else:
                 return trajectory
-        except Exception as e:  # noqa
+        except Exception as e:
+            import traceback
+            print(f"[Template.check] Error encoding trajectory: {e}")
+            traceback.print_exc()
             return None
         finally:
             if encoded:
