@@ -164,7 +164,7 @@ class RayHelper:
         return ip, port
 
     @staticmethod
-    def do_get_and_collect_func(collect_func: Callable, method: Union[Literal['none', 'flatten'], Callable], futures, device_mesh=None):
+    def do_get_and_collect_func(collect_func: Callable, method: Union[str, Callable], futures, device_mesh):
         """Return a callable to collect results in the workers."""
 
         class LazyCollect:
@@ -172,8 +172,8 @@ class RayHelper:
                 self._futures = futures
                 self._method = method
                 self._collect_func = collect_func
-                self._device_mesh = device_mesh
                 self._is_lazy_collect = True
+                self.device_mesh = device_mesh
                 self._result = None  # Cache collected results
 
             def __call__(self):
@@ -185,7 +185,7 @@ class RayHelper:
                             result.append(ray.get(future))
                         else:
                             result.append(future)
-                    self._result = self._collect_func(self._method, result, device_mesh=self._device_mesh)
+                    self._result = self._collect_func(self._method, result, device_mesh=self.device_mesh)
                 return self._result
 
             def __iter__(self):
@@ -195,6 +195,7 @@ class RayHelper:
             def __len__(self):
                 """Support len() function"""
                 return len(self())
+
 
         return LazyCollect(futures, method, collect_func, device_mesh)
 
@@ -216,6 +217,17 @@ class RayHelper:
         return new_args, new_kwargs
 
     @staticmethod
+    def has_ref(args, kwargs) -> bool:
+        for arg in args:
+            if isinstance(arg, Callable) and getattr(arg, '_is_lazy_collect', False):
+                return True
+        for key in list(kwargs.keys()):
+            value = kwargs[key]
+            if isinstance(value, Callable) and getattr(value, '_is_lazy_collect', False):
+                return True
+        return False
+
+    @staticmethod
     def create_workers(worker_cls: Type[T], group: str, execute: Literal['all', 'peer', 'first'], instance_id, seed=42, full_determinism=False, *args, **kwargs) -> List[T]:
         # TODO when will remote create remote?
         # Should it peer create peer? or peer create all?
@@ -230,7 +242,6 @@ class RayHelper:
         ranks = device_config.ranks
         if isinstance(ranks, int):
             ranks = list(range(ranks))
-        world_size = len(ranks)
         assert len(placement_groups) == len(ranks)
         key = f'{group}-{worker_cls.__class__.__name__}-{instance_id}'
         if execute == 'peer':
@@ -248,6 +259,7 @@ class RayHelper:
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
 
         if device_config.device_type.upper() != 'CPU':
+            world_size = len(ranks)
             visible_env = Platform.get_platform(device_config.device_type.upper()).visible_device_env()
             device_type = Platform.get_platform(device_config.device_type.upper()).__name__
 

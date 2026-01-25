@@ -16,6 +16,5 @@ class Trajectory(TypedDict, total=False):
     extend_message: List[Tuple[str, List[Message]]]
     tools: List[Tool]
     generation_config: List[Tuple[str, Any]]
-    experts: List[Tuple[str, Any]]
     rewards: List[float]
     user_data: List[Tuple[str, Any]]

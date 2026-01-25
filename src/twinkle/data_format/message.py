@@ -53,8 +53,6 @@ class Message(TypedDict, total=False):
                 - reasoning_content: The reasoning content of the LLM, usually
         content: The content of the message.
         tool_calls: The tool calling requirements of the LLM.
-        tools: The tools definition for the LLM.
-        tool_call_id: The tool call id of the LLM, used by server to identify the tool call request and the tool call response.
         reasoning_content: The reasoning content of the LLM, usually generated with a pair <think></think> labels, which is the model thinking content.
 
     Example:
@@ -67,8 +65,6 @@ class Message(TypedDict, total=False):
     role: Literal['system', 'user', 'assistant', 'tool']
     content: Union[str, List[Dict[str, str]]]
     tool_calls: List[ToolCall]
-    tools: List[Tool]
-    tool_call_id: Optional[str]
     reasoning_content: str
     images: Optional[List[Union[str, Any]]]
     videos: Optional[List[Union[str, Any]]]

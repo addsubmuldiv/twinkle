@@ -43,7 +43,7 @@ class RetrySampler(Sampler):
 
         for idx in np.random.RandomState().permutation(len(self.dataset)).tolist():
             if total >= origin_dataset_len:
-                break
+                raise StopIteration
             for _ in range(self.max_retries):
                 try:
                     # Skip None values and raises

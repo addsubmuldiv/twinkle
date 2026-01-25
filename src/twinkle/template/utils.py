@@ -1,10 +1,10 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from copy import deepcopy
 
 from transformers import PreTrainedTokenizer
 
-from twinkle.data_format import Trajectory
+from twinkle.data_format import Trajectory, Message
 
 PLACEHOLDER = "<<<ASSISTANT_PLACEHOLDER_7f3d2a1b>>>"
 
@@ -107,3 +107,76 @@ def tokenize_with_assistant_labels(
             labels[i] = full_ids[i]
 
     return full_ids, labels
+
+
+def _load_image(img: Any) -> Optional[Any]:
+    """Load images to PIL format."""
+    from PIL import Image
+    import io
+
+    if img is None:
+        return None
+    if isinstance(img, Image.Image):
+        return img
+    elif isinstance(img, str):
+        if img.startswith(('http://', 'https://')):
+            import requests
+            resp = requests.get(img, timeout=30)
+            return Image.open(io.BytesIO(resp.content))
+        else:
+            return Image.open(img)
+    elif isinstance(img, bytes):
+        return Image.open(io.BytesIO(img))
+    elif isinstance(img, dict) and 'bytes' in img:
+        return Image.open(io.BytesIO(img['bytes']))
+    else:
+        return img
+
+
+def _transfer_single_message(content: str, image_placeholder, video_placeholder, images, videos):
+    image_idx = 0
+    video_idx = 0
+    remaining = content
+    has_image = image_placeholder in content
+    has_video = video_placeholder in content
+    new_content = []
+    while remaining:
+        img_pos = remaining.find(image_placeholder) if has_image else -1
+        vid_pos = remaining.find(video_placeholder) if has_video else -1
+
+        # Find next placeholder
+        if img_pos == -1 and vid_pos == -1:
+            if remaining.strip():
+                new_content.append({'type': 'text', 'text': remaining})
+            break
+
+        # Determine which comes first
+        if vid_pos == -1 or (img_pos != -1 and img_pos < vid_pos):
+            # Image placeholder
+            if remaining[:img_pos].strip():
+                new_content.append({'type': 'text', 'text': remaining[:img_pos]})
+            if image_idx < len(images):
+                new_content.append({'type': 'image', 'url': images[image_idx]})
+                image_idx += 1
+            remaining = remaining[img_pos + len(image_placeholder):]
+        else:
+            # Video placeholder
+            if remaining[:vid_pos].strip():
+                new_content.append({'type': 'text', 'text': remaining[:vid_pos]})
+            if video_idx < len(videos):
+                new_content.append({'type': 'video', 'url': videos[image_idx]})
+                video_idx += 1
+            remaining = remaining[vid_pos + len(video_placeholder):]
+    return new_content
+
+def transfer_to_standard_message(message: Message, image_placeholder, video_placeholder):
+    has_image = image_placeholder in message['content']
+    has_video = video_placeholder in message['content']
+    if has_image and has_video:
+        new_content = _transfer_single_message(message['content'], image_placeholder, video_placeholder,
+                                               message['images'], message['videos'])
+    else:
+        new_content = message['content']
+
+    return Message(role=message['role'], content=new_content, tool_calls=message['tool_calls'],
+                   reasoning_content=message['reasoning_content'])

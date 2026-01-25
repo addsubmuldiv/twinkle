@@ -1,16 +1,19 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 from functools import partial
-from typing import Callable, Union, Optional
+from typing import Callable, Union, Optional, Type
 
+import twinkle.processor
 from twinkle import DeviceMesh, remote_function, framework_util
 from twinkle import remote_class
 from twinkle.dataset import Dataset
 from .retry_sampler import RetrySampler
 from .device_mesh_sampler import DeviceMeshSampler
 from .device_mesh_fetcher import DeviceMeshIterableFetcher
+from twinkle.processor import InputProcessor
+from twinkle.utils import construct_class
 
 
-@remote_class()
+@remote_class(execute='first')
 class DataLoader:
     """A DataLoader wrapper, will retry failed samples and return the data belongs to the current dp rank.
 
@@ -20,6 +23,7 @@ class DataLoader:
 
     Args:
         dataset: A dataset instance, or a callable to create a dataset.
+            If runs in ray mode, it's recommended to use callable to make dataset and dataloader in one worker
         device_mesh: The device_mesh of this dataloader.
         kwargs: The dataloader creation parameters.
     """
@@ -33,11 +37,16 @@ class DataLoader:
         self.dataloader = None
         self.max_retries = kwargs.pop('max_retries', 20)
         if 'batch_size' not in kwargs:
-            kwargs['batch_size'] = device_mesh.data_parallel_world_size
-        assert kwargs['batch_size'] >= device_mesh.data_world_size and kwargs['batch_size'] % device_mesh.data_world_size == 0
+            if device_mesh is not None:
+                kwargs['batch_size'] = device_mesh.data_world_size
+            else:
+                kwargs['batch_size'] = 1
+        if device_mesh is not None:
+            assert kwargs['batch_size'] >= device_mesh.data_world_size and kwargs['batch_size'] % device_mesh.data_world_size == 0
         self.batch_size = kwargs['batch_size']
         self.dataloader_params = kwargs
         self.device_mesh = device_mesh
+        self.processor: Optional[InputProcessor] = None
         self._set_work_init_fn()
 
     def _set_work_init_fn(self):
@@ -45,8 +54,9 @@ class DataLoader:
         self.dataloader_params['worker_init_fn'] = partial(
             DataLoader._seed_worker, num_workers=num_workers, rank=self.device_mesh.data_rank or 0)
     
-    @remote_function(execute='first')
+    @remote_function()
     def __len__(self):
+        self._lazy_init_dataloader()
         return len(self.dataloader)
 
     @staticmethod
@@ -56,12 +66,23 @@ class DataLoader:
         worker_seed = num_workers * rank + init_seed + worker_id
         framework_util.seed_everything(worker_seed)
 
-    @remote_function(collect='flatten') # flatten will be used in `__next__`
-    def __iter__(self):
-        from torch.utils.data import DataLoader as TorchDataLoader, IterableDataset
+    @remote_function()
+    def set_processor(self, processor_cls: Union[Type[InputProcessor], str, InputProcessor], **kwargs):
+        """Set task processor to prepare the task inputs.
+        Args:
+            processor_cls: A processor_cls class name, a processor_cls plugin id, or a processor_cls class type/instance.
+            **kwargs: Any parameters needed to construct the processor_cls instance.
+        """
+        self.processor = construct_class(processor_cls, InputProcessor, twinkle.processor, **kwargs)
+
+    def _lazy_init_dataloader(self):
         if self.dataloader is None:
+            from torch.utils.data import DataLoader as TorchDataLoader, IterableDataset
             if 'collate_fn' not in self.dataloader_params:
-                self.dataloader_params['collate_fn'] = lambda x: x
+                if self.processor is not None:
+                    self.dataloader_params['collate_fn'] = self.processor.__call__
+                else:
+                    self.dataloader_params['collate_fn'] = lambda x: x
             self.dataloader = TorchDataLoader(self.dataset, **self.dataloader_params)
 
             if not isinstance(self.dataset, IterableDataset):
@@ -69,6 +90,10 @@ class DataLoader:
                 self._repeat_sample_and_shard()
                 self.dataloader.__initialized = True
 
+    @remote_function()
+    def __iter__(self):
+        from torch.utils.data import IterableDataset
+        self._lazy_init_dataloader()
         _iter = self.dataloader.__iter__()
         if isinstance(self.dataset, IterableDataset):
             _iter._dataset_fetcher = DeviceMeshIterableFetcher(_iter._dataset_fetcher.dataset,

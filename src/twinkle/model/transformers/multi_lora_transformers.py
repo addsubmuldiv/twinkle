@@ -34,7 +34,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
                  mixed_precision: Literal['no', 'fp8', 'fp16', 'bf16'] = 'bf16',
                  grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
-        assert device_mesh.fsdp_world_size == 1, f'MultiLora does not support FSDP, current is: {str(device_mesh)}'
+        assert device_mesh.fsdp_world_size is None, f'MultiLora does not support FSDP, current is: {str(device_mesh)}'
         dist.init_process_group('nccl')
         super(PreTrainedModel, self).__init__()
         model_id = HubOperation.download_model(model_id)
@@ -49,7 +49,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         self._inited = False
 
         self.multi_adapter = MultiAdapter()
-        self.model: PreTrainedModel = self.multi_adapter(self.model)
+        self.model: PreTrainedModel = self.multi_adapter.patch(self.model)
         with self._no_ddp_context():
             self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, device_mesh=None)
             self.model = self.strategy.wrap_model(self.model)
@@ -76,13 +76,13 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     def _lazy_wrap_model(self):
         pass
 
-    @remote_function()
+    @remote_function(dispatch='slice_dp', collect='mean')
     def forward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
         self._activate_adapter(kwargs.get("adapter_name"))
         return super().forward(inputs=inputs, **kwargs)
 
-    @remote_function()
+    @remote_function(dispatch='slice_dp', collect='flatten')
     def forward_only(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
         self._activate_adapter(kwargs.get("adapter_name"))

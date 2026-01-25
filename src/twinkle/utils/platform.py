@@ -1,6 +1,8 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
+import platform
 import shutil
+import subprocess
 from abc import ABC
 from dataclasses import dataclass, field
 from typing import Optional, Dict
@@ -8,6 +10,7 @@ from typing import Type
 from typing import Union, List
 import torch.distributed as dist
 import numpy as np
+from modelscope.models.science.unifold.data.utils import lru_cache
 
 
 @dataclass
@@ -38,17 +41,17 @@ class DeviceMesh:
     mesh: np.ndarray
     mesh_dim_names: Optional[tuple[str, ...]]
     ep_size: Optional[int] = None
+    etp_size: Optional[int] = None
     vpp_size: Optional[int] = None
     ulysses_size: Optional[int] = None
     device_type: str = 'cuda'
 
     @staticmethod
-    def from_sizes(dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
+    def from_sizes(world_size: int = 1, dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
                    pp_size: int = None, ulysses_size: int = None, cp_size: int = None, ep_size: int = None,
-                   vpp_size: int = None, device_type: str = 'cuda') -> "DeviceMesh":
+                   etp_size: int = None,vpp_size: int = None, device_type: str = 'cuda') -> "DeviceMesh":
 
-        origin_world_size = Platform.get_world_size()
-        world_size = origin_world_size
+        origin_world_size = world_size
         mesh_dim_names = []
         mesh_dim_sizes = []
         if fsdp_size is not None:
@@ -92,6 +95,7 @@ class DeviceMesh:
             mesh_dim_names=tuple(mesh_dim_names),
             vpp_size=vpp_size,
             ep_size=ep_size,
+            etp_size=etp_size,
             ulysses_size=ulysses_size,
         )
 
@@ -120,6 +124,11 @@ class DeviceMesh:
 
         ranks = sorted(self.mesh[tuple(slices)].flatten().tolist())
         return dist.new_group(ranks=ranks)
+
+    @property
+    def order(self):
+        # TODO hard coded for now
+        return 'tp-cp-ep-dp-pp'
 
     def to_torch_device_mesh(self):
         import torch
@@ -174,7 +183,8 @@ class DeviceMesh:
 
     @property
     def dp_rank(self) -> Optional[int]:
-        return self._get_rank_for_dim("dp")
+        rank = self._get_rank_for_dim("dp")
+        return rank
 
     @property
     def fsdp_rank(self) -> Optional[int]:
@@ -280,23 +290,35 @@ class DeviceMesh:
         end = (rank + 1) * k + min(rank + 1, m)
         return slice(start, end)
 
-    def get_pp_stage_ranks(self, stage: int) -> list[int]:
+    def is_pp_first_rank(self) -> bool:
+        pp_ranks = self.get_pp_first_ranks()
+        if pp_ranks is None:
+            return False
+        return Platform.get_rank() in pp_ranks
+
+    def is_pp_last_rank(self) -> bool:
+        pp_ranks = self.get_pp_last_ranks()
+        if pp_ranks is None:
+            return False
+        return Platform.get_rank() in pp_ranks
+
+    def get_pp_stage_ranks(self, stage: int) -> Optional[list[int]]:
         pp_dim_idx = self._get_dim_index("pp")
 
         if pp_dim_idx is None:
             if stage == 0:
                 return self.mesh.flatten().tolist()
-            raise ValueError("No PP dimension, only stage 0 exists")
+            raise None
 
         indices = [slice(None)] * len(self.mesh.shape)
         indices[pp_dim_idx] = stage
 
         return sorted(self.mesh[tuple(indices)].flatten().tolist())
 
-    def get_pp_first_ranks(self) -> list[int]:
+    def get_pp_first_ranks(self) -> Optional[list[int]]:
         return self.get_pp_stage_ranks(0)
 
-    def get_pp_last_ranks(self) -> list[int]:
+    def get_pp_last_ranks(self) -> Optional[list[int]]:
         pp_world_size = self.pp_world_size or 1
         return self.get_pp_stage_ranks(pp_world_size - 1)
 
@@ -369,7 +391,7 @@ class Platform(ABC):
 
     @staticmethod
     def get_platform_names() -> List[str]:
-        return ['GPU', 'NPU']
+        return ['GPU', 'NPU', 'MPS']
 
     @staticmethod
     def get_platform(platform: str = None) -> Type['Platform']:
@@ -378,12 +400,16 @@ class Platform(ABC):
                 return NPU
             elif shutil.which("nvidia-smi"):
                 return GPU
+            elif MPS.is_mps_available():
+                return MPS
             else:
                 return GPU
         elif platform.upper() in ("GPU", "CUDA"):
             return GPU
         elif platform.upper() == "NPU":
             return NPU
+        elif platform.upper() == "MPS":
+            return MPS
         else:
             raise ValueError(f"Unsupported platform: {platform}.")
 
@@ -476,7 +502,7 @@ class GPU(Platform):
         return 'cuda'
 
     @staticmethod
-    def get_local_device(idx: int, **kwargs) -> str:
+    def get_local_device(idx, **kwargs) -> str:
         return f'cuda:{idx}'
 
 
@@ -492,5 +518,34 @@ class NPU(Platform):
         return 'npu'
 
     @staticmethod
-    def get_local_device(idx: int, **kwargs) -> str:
+    def get_local_device(idx, **kwargs) -> str:
         return f'npu:{idx}'
+
+
+class MPS(Platform):
+
+    @staticmethod
+    def visible_device_env():
+        return None
+
+    @staticmethod
+    def device_prefix():
+        return 'mps'
+
+    @staticmethod
+    def get_local_device(idx, **kwargs) -> str:
+        return f'mps'
+
+    @lru_cache
+    @staticmethod
+    def is_mps_available():
+        if platform.system() != "Darwin":
+            return False
+        try:
+            output = subprocess.check_output(
+                ["system_profiler", "SPDisplaysDataType"],
+                stderr=subprocess.DEVNULL, text=True
+            )
+            return "Metal Support" in output
+        except Exception: # noqa
+            return False
