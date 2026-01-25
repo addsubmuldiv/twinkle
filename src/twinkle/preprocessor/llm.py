@@ -15,6 +15,19 @@ class CompetitionMathProcessor(Preprocessor):
         return Trajectory(messages=messages)
 
 
+class CompetitionMathGRPOProcessor(Preprocessor):
+
+    def __call__(self, row) -> Trajectory:
+        problem = row['problem']
+        solution = row['solution']
+        messages = [
+            Message(role='system', content='You are a helpful math assistant. Respond with only the final answer in the form \boxed{...} and nothing else.'),
+            Message(role='user', content=problem),
+            Message(role='assistant', content=''),
+        ]
+        return Trajectory(messages=messages, user_data=[('solution', solution)])
+
+
 class SelfCognitionProcessor(Preprocessor):
 
     def __call__(self, row) -> Trajectory:

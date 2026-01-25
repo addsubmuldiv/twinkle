@@ -129,6 +129,18 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         assert isinstance(inputs, dict)
         return 'input_ids' not in inputs and 'input_embedding' not in inputs
 
+    def _move_inputs_to_model_device(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        import torch
+        try:
+            model_device = next(self.model.parameters()).device
+        except StopIteration:
+            return inputs
+        for key, value in inputs.items():
+            # Fixes observed device-mismatch errors when processor outputs CPU tensors for NPU models.
+            if isinstance(value, torch.Tensor) and value.device != model_device:
+                inputs[key] = value.to(model_device)
+        return inputs
+
     def _lazy_wrap_model(self):
         if not self._model_wrapped:
             assert len(self.optimizer_group) == 1
@@ -161,6 +173,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        # Fixes DDP/accelerate init errors when forward_only is called before wrapping.
         self._lazy_wrap_model()
         if isinstance(inputs, dict) and self._not_encoded(inputs):
             assert optimizer_config.template is not None, \
@@ -173,6 +186,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         processor: InputProcessor = optimizer_config.processor
         assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
         inputs: Dict[str, Any] = processor(inputs)
+        inputs = self._move_inputs_to_model_device(inputs)
         labels = inputs.pop('labels', None)
         self._accumulate_metric(optimizer_config)
         outputs = self.model(**inputs)
@@ -194,6 +208,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        self._lazy_wrap_model()
         if isinstance(inputs, dict) and self._not_encoded(inputs):
             assert optimizer_config.template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
@@ -206,6 +221,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             processor: InputProcessor = optimizer_config.processor
             assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
             inputs: Dict[str, Any] = processor(inputs)
+            inputs = self._move_inputs_to_model_device(inputs)
             labels = inputs.pop('labels', None)
             self._accumulate_metric(optimizer_config)
             outputs = self.model(**inputs)
@@ -389,7 +405,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before forwarding'
 
         context = contextlib.nullcontext
-        if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
+        if self.device_mesh is not None and (self.device_mesh.tp_world_size or 1) > 1:
             from torch.distributed.tensor.experimental import implicit_replication
             context = implicit_replication
 
@@ -475,7 +491,22 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
-        optimizer_config.optimizer = construct_class(optimizer_cls, Optimizer, torch.optim, **kwargs)
+        if isinstance(optimizer_cls, Optimizer):
+            optimizer_config.optimizer = optimizer_cls
+            return
+
+        params = kwargs.pop('params', None)
+        if params is None:
+            lr = kwargs.get('lr', 1e-5)
+            weight_decay = kwargs.get('weight_decay', 0.01)
+            params = self._create_param_group(adapter_name, lr=lr, weight_decay=weight_decay)
+        optimizer_config.optimizer = construct_class(
+            optimizer_cls,
+            Optimizer,
+            torch.optim,
+            params=params,
+            **kwargs,
+        )
 
     def _get_trainable_parameters(self, adapter_name=_default_adapter_name):
         is_default = adapter_name == _default_adapter_name

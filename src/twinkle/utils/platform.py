@@ -240,6 +240,8 @@ class DeviceMesh:
                 data_rank = fsdp_rank
 
         ulysses_size = self.ulysses_size or 1
+        if data_rank is None:
+            return None
         return data_rank // ulysses_size
 
     @property
