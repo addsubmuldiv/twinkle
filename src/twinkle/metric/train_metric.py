@@ -21,10 +21,10 @@ class TrainMetric(Metric):
     def accumulate(self, inputs, outputs):
         lr = outputs.get('lr')
         if isinstance(lr, list):
-            lr = [f'{x:.10f}' for x in lr]
+            lr = [f'{x:.2e}' for x in lr]
             lr = ','.join(lr)
         else:
-            lr = f'{lr:.10f}'
+            lr = f'{lr:.2e}'
         self.lr = lr
         self.step = outputs.get('step')
 
@@ -36,12 +36,12 @@ class TrainMetric(Metric):
         if self.lr is not None:
             results['last lr(by param_groups)'] = self.lr
         if self.step is not None:
-            results['forward step'] = self.step
+            results['forward count'] = self.step
             interval = time.time() - self.time
             speed = self.step / interval
             if interval < 60:
-                results['total time'] = f'{interval:.0f} seconds'
+                results['total time elapse'] = f'{interval:.0f} seconds'
             else:
-                results['total time'] = f'{interval/60:.1f} minutes'
+                results['total time elapse'] = f'{interval/60:.1f} minutes'
             results['total avg speed'] = f'{speed:.2f} steps/s'
         return results

@@ -49,7 +49,7 @@ def train():
         if step % 16 == 0:
             logger.info(f'Current is step {step // 16}, metric: {model.calculate_metric(is_training=True)}')
         model.clip_grad_and_step()
-        if step > 0 and (step / 16) % 100 == 0:
+        if step > 0 and (step / 16) % 30 == 0:
             metrics = eval(model)
             logger.info(f'Current is step {step // 16}, metrics: {metrics}')
             metrics['step'] = step
