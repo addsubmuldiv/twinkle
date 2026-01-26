@@ -714,6 +714,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if optimizer_config.optimizer is not None:
             expr += (f'Adapter config:\n'
                     f'{json.dumps(config, indent=2, ensure_ascii=False)}\n'
+                    f'Trainable parameters: {}'
                     f'Optimizer: {optimizer_config.optimizer.__class__.__name__}\n'
                     f'Learning rate: {optimizer_config.optimizer.defaults.get("lr", "No default lr")}\n'
                     f'Lr scheduler: {optimizer_config.lr_scheduler.__class__.__name__}\n'
