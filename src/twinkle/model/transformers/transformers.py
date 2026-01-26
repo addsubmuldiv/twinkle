@@ -551,6 +551,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             interval: Save each interval steps.
             **kwargs:
                 adapter_name: Lora adapter name.
+                save_optimizer: Whether to save optimizer state.
         """
         if output_dir is None:
             output_dir = 'output'
@@ -568,6 +569,10 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
         model.save_pretrained(checkpoint_dir, state_dict=processed_state_dict, is_main_process=Platform.is_master())
         self._save_tokenizer(checkpoint_dir, adapter_name=adapter_name)
+        
+        if kwargs.get('save_optimizer', False):
+            self._save_optimizer(checkpoint_dir, adapter_name=adapter_name)
+
         push_to_hub = kwargs.get('push_to_hub', False)
         hub_model_id = kwargs.get('hub_model_id', None)
         hub_token = kwargs.get('hub_token', None)
@@ -579,6 +584,18 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             else:
                 HubOperation.push_to_hub(repo_id=hub_model_id, folder_path=checkpoint_dir, token=hub_token, private=True)
 
+    def _save_optimizer(self, output_dir, **kwargs):
+        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        optimizer_config = self.optimizer_group[adapter_name]
+        
+        if Platform.is_master():
+            optimizer = optimizer_config.optimizer
+            lr_scheduler = optimizer_config.lr_scheduler
+            if optimizer is not None:
+                torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+            if lr_scheduler is not None:
+                torch.save(lr_scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+
     def _save_tokenizer(self, output_dir, **kwargs):
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
@@ -588,6 +605,47 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 template_ins.tokenizer.save_pretrained(output_dir)
             else:
                 self._default_tokenizer.save_pretrained(output_dir)
+
+    @remote_function()
+    def load(self, checkpoint_dir: str, **kwargs):
+        """Load model state and optionally optimizer state from a checkpoint.
+
+        Args:
+            checkpoint_dir: Directory containing the checkpoint.
+            **kwargs:
+                adapter_name: Adapter to load.
+                load_optimizer: Whether to load optimizer and scheduler states.
+        """
+        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        load_optimizer = kwargs.get('load_optimizer', False)
+        
+        model = self.strategy.unwrap_model(self.model)
+        if isinstance(model, PeftModel):
+            from peft.utils import set_peft_model_state_dict, load_peft_weights
+            try:
+                device = next(model.parameters()).device
+            except StopIteration:
+                device = "cpu"
+            adapter_weights = load_peft_weights(checkpoint_dir, device=device)
+            set_peft_model_state_dict(model, adapter_weights, adapter_name=adapter_name)
+        
+        if load_optimizer:
+            self._load_optimizer(checkpoint_dir, adapter_name=adapter_name)
+
+    def _load_optimizer(self, checkpoint_dir, **kwargs):
+        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        optimizer_config = self.optimizer_group[adapter_name]
+        
+        optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
+        scheduler_path = os.path.join(checkpoint_dir, "scheduler.pt")
+        
+        if os.path.exists(optimizer_path) and optimizer_config.optimizer is not None:
+            state_dict = torch.load(optimizer_path, map_location='cpu')
+            optimizer_config.optimizer.load_state_dict(state_dict)
+            
+        if os.path.exists(scheduler_path) and optimizer_config.lr_scheduler is not None:
+            state_dict = torch.load(scheduler_path, map_location='cpu')
+            optimizer_config.lr_scheduler.load_state_dict(state_dict)
 
     @remote_function(execute='first')
     def get_state_dict(self, **kwargs):

@@ -344,11 +344,11 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                     name = body.path or f"checkpoint-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
                     checkpoint_id = Path(body.model_id) / 'weights'
                     save_path = Path(TWINKLE_DEFAULT_SAVE_DIR) / checkpoint_id
+                    tinker_path = f"twinkle://{(checkpoint_id / name).as_posix()}"
 
                     self.model.save(name=name,
                                     output_dir=save_path.as_posix(),
                                     adapter_name=adapter_name)
-                    tinker_path = f"twinkle://{(checkpoint_id / name).as_posix()}"
 
                     checkpoint = types.Checkpoint(
                         checkpoint_id=f"weights/{name}",
