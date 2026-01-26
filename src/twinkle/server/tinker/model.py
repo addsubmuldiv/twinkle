@@ -4,7 +4,6 @@ import threading
 import time
 import traceback
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Request
@@ -20,8 +19,7 @@ from twinkle.server.twinkle.validation import (ConfigRegistryProxy,
 from twinkle.utils.logger import get_logger
 
 from .common import TwinkleCompatTransformersModel
-from .common.io_utils import (TWINKLE_DEFAULT_SAVE_DIR, get_dir_size,
-                              save_checkpoint_info, save_train_info)
+from .common.io_utils import (TrainingRunManager, CheckpointManager)
 from .state import get_server_state, schedule_task
 
 logger = get_logger()
@@ -61,7 +59,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
             self.config_registry: ConfigRegistryProxy = init_config_registry()
             self.state = get_server_state()
             self.per_token_model_limit = int(
-                os.environ.get('TWINKLE_PER_USER_MODEL_LIMIT', 3))
+                os.environ.get('TWINKLE_PER_USER_MODEL_LIMIT', 30))
             self.key_token_dict = {}
 
         def countdown(self):
@@ -129,14 +127,10 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                     **extra_kwargs,
                 )
 
-                lora_rank = None
-                is_lora = False
 
                 if body.lora_config:
                     # TODO: support more lora config parameters, train_unembed, etc.
                     lora_cfg = LoraConfig(r=body.lora_config.rank, )
-                    lora_rank = body.lora_config.rank
-                    is_lora = True
 
                     with self.adapter_lock:
                         adapter_name = self.get_adapter_name(
@@ -153,18 +147,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                     self.model.set_optimizer('AdamW',
                                              adapter_name=adapter_name)
 
-                # Initialize train info
-                run_data = types.TrainingRun(training_run_id=model_id,
-                                             base_model=body.base_model,
-                                             model_owner=request.state.token,
-                                             is_lora=is_lora,
-                                             corrupted=False,
-                                             lora_rank=lora_rank,
-                                             last_request_time=datetime.now(),
-                                             last_checkpoint=None,
-                                             last_sampler_checkpoint=None,
-                                             user_metadata=body.user_metadata)
-                save_train_info(model_id, run_data)
+                TrainingRunManager.save(model_id, body, request.state.token)
 
                 return types.CreateModelResponse(model_id=model_id)
 
@@ -176,8 +159,8 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
         async def get_info(
                 self, request: Request,
                 body: types.GetInfoRequest) -> types.GetInfoResponse:
-            metadata = self.state.get_model_metadata(str(body.model_id))
-            model_name = metadata.get('base_model') if metadata else str(
+            metadata = TrainingRunManager.get(str(body.model_id))
+            model_name = metadata.base_model if metadata else str(
                 body.model_id)
             lora_rank = None
             is_lora = False
@@ -341,24 +324,19 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                         request, adapter_name=body.model_id)
                     self.assert_adapter_exists(adapter_name=adapter_name)
 
+                    # get save dir
                     name = body.path or f"checkpoint-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                    checkpoint_id = Path(body.model_id) / 'weights'
-                    save_path = Path(TWINKLE_DEFAULT_SAVE_DIR) / checkpoint_id
-                    tinker_path = f"twinkle://{(checkpoint_id / name).as_posix()}"
-
+                    save_dir = CheckpointManager.get_save_dir(
+                                    model_id=self.model_id,
+                                    name=name,
+                                    is_sampler=False
+                                )
+                    # FIXME: May save dummy adapter here if LoRA model
                     self.model.save(name=name,
-                                    output_dir=save_path.as_posix(),
+                                    output_dir=save_dir,
                                     adapter_name=adapter_name)
 
-                    checkpoint = types.Checkpoint(
-                        checkpoint_id=f"weights/{name}",
-                        checkpoint_type='training',
-                        time=datetime.now(),
-                        tinker_path=tinker_path,
-                        size_bytes=get_dir_size(save_path / name),
-                        public=False)
-                    # FIXME: May save dummy adapter here if LoRA model
-                    save_checkpoint_info(self.model_id, checkpoint)
+                    tinker_path = CheckpointManager.save(self.model_id, name=name, is_sampler=False)
 
                     return types.SaveWeightsResponse(path=tinker_path,
                                                      type='save_weights')
@@ -379,8 +357,19 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                 body: types.LoadWeightsRequest) -> types.UntypedAPIFuture:
 
             async def _do_load():
-                return types.LoadWeightsResponse(path=body.path,
+                try:
+                    weight_path = body.path
+                    load_optimizer = body.optimizer
+                    self.model.load(checkpoint_dir=weight_path,
+                                    load_optimizer=load_optimizer)
+                    return types.LoadWeightsResponse(path=body.path,
                                                  type='load_weights')
+                except Exception:
+                    logger.error(traceback.format_exc())
+                    return types.RequestFailedResponse(
+                        error=traceback.format_exc(),
+                        category=types.RequestErrorCategory.Server,
+                    )
 
             return await schedule_task(self.state,
                                        _do_load(),

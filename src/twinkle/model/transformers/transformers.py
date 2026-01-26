@@ -597,7 +597,6 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Adapter to load.
                 load_optimizer: Whether to load optimizer and scheduler states.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         load_optimizer = kwargs.get('load_optimizer', False)
         
         model = self.strategy.unwrap_model(self.model)
@@ -608,13 +607,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             except StopIteration:
                 device = "cpu"
             adapter_weights = load_peft_weights(checkpoint_dir, device=device)
-            set_peft_model_state_dict(model, adapter_weights, adapter_name=adapter_name)
+            set_peft_model_state_dict(model, adapter_weights)
         
         if load_optimizer:
-            self._load_optimizer(checkpoint_dir, adapter_name=adapter_name)
+            self._load_optimizer(checkpoint_dir)
 
     def _load_optimizer(self, checkpoint_dir, **kwargs):
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        # FIXME: No optimizer group initialized
         optimizer_config = self.optimizer_group[adapter_name]
         
         optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
