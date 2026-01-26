@@ -44,9 +44,9 @@ def train():
     logger.info(model.get_train_configs())
     loss_metric = 99.0
     for step, batch in enumerate(dataloader):
-        output = model.forward_backward(inputs=batch)
+        model.forward_backward(inputs=batch)
         if step % 16 == 0:
-            logger.info(f'Current is step {step // 16}, loss: {output}')
+            logger.info(f'Current is step {step // 16}, metric: {model.calculate_metric()}')
         model.clip_grad_and_step()
         if step > 0 and step % 50 == 0:
             metrics = eval(model)
