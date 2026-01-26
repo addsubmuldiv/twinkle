@@ -581,9 +581,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         state_dict = self._get_trainable_parameters(adapter_name=adapter_name)
         processed_state_dict = {}
 
-        if Platform.is_master():
-            for key, value in state_dict.items():
-                processed_state_dict[key] = torch_util.to_local_tensor(value).cpu()
+        for key, value in state_dict.items():
+            processed_state_dict[key] = torch_util.to_local_tensor(value).cpu()
 
         model.save_pretrained(checkpoint_dir, state_dict=processed_state_dict, is_main_process=Platform.is_master())
         self._save_tokenizer(checkpoint_dir, adapter_name=adapter_name)
