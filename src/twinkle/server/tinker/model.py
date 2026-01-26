@@ -127,7 +127,6 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                     **extra_kwargs,
                 )
 
-
                 if body.lora_config:
                     # TODO: support more lora config parameters, train_unembed, etc.
                     lora_cfg = LoraConfig(r=body.lora_config.rank, )
@@ -325,18 +324,20 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                     self.assert_adapter_exists(adapter_name=adapter_name)
 
                     # get save dir
-                    name = body.path or f"checkpoint-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                    checkpoint_name = CheckpointManager.get_ckpt_name(
+                        body.path)
                     save_dir = CheckpointManager.get_save_dir(
-                                    model_id=self.model_id,
-                                    name=name,
-                                    is_sampler=False
-                                )
-                    # FIXME: May save dummy adapter here if LoRA model
-                    self.model.save(name=name,
-                                    output_dir=save_dir,
-                                    adapter_name=adapter_name)
+                        model_id=self.model_id,
+                        is_sampler=False
+                    )
 
-                    tinker_path = CheckpointManager.save(self.model_id, name=name, is_sampler=False)
+                    self.model.save(name=checkpoint_name,
+                                    output_dir=save_dir,
+                                    adapter_name=adapter_name,
+                                    save_optimizer=True)
+
+                    tinker_path = CheckpointManager.save(
+                        self.model_id, name=checkpoint_name, is_sampler=False)
 
                     return types.SaveWeightsResponse(path=tinker_path,
                                                      type='save_weights')
@@ -358,12 +359,16 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
 
             async def _do_load():
                 try:
+                    adapter_name = self.get_adapter_name(
+                        request, adapter_name=body.model_id)
+                    self.assert_adapter_exists(adapter_name=adapter_name)
                     weight_path = body.path
                     load_optimizer = body.optimizer
                     self.model.load(checkpoint_dir=weight_path,
-                                    load_optimizer=load_optimizer)
+                                    load_optimizer=load_optimizer,
+                                    adapter_name=adapter_name)
                     return types.LoadWeightsResponse(path=body.path,
-                                                 type='load_weights')
+                                                     type='load_weights')
                 except Exception:
                     logger.error(traceback.format_exc())
                     return types.RequestFailedResponse(

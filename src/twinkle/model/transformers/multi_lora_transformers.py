@@ -34,7 +34,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
                  mixed_precision: Literal['no', 'fp8', 'fp16', 'bf16'] = 'bf16',
                  grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
-        assert device_mesh.fsdp_world_size is None, f'MultiLora does not support FSDP, current is: {str(device_mesh)}'
+        assert device_mesh.fsdp_world_size == 0, f'MultiLora does not support FSDP, current is: {str(device_mesh)}'
         dist.init_process_group('nccl')
         super(PreTrainedModel, self).__init__()
         model_id = HubOperation.download_model(model_id)
@@ -225,4 +225,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         
     @remote_function()
     def load(self, **kwargs):
+        adapter_name = kwargs.get("adapter_name")
+        self._check_adapter_valid(adapter_name)
+        self._activate_adapter(adapter_name)
         super().load(**kwargs)

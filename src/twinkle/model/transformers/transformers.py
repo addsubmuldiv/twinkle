@@ -547,8 +547,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if Platform.is_master():
             for key, value in state_dict.items():
                 processed_state_dict[key] = torch_util.to_local_tensor(value).cpu()
+        
+        save_kwargs = {}
+        if isinstance(model, PeftModel):
+            # Only save the selected adapter, avoid save dummy adapters
+            save_kwargs['selected_adapters'] = [adapter_name]
 
-        model.save_pretrained(checkpoint_dir, state_dict=processed_state_dict, is_main_process=Platform.is_master())
+        model.save_pretrained(checkpoint_dir, state_dict=processed_state_dict, is_main_process=Platform.is_master(), **save_kwargs)
         self._save_tokenizer(checkpoint_dir, adapter_name=adapter_name)
         
         if kwargs.get('save_optimizer', False):
@@ -598,22 +603,21 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 load_optimizer: Whether to load optimizer and scheduler states.
         """
         load_optimizer = kwargs.get('load_optimizer', False)
+        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         
         model = self.strategy.unwrap_model(self.model)
         if isinstance(model, PeftModel):
             from peft.utils import set_peft_model_state_dict, load_peft_weights
-            try:
-                device = next(model.parameters()).device
-            except StopIteration:
-                device = "cpu"
-            adapter_weights = load_peft_weights(checkpoint_dir, device=device)
-            set_peft_model_state_dict(model, adapter_weights)
+            # Load to CPU to avoid safetensors device issues in Ray environment
+            adapter_weights = load_peft_weights(checkpoint_dir, device="cpu")
+            set_peft_model_state_dict(model, adapter_weights, adapter_name=adapter_name)
         
         if load_optimizer:
-            self._load_optimizer(checkpoint_dir)
+            self._load_optimizer(checkpoint_dir, adapter_name=adapter_name)
 
     def _load_optimizer(self, checkpoint_dir, **kwargs):
-        # FIXME: No optimizer group initialized
+        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        # assume optimizer and lr_scheduler are created
         optimizer_config = self.optimizer_group[adapter_name]
         
         optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
@@ -668,7 +672,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.optimizer_group[train_group].adapter_config = config
         _gas_default = kwargs.get('gradient_accumulation_steps', 1)
         self.optimizer_group[train_group].gradient_accumulation_steps = _gas_default
-        default_config = self.optimizer_group[_default_adapter_name]
+        default_config = self.optimizer_group[train_group] # FIXME: no default adapter in multi-lora
         if default_config.template:
             self.optimizer_group[train_group].template = default_config.template
         if default_config.processor:
