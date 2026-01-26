@@ -1,4 +1,4 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 # Reference: swift/swift/megatron/model/mm_gpts/qwen3_vl.py
 
 from contextlib import nullcontext
@@ -21,6 +21,8 @@ from twinkle.model.megatron.model.gpt_bridge import GPTBridge, MultimodalGPTBrid
 from twinkle.model.megatron.model.mm_gpt_model import MultimodalGPTModel
 from ..register import MegatronModelMeta, register_megatron_model
 from .utils import HuggingFaceModule
+
+from transformers.models.qwen3_vl import Qwen3VLForConditionalGeneration
 
 te_checkpoint = None
 
@@ -451,4 +453,5 @@ register_megatron_model(
         ],
         model_cls=Qwen3VLGPTModel,
         bridge_cls=MultimodalGPTBridge,
-        visual_cls=Qwen3VL_Vit))
+        visual_cls=Qwen3VL_Vit,
+        auto_model_cls=Qwen3VLForConditionalGeneration))

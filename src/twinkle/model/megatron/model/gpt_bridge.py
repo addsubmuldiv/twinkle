@@ -1,7 +1,6 @@
-# Copyright (c) twinkle authors. All rights reserved.
+# Copyright (c) ModelScope Contributors. All rights reserved.
 # Reference: swift/swift/megatron/model/gpt_bridge.py
 
-# Copyright (c) ModelScope Contributors. All rights reserved.
 import math
 from copy import copy
 from typing import List, Optional, Union
@@ -16,12 +15,11 @@ from twinkle.model.megatron.args import get_args  # Use twinkle's get_args
 from packaging import version
 from peft.utils import ModulesToSaveWrapper
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer, AutoConfig
 from transformers.modeling_utils import custom_object_save, PreTrainedModel
 
 from twinkle.utils import (MxFp4Dequantizer, SafetensorLazyLoader, StreamingSafetensorSaver, deep_getattr, get_logger, 
                             get_multimodal_target_regex, get_modules_to_not_convert)
-from twinkle.model.utils import save_checkpoint
 from twinkle.hub import HubOperation
 
 from ..tuners import LoraParallelLinear
@@ -31,23 +29,7 @@ import os
 logger = get_logger()
 
 mcore_013 = version.parse(megatron.core.__version__) >= version.parse('0.13.0rc0')
-
-
-def is_last_rank():
-    if not dist.is_initialized():
-        return True
-
-    from megatron.core import parallel_state as mpu
-    if mpu.is_initialized():
-        # Only DP rank 0 writes
-        dp_rank = mpu.get_data_parallel_rank()
-        if dp_rank != 0:
-            return False
-        # For PP, only last stage needs to write certain weights
-        # (handled separately in export_weights)
-        return True
-
-    return dist.get_rank() == dist.get_world_size() - 1
+from twinkle.utils.platform import is_last_rank
 
 
 # Some ideas for LoRA conversion are referenced from: https://github.com/modelscope/ms-swift/pull/6225
@@ -72,7 +54,8 @@ class GPTBridge:
         self._is_peft_format = False
         self._adapter_name = 'default'
         self._init_meta_hf_model()
-        self.hf_layers = deep_getattr(self.hf_model, self.hf_layers_prefix)
+        # Get HF layers if model was loaded, otherwise None
+        self.hf_layers = deep_getattr(self.hf_model, self.hf_layers_prefix) if self.hf_model is not None else None
         self.module_mapping = {}
         self.mcore_014 = version.parse(megatron.core.__version__) >= version.parse('0.14.0rc0')
         megatron_model_meta = get_megatron_model_meta(self.args.hf_model_type)
@@ -127,23 +110,34 @@ class GPTBridge:
         return getattr(self.hf_layers[layer_idx], self.get_hf_mlp_prefix(layer_idx))
 
     def _init_meta_hf_model(self):
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        import copy
+        from .register import get_megatron_model_meta
         
         model_dir = self.args.model_dir
         model_type = self.args.hf_model_type
         
+        # Get the correct AutoModel class from MegatronModelMeta
+        megatron_model_meta = get_megatron_model_meta(model_type)
+        auto_model_cls = megatron_model_meta.auto_model_cls if megatron_model_meta else None
+        if auto_model_cls is None:
+            from transformers import AutoModelForCausalLM
+            auto_model_cls = AutoModelForCausalLM
+        
+        # Load config first
+        config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
+        config.torch_dtype = self.args.params_dtype
+        
         with torch.device('meta'):
-            try:
-                # Try to load the model structure without weights
-                self.hf_model = AutoModelForCausalLM.from_pretrained(
-                    model_dir,
-                    trust_remote_code=True,
-                    torch_dtype=self.args.params_dtype,
-                )
-            except Exception:
-                # Fallback: create a minimal dummy model structure
-                # This is used when the model can't be loaded (e.g., missing dependencies)
-                self.hf_model = None
+            origin_dtype = torch.get_default_dtype()
+            torch.set_default_dtype(self.args.params_dtype)
+            config_copy = copy.deepcopy(config)
+            # Auto classes have from_config, concrete model classes have _from_config
+            if hasattr(auto_model_cls, 'from_config'):
+                self.hf_model = auto_model_cls.from_config(config_copy, trust_remote_code=True)
+            else:
+                self.hf_model = auto_model_cls._from_config(config_copy)
+            torch.set_default_dtype(origin_dtype)
+
         if os.path.exists(os.path.join(model_dir, 'preprocessor_config.json')):
             auto_tokenizer_cls = AutoProcessor
         else:
@@ -1473,25 +1467,26 @@ class GPTBridge:
                        target_device=None,
                        only_last_rank: bool = False,
                        is_peft_format: bool = False,
+                       adapter_name: str = 'default',
                        tqdm_desc: str = 'Exporting: '):
         self._target_device = target_device
         self._only_last_rank = only_last_rank
         self._is_peft_format = is_peft_format
-        self._adapter_name = 'default'
+        self._adapter_name = adapter_name
         self._peft_target_modules = set()
         self._peft_modules_to_save = set()
         hf_prefix = 'base_model.model.' if is_peft_format else ''
         with torch.no_grad():
             yield from self._convert(mg_models, {}, hf_prefix, False, tqdm_desc=tqdm_desc)
 
-    def save_weights(self, mg_models, output_dir: str, is_peft_format: bool = False) -> None:
+    def save_weights(self, mg_models, output_dir: str, is_peft_format: bool = False, adapter_name: str = 'default') -> None:
         """Save the mg_model checkpoint in HF format"""
         torch.cuda.empty_cache()
         saver = StreamingSafetensorSaver(
             save_dir=output_dir, max_shard_size=self.args.max_shard_size, is_peft_format=is_peft_format)
         for k, v in self.export_weights(
                 mg_models, target_device='cpu', only_last_rank=True, is_peft_format=is_peft_format,
-                tqdm_desc='Saving: '):
+                adapter_name=adapter_name, tqdm_desc='Saving: '):
             saver.add_tensor(k, v)
         saver.finalize()
         args = self.args

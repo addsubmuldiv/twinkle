@@ -62,14 +62,38 @@ class Template:
         return isinstance(self.processor, ProcessorMixin)
 
     def _test_support_assistant_tokens_mask(self):
-        dummy_inputs = [
-            Message(role='user', content='How are you?'),
-            Message(role='assistant', content='Fine.'),
-        ]
-        outputs = self.tokenizer.apply_chat_template(conversation=dummy_inputs,
-                                                     return_assistant_tokens_mask=True, return_dict=True, tokenize=True)
-        assistant_masks = outputs['assistant_masks']
-        self._template_support_assistant_tokens_mask = (0 < np.array(assistant_masks).sum() < len(assistant_masks))
+        # For VLM processors (is_mm=True), content must be list of dicts
+        # For text-only processors, content can be a simple string
+        if self.is_mm:
+            dummy_inputs = [
+                {'role': 'user', 'content': [{'type': 'text', 'text': 'How are you?'}]},
+                {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Fine.'}]},
+            ]
+        else:
+            dummy_inputs = [
+                Message(role='user', content='How are you?'),
+                Message(role='assistant', content='Fine.'),
+            ]
+        try:
+            outputs = self.processor.apply_chat_template(
+                conversation=dummy_inputs,
+                return_assistant_tokens_mask=True,
+                return_dict=True,
+                tokenize=True
+            )
+            # Check if outputs is a dict (not all processors return dict even with return_dict=True)
+            if isinstance(outputs, dict) and 'assistant_masks' in outputs:
+                assistant_masks = outputs['assistant_masks']
+                self._template_support_assistant_tokens_mask = (
+                    0 < np.array(assistant_masks).sum() < len(assistant_masks)
+                )
+            else:
+                # Processor doesn't support return_dict properly
+                self._template_support_assistant_tokens_mask = False
+        except Exception:
+            # If any error occurs during testing, fall back to not supporting
+            self._template_support_assistant_tokens_mask = False
+
 
     def _invoke_pre_pipeline(self, trajectories: List[Trajectory]) -> List[Trajectory]:
         current = trajectories

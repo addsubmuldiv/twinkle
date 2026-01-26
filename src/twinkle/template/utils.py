@@ -60,6 +60,24 @@ def build_labels(
     return labels
 
 
+def _convert_to_vlm_format(messages: List[Dict]) -> List[Dict]:
+    converted = []
+    for msg in messages:
+        new_msg = dict(msg)
+        content = msg.get('content')
+        # If content is a string, convert to list format for VLM processors
+        if isinstance(content, str):
+            new_msg['content'] = [{'type': 'text', 'text': content}]
+        converted.append(new_msg)
+    return converted
+
+
+def _is_vlm_processor(tokenizer) -> bool:
+    if hasattr(tokenizer, 'tokenizer') and hasattr(tokenizer, 'image_processor'):
+        return True
+    return False
+
+
 def tokenize_with_assistant_labels(
         tokenizer: PreTrainedTokenizer,
         encode_func: Callable,
@@ -147,6 +165,9 @@ def _transfer_single_message(content: str, image_placeholder, video_placeholder,
     image_idx = 0
     video_idx = 0
     remaining = content
+    # Handle None images/videos
+    images = images or []
+    videos = videos or []
     has_image = image_placeholder in content
     has_video = video_placeholder in content
     new_content = []
@@ -174,7 +195,7 @@ def _transfer_single_message(content: str, image_placeholder, video_placeholder,
             if remaining[:vid_pos].strip():
                 new_content.append({'type': 'text', 'text': remaining[:vid_pos]})
             if video_idx < len(videos):
-                new_content.append({'type': 'video', 'url': videos[image_idx]})
+                new_content.append({'type': 'video', 'url': videos[video_idx]})
                 video_idx += 1
             remaining = remaining[vid_pos + len(video_placeholder):]
     return new_content

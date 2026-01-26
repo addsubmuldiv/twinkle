@@ -223,6 +223,12 @@ class DeviceMesh:
         return self._get_world_size_for_dim("cp")
 
     @property
+    def etp_world_size(self) -> int:
+        if self.etp_size is not None:
+            return self.etp_size
+        return self.tp_world_size or 1
+
+    @property
     def world_size(self) -> int:
         return self.mesh.flatten().shape[0]
 
@@ -238,6 +244,10 @@ class DeviceMesh:
                 data_rank = dp_rank * fsdp_world_size + fsdp_rank
             elif fsdp_rank is not None:
                 data_rank = fsdp_rank
+
+        # megatron dp_size=1
+        if data_rank is None:
+            data_rank = 0
 
         ulysses_size = self.ulysses_size or 1
         if data_rank is None:
@@ -541,3 +551,22 @@ class MPS(Platform):
             return "Metal Support" in output
         except Exception: # noqa
             return False
+
+def is_last_rank():
+    if not dist.is_initialized():
+        return True
+
+    from megatron.core import parallel_state as mpu
+    if mpu.is_initialized():
+        # Only DP rank 0 writes
+        dp_rank = mpu.get_data_parallel_rank()
+        if dp_rank != 0:
+            return False
+        # For PP, only last stage needs to write certain weights
+        # (handled separately in export_weights)
+        return True
+
+    return dist.get_rank() == dist.get_world_size() - 1
+
+def is_master():
+    return Platform.is_master()
