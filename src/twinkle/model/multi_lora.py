@@ -1,11 +1,11 @@
+from dataclasses import dataclass, field
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MethodType
-from typing import Optional, List, Dict
-from contextlib import contextmanager
-import re
+from typing import Dict
 from typing import Optional, Union, List
-import torch.nn as nn
+
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model
 from peft.tuners.lora import LoraLayer, Linear, Embedding
@@ -62,7 +62,7 @@ class MultiLora(Patch):
         if total_length > self.max_length:
              raise ValueError(f'Max length exceeds {self.max_length}')
 
-    def acquire_lora(self, tenant_adapter_name: str, config: LoraConfig) -> LoraTenant:
+    def acquire_lora(self, tenant_adapter_name: str, config: LoraConfig) -> str:
         if self.has_lora(tenant_adapter_name):
             raise ValueError(f'Lora {tenant_adapter_name} already exists')
         _available_lora = self._get_available_lora()
@@ -72,15 +72,14 @@ class MultiLora(Patch):
             raise RuntimeError(f"Too big rank for lora: {config.r}")
         _available_lora.tenant_config = config
         _available_lora.tenant_adapter_name = tenant_adapter_name
-        return _available_lora
+        return _available_lora.adapter_name
 
     def release_lora(self, tenant_adapter_name: str) -> Optional[str]:
-        for _lora in self.loras:
-            if _lora.tenant_adapter_name == tenant_adapter_name:
-                _lora.tenant_config = None
-                _lora.tenant_adapter_name = None
-                self._load_initial_weights(_lora.adapter_name)
-                return _lora.adapter_name
+        _lora = self.find_lora_by_tenant(tenant_adapter_name)
+        if _lora is not None:
+            _lora.tenant_config = None
+            _lora.tenant_adapter_name = None
+            self._load_initial_weights(_lora.adapter_name)
         else:
             raise ValueError(f'No lora found for tenant {tenant_adapter_name}')
 
@@ -214,35 +213,88 @@ class MultiLora(Patch):
     
     def get_state_dict(self, tenant_adapter_name):
         state_dict = {}
-        for i in range(self.max_loras):
-            if self.loras[i].tenant_adapter_name == tenant_adapter_name:
-                pattern = re.compile(rf'\.lora_\w+\.{re.escape(self.loras[i].adapter_name)}\.')
-                for name, parameter in self.module.named_parameters():
-                    if pattern.search(name):
-                        _param = torch_util.to_local_tensor(parameter)
-                        if 'embedding_A' in name:
-                            _param = _param[:, :self.loras[i].tenant_config.r]
-                        elif 'embedding_B' in name:
-                            _param = _param[:self.loras[i].tenant_config.r, :]
-                        elif '_A' in name:
-                            _param = _param[:self.loras[i].tenant_config.r, :]
-                        elif '_B' in name:
-                            _param = _param[:, :self.loras[i].tenant_config.r]
-                        state_dict[name] = _param
-                break
-        else:
-            raise ValueError(f'Adapter {tenant_adapter_name} not found')
+        _lora = self.find_lora_by_tenant(tenant_adapter_name)
+        pattern = re.compile(rf'\.lora_\w+\.{re.escape(_lora.adapter_name)}\.')
+        for name, parameter in self.module.named_parameters():
+            if pattern.search(name) and self.match_target_modules(name, _lora.tenant_config.target_modules):
+                _param = torch_util.to_local_tensor(parameter)
+                if 'embedding_A' in name:
+                    _param = _param[:, :_lora.tenant_config.r]
+                elif 'embedding_B' in name:
+                    _param = _param[:_lora.tenant_config.r, :]
+                elif '_A' in name:
+                    _param = _param[:_lora.tenant_config.r, :]
+                elif '_B' in name:
+                    _param = _param[:, :_lora.tenant_config.r]
+                state_dict[name] = _param
         return state_dict
 
     def _load_initial_weights(self, origin_adapter_name):
-        for i in range(self.max_loras):
-            if self.loras[i].adapter_name == origin_adapter_name:
-                lora_tenant = self.loras[i]
-                pattern_A = re.compile(rf'\.lora_(?:A|embedding_A)\.{origin_adapter_name}\.')
-                pattern_B = re.compile(rf'\.lora_(?:B|embedding_B)\.{origin_adapter_name}\.')
-                for name, parameter in self.module.named_parameters():
-                    if pattern_A.search(name):
-                        parameter.data.copy_(lora_tenant.lora_A_weights[name])
-                    if pattern_B.search(name):
-                        parameter.data.copy_(torch.zeros_like(parameter.data).to(parameter.data.dtype).to('cpu'))
-                break
+        _lora = self.find_lora(origin_adapter_name)
+        pattern_A = re.compile(rf'\.lora_(?:A|embedding_A)\.{origin_adapter_name}\.')
+        pattern_B = re.compile(rf'\.lora_(?:B|embedding_B)\.{origin_adapter_name}\.')
+        for name, parameter in self.module.named_parameters():
+            if pattern_A.search(name):
+                parameter.data.copy_(_lora.lora_A_weights[name])
+            if pattern_B.search(name):
+                parameter.data.copy_(torch.zeros_like(parameter.data).to(parameter.data.dtype))
+
+    def get_nb_trainable_parameters(self, tenant_adapter_name) -> tuple[int, int]:
+        r"""
+        Returns the number of trainable parameters and the number of all parameters in the model.
+        """
+        trainable_params = 0
+        all_param = 0
+        _lora = self.find_lora_by_tenant(tenant_adapter_name)
+        adapter_name = _lora.adapter_name
+        pattern = re.compile(rf'\.lora_\w+\.{re.escape(adapter_name)}\.')
+        for name, param in self.module.named_parameters():
+            if not pattern.search(name) and 'lora_' in name:
+                # Other lora
+                continue
+            if pattern.search(name) and not self.match_target_modules(name, _lora.tenant_config.target_modules):
+                # lora not match target_modules
+                continue
+
+            if pattern.search(name):
+                if 'embedding_A' in name:
+                    param = param[:, :_lora.tenant_config.r]
+                elif 'embedding_B' in name:
+                    param = param[:_lora.tenant_config.r, :]
+                elif '_A' in name:
+                    param = param[:_lora.tenant_config.r, :]
+                elif '_B' in name:
+                    param = param[:, :_lora.tenant_config.r]
+
+            num_params = param.numel()
+            if num_params == 0 and hasattr(param, "ds_numel"):
+                num_params = param.ds_numel
+
+            if param.__class__.__name__ == "Params4bit":
+                if hasattr(param, "element_size"):
+                    num_bytes = param.element_size()
+                elif not hasattr(param, "quant_storage"):
+                    num_bytes = 1
+                else:
+                    num_bytes = param.quant_storage.itemsize
+                num_params = num_params * 2 * num_bytes
+
+            all_param += num_params
+            if param.requires_grad:
+                trainable_params += num_params
+
+        return trainable_params, all_param
+
+    def get_trainable_parameters_example(self, tenant_adapter_name):
+        trainable_param_names = []
+        _lora = self.find_lora_by_tenant(tenant_adapter_name)
+        adapter_name = _lora.adapter_name
+        pattern = re.compile(rf'\.lora_\w+\.{re.escape(adapter_name)}\.')
+        for name, parameter in self.module.named_parameters():
+            if parameter.requires_grad and pattern.search(name) and self.match_target_modules(name, _lora.tenant_config.target_modules):
+                name = name.replace(f'A.{adapter_name}', f'A.{tenant_adapter_name}')
+                name = name.replace(f'B.{adapter_name}', f'B.{tenant_adapter_name}')
+                trainable_param_names.append(name)
+        trainable_param_names = trainable_param_names[:5] + ['...'] + trainable_param_names[-5:]
+        trainable_param_names = '\n'.join(trainable_param_names)
+        return trainable_param_names

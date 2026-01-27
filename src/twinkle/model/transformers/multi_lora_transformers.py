@@ -186,3 +186,9 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         if adapter_name in self.optimizer_group:
             self.optimizer_group.pop(adapter_name)
         self.multi_adapter.release_lora(adapter_name)
+
+    def _get_nb_trainable_parameters(self, adapter_name, model):
+        return self.multi_adapter.get_nb_trainable_parameters(adapter_name)
+
+    def _get_trainable_parameters_example(self, adapter_name, model):
+        return self.multi_adapter.get_trainable_parameters_example(adapter_name)
