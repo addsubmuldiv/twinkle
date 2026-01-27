@@ -101,11 +101,9 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         self._check_adapter_valid(kwargs.get("adapter_name"))
         with self.multi_adapter.adapter(kwargs.get("adapter_name")):
             return super().clip_grad_norm(max_grad_norm, norm_type=norm_type, **kwargs)
-    
-    def _create_param_group(self, adapter_name: str, lr: float=1e-5, weight_decay:float=0.01, **kwargs):
 
     def _create_param_group(self, adapter_name: str, lr: float = 1e-5, weight_decay: float = 0.01, **kwargs):
-        with self.multi_adapter.adapter(kwargs.get("adapter_name")) as adapter_name:
+        with self.multi_adapter.adapter(adapter_name) as adapter_name:
             return super()._create_param_group(adapter_name=adapter_name, lr=lr, weight_decay=weight_decay, **kwargs)
 
     @remote_function()
@@ -175,8 +173,13 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     @remote_function()
     def get_state_dict(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        with self.multi_adapter.adapter(kwargs.get("adapter_name")):
-            return self.multi_adapter.get_state_dict(kwargs.get("adapter_name"))
+        return self.multi_adapter.get_state_dict(kwargs.get("adapter_name"))
+
+    @remote_function()
+    def save(self, name, output_dir=None, interval=1, **kwargs):
+        self._check_adapter_valid(kwargs.get("adapter_name"))
+        with self.multi_adapter.save_context(kwargs.get("adapter_name")):
+            return super().save(name, output_dir, interval, **kwargs)
 
     @remote_function()
     def set_grad_scaler(self, **kwargs):

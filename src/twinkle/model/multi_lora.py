@@ -56,6 +56,19 @@ class MultiLora(Patch):
         self.activate_adapter(tenant_adapter_name)
         yield self.find_lora_by_tenant(tenant_adapter_name).adapter_name
         self.deactivate_adapter()
+    
+    @contextmanager
+    def save_context(self, tenant_adapter_name: str):
+        adapter_name = self.find_lora_by_tenant(tenant_adapter_name).adapter_name
+        peft_config = self.module.peft_config
+        config_dict = {tenant_adapter_name: self.module.peft_config[adapter_name]}
+        self.module.peft_config = config_dict
+        active_adapter = self.module.active_adapter
+        self.module.active_adapter = tenant_adapter_name
+        yield
+        self.module.peft_config = peft_config
+        self.module.active_adapter = active_adapter
+        self.deactivate_adapter()
 
     def check_length(self, inputs: InputFeature):
         total_length = sum(len(_input['input_ids']) for _input in inputs)
@@ -226,6 +239,7 @@ class MultiLora(Patch):
                     _param = _param[:_lora.tenant_config.r, :]
                 elif '_B' in name:
                     _param = _param[:, :_lora.tenant_config.r]
+                name = name.replace(f'.{_lora.adapter_name}.', f'.{_lora.tenant_adapter_name}.')
                 state_dict[name] = _param
         return state_dict
 
