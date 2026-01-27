@@ -136,6 +136,7 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
 
         if getattr(block, "norm_topk_prob", False):
             routing_weights = routing_weights / routing_weights.sum(dim=-1, keepdim=True)
+        routing_weights = routing_weights.to(hidden_states_2d.dtype)
 
         num_tokens = hidden_states_2d.shape[0]
         flat_token_idx = torch.arange(num_tokens, device=hidden_states_2d.device).repeat_interleave(top_k)
@@ -149,6 +150,7 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
         order = torch.argsort(dest_rank)
         ordered_token_idx = flat_token_idx[order]
         ordered_weight = flat_weight[order]
+        ordered_global_expert_id = flat_expert_id[order]
         ordered_expert_id = local_expert_id[order]
 
         send_counts = torch.bincount(dest_rank, minlength=block._ep_world_size)
@@ -205,8 +207,18 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
         final_hidden = torch.zeros(
             (num_tokens, hidden_dim), device=hidden_states_2d.device, dtype=input_dtype
         )
-        scaled = send_out.to(torch.float32) * ordered_weight.unsqueeze(-1)
-        final_hidden.index_add_(0, ordered_token_idx, scaled.to(input_dtype))
+        expert_hit = torch.unique(ordered_global_expert_id)
+        if expert_hit.numel() > 0:
+            expert_hit, _ = torch.sort(expert_hit)
+        for expert_id in expert_hit:
+            idx = (ordered_global_expert_id == expert_id).nonzero(as_tuple=False).view(-1)
+            if idx.numel() == 0:
+                continue
+            token_idx = ordered_token_idx.index_select(0, idx)
+            weight = ordered_weight.index_select(0, idx)
+            contrib = send_out.index_select(0, idx)
+            scaled = contrib * weight.unsqueeze(-1)
+            final_hidden.index_add_(0, token_idx, scaled.to(input_dtype))
 
         shared_out = _maybe_run_shared_expert(block, hidden_states_2d, cfg)
         if shared_out is not None:

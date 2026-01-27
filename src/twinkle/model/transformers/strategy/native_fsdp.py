@@ -6,11 +6,10 @@ from torch import nn
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from torch.distributed.device_mesh import DeviceMesh as TorchDeviceMesh
 
-from .base import TrainStrategy
 from twinkle.utils import DeviceMesh
 
 
-class NativeFSDPStrategy(TrainStrategy):
+class NativeFSDPStrategy:
     """FSDP2 strategy with explicit process group control for EP compatibility."""
 
     def __init__(self,
