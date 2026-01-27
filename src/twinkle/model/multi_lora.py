@@ -54,7 +54,7 @@ class MultiLora(Patch):
     @contextmanager
     def adapter(self, tenant_adapter_name: str):
         self.activate_adapter(tenant_adapter_name)
-        yield
+        yield self.find_lora_by_tenant(tenant_adapter_name).adapter_name
         self.deactivate_adapter()
 
     def check_length(self, inputs: InputFeature):
