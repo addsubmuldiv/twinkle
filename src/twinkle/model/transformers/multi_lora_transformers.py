@@ -182,11 +182,14 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
             return super().save(name, output_dir, interval, **kwargs)
 
     @remote_function()
-    def load(self, checkpoint_dir: str, **kwargs):
+    def load(self, name: Optional[str] = None, output_dir: Optional[str] = None, **kwargs):
         adapter_name = kwargs.get("adapter_name")
         self._check_adapter_valid(adapter_name)
         with self.multi_adapter.save_context(kwargs.get("adapter_name")):
             load_optimizer = kwargs.get('load_optimizer', False)
+            if output_dir is None:
+                output_dir = 'output'
+            checkpoint_dir = os.path.join(output_dir, name)
             model = self.strategy.unwrap_model(self.model)
             if isinstance(model, PeftModel):
                 # Load to CPU to avoid safetensors device issues in Ray environment
