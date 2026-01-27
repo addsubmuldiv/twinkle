@@ -578,7 +578,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if optimizer_config.cur_step % interval != 0:
             return
         model = self.strategy.unwrap_model(self.model)
-        state_dict = self._get_trainable_parameters(adapter_name=adapter_name)
+        state_dict = self.get_state_dict(**kwargs)
         processed_state_dict = {}
 
         for key, value in state_dict.items():
@@ -607,7 +607,6 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             else:
                 self._default_tokenizer.save_pretrained(output_dir)
 
-    @remote_function(execute='first')
     def get_state_dict(self, **kwargs):
         return self._get_trainable_parameters(kwargs.pop('adapter_name', _default_adapter_name))
 
