@@ -206,6 +206,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             # Trajectory or List[Trajectory]
             assert optimizer_config.template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
+            if isinstance(inputs, dict):
+                inputs = [inputs]
             inputs = optimizer_config.template.batch_encode(inputs) # noqa
         processor: InputProcessor = optimizer_config.processor
         assert isinstance(processor, InputProcessor), 'Set a correct `InputProcessor` before forwarding'
@@ -236,6 +238,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             # Trajectory or List[Trajectory]
             assert optimizer_config.template is not None, \
                 'Use set_template to add a template when trying to input `List[Trajectory]`'
+            if isinstance(inputs, dict):
+                inputs = [inputs]
             inputs = optimizer_config.template.batch_encode(inputs) # noqa
         with torch.no_grad():
             processor: InputProcessor = optimizer_config.processor
@@ -586,7 +590,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if optimizer_config.cur_step % interval != 0:
             return
         model = self.strategy.unwrap_model(self.model)
-        state_dict = self._get_trainable_parameters(adapter_name=adapter_name)
+        state_dict = self.get_state_dict(adapter_name=adapter_name, **kwargs)
         processed_state_dict = {}
 
         save_kwargs = {}
@@ -795,6 +799,18 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if not is_training:
             optimizer_config.eval_metrics.append(construct_class(metric_cls, Metric, twinkle.metric, **kwargs))
 
+    def _get_nb_trainable_parameters(self, adapter_name, model):
+        return PeftModel.get_nb_trainable_parameters(model)
+
+    def _get_trainable_parameters_example(self, adapter_name, model):
+        trainable_param_names = []
+        for name, parameter in self.model.named_parameters():
+            if parameter.requires_grad:
+                trainable_param_names.append(name)
+        trainable_param_names = trainable_param_names[:5] + ['...'] + trainable_param_names[-5:]
+        trainable_param_names = '\n'.join(trainable_param_names)
+        return trainable_param_names
+
     @remote_function(execute='first')
     def get_train_configs(self, **kwargs):
         expr = ''
@@ -805,13 +821,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         else:
             config = {}
         config = {key: str(value) for key, value in config.items() if value is not None}
-        trainable_params, all_param = PeftModel.get_nb_trainable_parameters(self.model)
-        trainable_param_names = []
-        for name, parameter in self.model.named_parameters():
-            if parameter.requires_grad:
-                trainable_param_names.append(name)
-        trainable_param_names = trainable_param_names[:5] + ['...'] + trainable_param_names[-5:]
-        trainable_param_names = '\n'.join(trainable_param_names)
+        trainable_params, all_param = self._get_nb_trainable_parameters(adapter_name, self.model)
+        trainable_param_names = self._get_trainable_parameters_example(adapter_name, self.model)
         if optimizer_config.optimizer is not None:
             expr += (f'Adapter config:\n'
                     f'{json.dumps(config, indent=2, ensure_ascii=False)}\n'
