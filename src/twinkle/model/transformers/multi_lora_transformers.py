@@ -61,7 +61,6 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     @remote_function(dispatch='slice_dp', collect='mean')
     def forward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         adapter_name = kwargs.pop('adapter_name')
         optimizer_config = self.optimizer_group[adapter_name]
         self._lazy_wrap_model()
@@ -84,55 +83,46 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     @remote_function(dispatch='slice_dp', collect='flatten')
     def forward_only(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         return super().forward_only(inputs=inputs, **kwargs)
 
     @remote_function()
     def calculate_loss(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         return super().calculate_loss(**kwargs)
 
     @remote_function()
     def backward(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().backward(**kwargs)
 
     @remote_function()
     def clip_grad_norm(self, max_grad_norm: float = 1.0, norm_type=2, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         return super().clip_grad_norm(max_grad_norm, norm_type=norm_type, **kwargs)
 
     @remote_function()
     def step(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().step(**kwargs)
 
     @remote_function()
     def zero_grad(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().zero_grad(**kwargs)
 
     @remote_function()
     def lr_step(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().lr_step(**kwargs)
 
     @remote_function()
     def set_loss(self, loss_cls: Union[Type[Loss], str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().set_loss(loss_cls, **kwargs)
 
     @remote_function()
     def set_optimizer(self, optimizer_cls: Union[Type[Optimizer], str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().set_optimizer(optimizer_cls, **kwargs)
 
     def _patch_adapter(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], train_group: str, **kwargs):
@@ -157,7 +147,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         config_or_dir.init_lora_weights = False
         config_or_dir.modules_to_save = None
         config_or_dir.trainable_token_indices = None
-        self._patch_adapter(adapter_name, config_or_dir, **kwargs)
+        self._patch_adapter(adapter_name, config_or_dir, adapter_name, **kwargs)
         self.multi_adapter.acquire_lora(tenant_adapter_name=adapter_name, config=config_or_dir)
         self._prepare_adapter(adapter_name)
 
@@ -172,36 +162,30 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     @remote_function()
     def set_lr_scheduler(self, scheduler_cls: Union[Type[LRScheduler], str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().set_lr_scheduler(scheduler_cls, **kwargs)
 
     @remote_function()
     def set_template(self, template_cls: Union[Type[template.Template], str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().set_template(template_cls, **kwargs)
 
     @remote_function()
     def set_processor(self, processor_cls: Union[Type[InputProcessor], str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().set_processor(processor_cls, **kwargs)
 
     @remote_function()
     def get_state_dict(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         return self.multi_adapter.get_state_dict(kwargs.get("adapter_name"))
 
     @remote_function()
     def set_grad_scaler(self, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().set_grad_scaler(**kwargs)
 
     def add_metric(self, metric_cls: Union[Metric, str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        self._activate_adapter(kwargs.get("adapter_name"))
         super().add_metric(metric_cls, **kwargs)
 
     @remote_function()

@@ -25,7 +25,7 @@ class LoraTenant:
 
 class MultiLora(Patch):
 
-    def __init__(self, max_loras=10, max_r=32):
+    def __init__(self, max_loras=5, max_r=32):
         self.max_loras = max_loras
         self.max_r = max_r
         self.loras: List[LoraTenant] = []
@@ -45,7 +45,6 @@ class MultiLora(Patch):
             raise RuntimeError(f"Too big rank for lora: {config.r}")
         _available_lora.tenant_config = config
         _available_lora.tenant_adapter_name = tenant_adapter_name
-        self._place_lora_weights(self.module, _available_lora.adapter_name, offload=False)
         return _available_lora
 
     def release_lora(self, tenant_adapter_name: str) -> Optional[str]:
@@ -57,16 +56,6 @@ class MultiLora(Patch):
                 return _lora.adapter_name
         else:
             raise ValueError(f'No lora found for tenant {tenant_adapter_name}')
-
-    def _place_lora_weights(self, module, origin_adapter_name: str, offload: bool):
-        pattern = re.compile(rf'\.lora_\w+\.{re.escape(origin_adapter_name)}\.')
-        with torch.no_grad():
-            for name, parameter in module.named_parameters():
-                if pattern.search(name):
-                    if offload:
-                        parameter.data.copy_(parameter.data.to("cpu"))
-                    else:
-                        parameter.data.copy_(parameter.data.to(Platform.get_local_device()))
 
     def _patch_lora_forward(self, base_layer: LoraLayer):
 
@@ -170,9 +159,6 @@ class MultiLora(Patch):
                 module.add_adapter(lora_tenant.adapter_name, config)
             else:
                 module = get_peft_model(module, config, lora_tenant.adapter_name)
-        for i in range(self.max_loras):
-            lora_tenant = self.loras[i]
-            self._place_lora_weights(module, lora_tenant.adapter_name, offload=True)
         self.module = module
         return module
 
@@ -183,7 +169,7 @@ class MultiLora(Patch):
             for name, parameter in self.module.named_parameters():
                 if pattern.search(name):
                     lora_tenant.lora_A_weights[name] = parameter.data.clone().to('cpu')
-
+    
     def get_state_dict(self, tenant_adapter_name):
         state_dict = {}
         for i in range(self.max_loras):
