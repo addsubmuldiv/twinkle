@@ -276,6 +276,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         outputs = optimizer_config.outputs
         assert inputs is not None and outputs is not None, 'Cannot calculate loss of empty inputs and outputs'
         loss_value: torch.Tensor = loss_instance(inputs, outputs, **kwargs)
+        breakpoint()
         optimizer_config.loss_value = loss_value
         return loss_value.item()
 
@@ -300,6 +301,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             # Auto set a grad scaler
             self.set_grad_scaler(adapter_name=adapter_name)
             scaler = optimizer_config.scaler
+        breakpoint()
         loss_value = loss_value / _gas
         if scaler is not None:
             scaler.scale(loss_value).backward()
@@ -648,8 +650,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """Load model state and optionally optimizer state from a checkpoint.
 
         Args:
-            name: The name of checkpoint to save.
-            output_dir: An output_dir to save the model.
+            name: The name of checkpoint to load.
+            output_dir: An output_dir to load the model.
             **kwargs:
                 adapter_name: Adapter to load.
                 load_optimizer: Whether to load optimizer and scheduler states.

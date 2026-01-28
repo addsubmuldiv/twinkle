@@ -92,11 +92,11 @@ class TwinkleCompatTransformersModel(MultiLoraTransformersModel):
         # check adapter files
         weight_path = CheckpointManager.get_ckpt_dir(tinker_path.training_run_id, tinker_path.checkpoint_id)
         if (weight_path / 'adapter_config.json').exists():
-            return super().load(checkpoint_dir=weight_path.as_posix(), **kwargs)
+            return super().load(name=weight_path.name, output_dir=weight_path.parent, **kwargs)
         elif (weight_path / tinker_path.training_run_id / 'adapter_config.json').exists():
-            return super().load(checkpoint_dir=(weight_path / tinker_path.training_run_id).as_posix(), **kwargs)
+            return super().load(name=weight_path.name, output_dir=weight_path.parent, **kwargs)
         else:
-            return super().load(checkpoint_dir=checkpoint_dir, **kwargs)
+            raise ValueError(f"Adapter files not found in {weight_path}")
 
     @staticmethod
     def _get_forward_output(inputs: List[types.Datum], logits: torch.Tensor) -> List[dict]:

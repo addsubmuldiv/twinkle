@@ -24,7 +24,9 @@ from .state import get_server_state, schedule_task
 logger = get_logger()
 
 
-def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
+def build_model_app(model_id: str,
+                    nproc_per_node: int, 
+                    device_group: Dict[str, Any],
                     device_mesh: Dict[str, Any],
                     deploy_options: Dict[str, Any], **kwargs):
     app = FastAPI()
@@ -47,9 +49,13 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                                groups=[self.device_group],
                                lazy_collect=False)
             self.device_mesh = DeviceMesh(**device_mesh)
-            self.model: Optional[TwinkleCompatTransformersModel] = None
-            self.model_id: Optional[str] = None
-            self.kwargs = kwargs
+            # Initialize model immediately
+            self.model = TwinkleCompatTransformersModel(
+                model_id=model_id,
+                device_mesh=self.device_mesh,
+                remote_group=self.device_group.name,
+                **kwargs
+            )
             self.adapter_records: Dict[str, int] = {}
             self.hb_thread = threading.Thread(target=self.countdown,
                                               daemon=True)
@@ -64,8 +70,6 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
         def countdown(self):
             while True:
                 time.sleep(1)
-                if not self.model:
-                    continue
                 for key in list(self.adapter_records.keys()):
                     self.adapter_records[key] += 1
                     if self.adapter_records[key] > self.COUNT_DOWN:
@@ -108,24 +112,10 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
         async def create_model(
                 self, request: Request,
                 body: types.CreateModelRequest) -> types.UntypedAPIFuture:
-            # In case create_model called multiple times, we reuse the same model_id
-            model_id = self.model_id or self.state.register_model(
-                body.model_dump())
+            # Register a new model_id for each create_model call
+            model_id = self.state.register_model(body.model_dump())
 
-            self.model_id = model_id
-
-            async def _load_model():
-                if self.model is not None and self.model_id is not None:
-                    return types.CreateModelResponse(model_id=self.model_id)
-
-                extra_kwargs = body.user_metadata or {}
-                self.model = TwinkleCompatTransformersModel(
-                    model_id=body.base_model,
-                    device_mesh=self.device_mesh,
-                    remote_group=self.device_group.name,
-                    **extra_kwargs,
-                )
-
+            async def _create_adapter():
                 if body.lora_config:
                     # TODO: support more lora config parameters, train_unembed, etc.
                     lora_cfg = LoraConfig(r=body.lora_config.rank, )
@@ -150,7 +140,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                 return types.CreateModelResponse(model_id=model_id)
 
             return await schedule_task(self.state,
-                                       _load_model(),
+                                       _create_adapter(),
                                        model_id=model_id)
 
         @app.post('/get_info')
@@ -158,8 +148,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                 self, request: Request,
                 body: types.GetInfoRequest) -> types.GetInfoResponse:
             metadata = TrainingRunManager.get(str(body.model_id))
-            model_name = metadata.base_model if metadata else str(
-                body.model_id)
+            model_name = metadata.base_model if metadata else model_id
             lora_rank = None
             is_lora = False
             if metadata and metadata.get('lora_config'):
@@ -175,18 +164,21 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
 
         @app.post('/unload_model')
         async def unload_model(
-                self, request: Request,
+                self,
+                request: Request,
                 body: types.UnloadModelRequest) -> types.UntypedAPIFuture:
 
             async def _do_unload():
-                self.model = None
-                self.model_id = None
+                # Only remove adapter, not the base model
                 with self.adapter_lock:
                     adapter_name = self.get_adapter_name(
                         request=request, adapter_name=body.model_id)
-                    del self.adapter_records[adapter_name]
-                    del self.key_token_dict[adapter_name]
-                    self.handle_adapter_count(request.state.token, add=False)
+                    if adapter_name in self.adapter_records:
+                        self.model.remove_adapter(adapter_name)
+                        del self.adapter_records[adapter_name]
+                        token = self.key_token_dict.pop(adapter_name, None)
+                        if token:
+                            self.handle_adapter_count(token, add=False)
                 self.state.unload_model(body.model_id)
                 return types.UnloadModelResponse(model_id=body.model_id)
 
@@ -200,12 +192,6 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                 body: types.ForwardRequest) -> types.UntypedAPIFuture:
 
             async def _do_forward():
-                if not self.model:
-                    return types.RequestFailedResponse(
-                        error='Model not loaded, please load model first',
-                        category=types.RequestErrorCategory.User,
-                    )
-
                 try:
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
@@ -240,12 +226,6 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                 body: types.ForwardBackwardRequest) -> types.UntypedAPIFuture:
 
             async def _do_forward_backward():
-                if not self.model:
-                    return types.RequestFailedResponse(
-                        error='Model not loaded, please load model first',
-                        category=types.RequestErrorCategory.User,
-                    )
-
                 try:
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
@@ -282,11 +262,6 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
 
             async def _do_optim():
                 try:
-                    if not self.model:
-                        return types.RequestFailedResponse(
-                            error='Model not loaded, please load model first',
-                            category=types.RequestErrorCategory.User,
-                        )
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
                     self.assert_adapter_exists(adapter_name=adapter_name)
@@ -312,12 +287,6 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
 
             async def _do_save():
                 try:
-                    if self.model is None or self.model_id is None:
-                        return types.RequestFailedResponse(
-                            error='Model not loaded, please load model first',
-                            category=types.RequestErrorCategory.User,
-                        )
-
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
                     self.assert_adapter_exists(adapter_name=adapter_name)
@@ -326,7 +295,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                     checkpoint_name = CheckpointManager.get_ckpt_name(
                         body.path)
                     save_dir = CheckpointManager.get_save_dir(
-                        model_id=self.model_id,
+                        model_id=body.model_id,
                         is_sampler=False
                     )
 
@@ -336,7 +305,7 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
                                     save_optimizer=True)
 
                     tinker_path = CheckpointManager.save(
-                        self.model_id, name=checkpoint_name, is_sampler=False)
+                        body.model_id, name=checkpoint_name, is_sampler=False)
 
                     return types.SaveWeightsResponse(path=tinker_path,
                                                      type='save_weights')
@@ -358,6 +327,8 @@ def build_model_app(nproc_per_node: int, device_group: Dict[str, Any],
 
             async def _do_load():
                 try:
+                    assert self.model is not None, 'Model not loaded, please load model first'
+                    
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
                     self.assert_adapter_exists(adapter_name=adapter_name)

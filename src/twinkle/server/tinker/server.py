@@ -40,15 +40,34 @@ def build_server_app(
                 types.SupportedModel(model_name="Qwen/Qwen2.5-72B-Instruct"),
             ]
 
-        async def _proxy(self, request: Request, target_path: str) -> Response:
-            # Construct target URL on the same host
-            # Ensure we respect the current route prefix (e.g. /api/v1)
-            # when forwarding to sub-routes like /api/v1/model/...
+        def _validate_base_model(self, base_model: str) -> None:
+            """Validate that base_model is in supported_models list."""
+            supported_model_names = [
+                m.model_name for m in self.supported_models]
+            if base_model not in supported_model_names:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Base model '{base_model}' is not supported. "
+                    f"Supported models: {', '.join(supported_model_names)}"
+                )
+
+        def _get_base_model(self, model_id: str) -> str:
+            """Get base_model for a model_id from state metadata."""
+            metadata = self.state.get_model_metadata(model_id)
+            if metadata and metadata.get('base_model'):
+                return metadata['base_model']
+            raise HTTPException(
+                status_code=404, detail=f"Model {model_id} not found")
+
+        async def _proxy_to_model(self, request: Request, endpoint: str, base_model: str) -> Response:
+            """Proxy request to model endpoint."""
+            body_bytes = await request.body()
+
+            # Construct target URL
             prefix = self.route_prefix.rstrip("/") if self.route_prefix else ""
             base_url = f"{request.url.scheme}://{request.url.netloc}"
-            target_url = f"{base_url}{prefix}{target_path}"
+            target_url = f"{base_url}{prefix}/model/{base_model}/{endpoint}"
 
-            # Prepare headers
             headers = dict(request.headers)
             headers.pop("host", None)
             headers.pop("content-length", None)
@@ -57,7 +76,7 @@ def build_server_app(
                 rp_ = await self.client.request(
                     method=request.method,
                     url=target_url,
-                    content=await request.body(),
+                    content=body_bytes,
                     headers=headers,
                     params=request.query_params,
                 )
@@ -187,35 +206,36 @@ def build_server_app(
     # --- Model Proxy Endpoints ----------------------------------------
 
         @app.post("/create_model")
-        async def create_model(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/create_model")
+        async def create_model(self, request: Request, body: types.CreateModelRequest) -> Any:
+            self._validate_base_model(body.base_model)
+            return await self._proxy_to_model(request, "create_model", body.base_model)
 
         @app.post("/get_info")
-        async def get_info(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/get_info")
+        async def get_info(self, request: Request, body: types.GetInfoRequest) -> Any:
+            return await self._proxy_to_model(request, "get_info", self._get_base_model(body.model_id))
 
         @app.post("/unload_model")
-        async def unload_model(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/unload_model")
+        async def unload_model(self, request: Request, body: types.UnloadModelRequest) -> Any:
+            return await self._proxy_to_model(request, "unload_model", self._get_base_model(body.model_id))
 
         @app.post("/forward")
-        async def forward(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/forward")
+        async def forward(self, request: Request, body: types.ForwardRequest) -> Any:
+            return await self._proxy_to_model(request, "forward", self._get_base_model(body.model_id))
 
         @app.post("/forward_backward")
-        async def forward_backward(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/forward_backward")
+        async def forward_backward(self, request: Request, body: types.ForwardBackwardRequest) -> Any:
+            return await self._proxy_to_model(request, "forward_backward", self._get_base_model(body.model_id))
 
         @app.post("/optim_step")
-        async def optim_step(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/optim_step")
+        async def optim_step(self, request: Request, body: types.OptimStepRequest) -> Any:
+            return await self._proxy_to_model(request, "optim_step", self._get_base_model(body.model_id))
 
         @app.post("/save_weights")
-        async def save_weights(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/save_weights")
+        async def save_weights(self, request: Request, body: types.SaveWeightsRequest) -> Any:
+            return await self._proxy_to_model(request, "save_weights", self._get_base_model(body.model_id))
 
         @app.post("/load_weights")
-        async def load_weights(self, request: Request) -> Any:
-            return await self._proxy(request, "/model/load_weights")
+        async def load_weights(self, request: Request, body: types.LoadWeightsRequest) -> Any:
+            return await self._proxy_to_model(request, "load_weights", self._get_base_model(body.model_id))
 
     return TinkerCompatServer.options(**deploy_options).bind(supported_models=supported_models, **kwargs)
