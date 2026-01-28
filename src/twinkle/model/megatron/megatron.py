@@ -866,7 +866,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         self.lr_step(**kwargs)
 
     @remote_function(dispatch='all', sync=True)
-    def save(self, output_dir: str, interval=1, **kwargs):
+    def save(self, name: Optional[str] = None, output_dir: Optional[str] = None, interval: int = 1, **kwargs):
         """Save model checkpoint.
 
         Args:
@@ -878,14 +878,20 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config = self.optimizer_group[adapter_name]
         if optimizer_config.cur_step % interval != 0:
             return
+
+        if name is None:
+            name = f'checkpoint-step-{optimizer_config.cur_step}'
+        if output_dir is None:
+            output_dir = 'output'
+        checkpoint_dir = os.path.join(output_dir, name)
         save_format = kwargs.pop('save_format', 'hf')  # 'hf' or 'megatron'
 
         if save_format == 'hf':
-            self._save_hf_format(output_dir, optimizer_config.adapter_name)
+            self._save_hf_format(checkpoint_dir, optimizer_config.adapter_name)
         else:
-            self._save_megatron_format(output_dir, optimizer_config.adapter_name)
+            self._save_megatron_format(checkpoint_dir, optimizer_config.adapter_name)
 
-        self._save_tokenizer(output_dir, adapter_name=adapter_name)
+        self._save_tokenizer(checkpoint_dir, adapter_name=adapter_name)
         
         # Final synchronization to ensure all ranks complete save
         if dist.is_initialized():

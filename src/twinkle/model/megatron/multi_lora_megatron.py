@@ -55,6 +55,7 @@ class MultiLoraMegatronModel(MegatronModel):
         self._default_tokenizer = None
         self.use_distributed_optimizer = kwargs.get('use_distributed_optimizer', True)
         self.variable_seq_lengths = kwargs.get('variable_seq_lengths', False)
+        self.optimizer_group = {}
         torch_util.set_device()
 
         self.strategy = MegatronStrategy(self.device_mesh, mixed_precision=mixed_precision, **kwargs)
@@ -88,16 +89,15 @@ class MultiLoraMegatronModel(MegatronModel):
         self._initialized = False
         self.model: List[nn.Module] = self._create_megatron_model(load_weights, **kwargs)
 
-        self._model_wrapped = False
         MegatronPeft().patch()
         self.multi_adapter = MultiLora()
         self.model = self.multi_adapter.patch(self.model)
         self.model = self.strategy.wrap_model(self.model)
+        self._model_wrapped = True
         self.multi_adapter.save_initial_weights()
 
     def _check_adapter_valid(self, adapter_name: str):
-        if self._inited:
-            assert adapter_name and adapter_name in self.optimizer_group, f'Use a valid adapter_name first, current is: {adapter_name}'
+        assert adapter_name and adapter_name in self.optimizer_group, f'Use a valid adapter_name first, current is: {adapter_name}'
 
     def _lazy_wrap_model(self):
         pass
@@ -166,10 +166,30 @@ class MultiLoraMegatronModel(MegatronModel):
         return super().set_lr_scheduler(scheduler_cls, **kwargs)
 
     @remote_function(dispatch='all', sync=True)
-    def save(self, output_dir: str, **kwargs):
+    def save(self, name, output_dir: Optional[str] = None, interval=1, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        with self.multi_adapter.adapter(kwargs.get("adapter_name")):
-            return super().save(output_dir, **kwargs)
+        optimizer_config = self.optimizer_group[kwargs.get("adapter_name")]
+        if optimizer_config.cur_step % interval != 0:
+            return
+
+        if name is None:
+            name = f'checkpoint-step-{optimizer_config.cur_step}'
+        if output_dir is None:
+            output_dir = 'output'
+        checkpoint_dir = os.path.join(output_dir, name)
+
+        with self.multi_adapter.adapter(kwargs.get("adapter_name")) as tenant_adapter_name:
+            save_format = kwargs.pop('save_format', 'hf')  # 'hf' or 'megatron'
+            if save_format == 'hf':
+                self._save_hf_format(checkpoint_dir, tenant_adapter_name)
+            else:
+                self._save_megatron_format(checkpoint_dir, tenant_adapter_name)
+
+            self._save_tokenizer(checkpoint_dir, adapter_name=kwargs.get("adapter_name"))
+            import torch.distributed as dist
+            # Final synchronization to ensure all ranks complete save
+            if dist.is_initialized():
+                dist.barrier()
 
     @remote_function(execute='first')
     def get_state_dict(self, **kwargs):

@@ -4,14 +4,13 @@ from dataclasses import dataclass, field
 from types import MethodType
 from typing import Dict, Any
 from typing import Optional, Union, List
-
+from copy import deepcopy
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model
 from peft.tuners.lora import LoraLayer, Linear, Embedding
 
 from twinkle import torch_util
 from twinkle.data_format import InputFeature
-from twinkle.model.megatron.tuners import LoraParallelLinear
 from twinkle.patch.base import Patch
 
 
@@ -48,8 +47,10 @@ class MultiLora(Patch):
         adapter_name = self.find_lora_by_tenant(tenant_adapter_name).adapter_name
         if isinstance(self.module, list):
             for _module in self.module:
+                _module.enable_adapter_layers()
                 _module.set_adapter(adapter_name)
         else:
+            self.module.enable_adapter_layers()
             self.module.set_adapter(adapter_name)
 
     def deactivate_adapter(self):
@@ -153,6 +154,7 @@ class MultiLora(Patch):
         return False
 
     def _patch_lora_forward(_self, name, base_layer: LoraLayer):
+        from twinkle.model.megatron.tuners import LoraParallelLinear
 
         if isinstance(base_layer, Linear):
             def _linear_forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
@@ -311,7 +313,7 @@ class MultiLora(Patch):
                         if isinstance(lora_result, tuple):
                             lora_result = lora_result[0]
 
-                        lora_result = _lora_A(lora_result)
+                        lora_result = _lora_B(lora_result)
                         if isinstance(lora_result, tuple):
                             lora_result = lora_result[0]
 
@@ -356,21 +358,27 @@ class MultiLora(Patch):
                 set_linear_is_expert(_module)
 
                 # Expand target_modules (e.g., 'all-linear' -> actual module names)
-                if config.target_modules:
-                    if isinstance(config.target_modules, str):
-                        target_modules = [config.target_modules]
+                _config = deepcopy(config)
+                if _config.target_modules:
+                    if isinstance(_config.target_modules, str):
+                        target_modules = [_config.target_modules]
                     else:
-                        target_modules = list(config.target_modules)
+                        target_modules = list(_config.target_modules)
 
                     from .megatron.tuners.utils import get_target_modules
                     expanded_modules = get_target_modules(_module, target_modules)
-                    config.target_modules = expanded_modules
+                    _config.target_modules = expanded_modules
 
                 from .megatron.tuners.utils import patch_deepcopy
                 with patch_deepcopy():
-                    _model = get_peft_model(_module,
-                                            config,
-                                            adapter_name=lora_tenant.adapter_name)
+                    if isinstance(_module, PeftModel):
+                        _module.add_adapter(lora_tenant.adapter_name, _config)
+                    else:
+                        _module = get_peft_model(_module, _config, lora_tenant.adapter_name)
+
+                    for name, submodule in _module.named_modules():
+                        if isinstance(submodule, LoraLayer):
+                            self._patch_lora_forward(name, submodule)
                 return _module
 
             if isinstance(module, list):
