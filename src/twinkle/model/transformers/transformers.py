@@ -144,6 +144,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                  fsdp_config: Dict[str, Any] = None,
                  grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
+        os.environ['TOKENIZERS_PARALLELISM'] = 'true'
         super(PreTrainedModel, self).__init__()
         if isinstance(model_cls, str):
             model_cls = getattr(transformers, model_cls)

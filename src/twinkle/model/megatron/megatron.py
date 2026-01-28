@@ -50,7 +50,7 @@ class MegatronOptimizerGroup:
     template: Template = None
     processor: InputProcessor = None
     gradient_accumulation_steps: int = 1
-    cur_step: int = 0
+    cur_step: int = -1
     _dp_group = None
     train_metrics: List[Metric] = field(default_factory=list)
     eval_metrics: List[Metric] = field(default_factory=list)
@@ -73,19 +73,17 @@ class MegatronOptimizerGroup:
             self._dp_group = self._device_mesh.create_process_group(['dp', 'fsdp'])
         self.train_metrics = [
             LossMetric(self._device_mesh, self._dp_group),
-            Accuracy(self._device_mesh, self._dp_group),
             TrainMetric(self._device_mesh, self._dp_group),
         ]
 
         self.eval_metrics = [
             LossMetric(self._device_mesh, self._dp_group),
-            Accuracy(self._device_mesh, self._dp_group),
             TrainMetric(self._device_mesh, self._dp_group),
         ]
 
     def _get_lr(self):
         _lrs = []
-        _default_lr = self.optimizer.defaults.get('lr')
+        _default_lr = self.optimizer.chained_optimizers[0].config.lr
         for param_group in self.optimizer.param_groups:
             _lrs.append(param_group.get('lr', _default_lr))
         return _lrs
@@ -129,6 +127,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         **kwargs,
     ):
         requires('megatron_core')
+        os.environ['TOKENIZERS_PARALLELISM'] = 'true'
         nn.Module.__init__(self)
         from twinkle.patch.megatron_peft import MegatronPeft
 
@@ -174,6 +173,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             **ac_kwargs,
         )
         set_args(args)
+        self._initialized = False
         self.model: List[nn.Module] = self._create_megatron_model(load_weights, **kwargs)
 
         self._model_wrapped = False
@@ -375,6 +375,10 @@ class MegatronModel(TwinkleModel, nn.Module):
             dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
             dist.barrier(group=dp_cp_group)
 
+        optimizer_config.inputs = inputs
+        optimizer_config.outputs = {
+            'loss': loss
+        }
         return logits
 
     @remote_function(collect='mean')
@@ -557,6 +561,10 @@ class MegatronModel(TwinkleModel, nn.Module):
             dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=dp_cp_group)
 
+        optimizer_config.inputs = inputs
+        optimizer_config.outputs = {
+            'loss': loss,
+        }
         if isinstance(loss, torch.Tensor):
             return loss.detach().cpu().float().numpy()
         return float(loss)
@@ -598,6 +606,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         assert optimizer is not None, 'Set optimizer correctly before stepping'
         # Megatron optimizer step() returns (success, grad_norm, num_zeros)
         success, grad_norm, num_zeros = optimizer.step()
+        optimizer_config.outputs['grad_norm'] = grad_norm
         # Store grad_norm for later retrieval
         optimizer_config._last_grad_norm = grad_norm if grad_norm is not None else 0.0
         optimizer_config._last_step_success = success
@@ -731,7 +740,7 @@ class MegatronModel(TwinkleModel, nn.Module):
     def _accumulate_metric(optimizer_config: MegatronOptimizerGroup, is_training):
         optimizer_config.accumulate_metrics(is_training)
 
-    @remote_function(collect='first')
+    @remote_function(collect='first', lazy_collect=False)
     def calculate_metric(self, is_training, **kwargs):
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
@@ -872,9 +881,9 @@ class MegatronModel(TwinkleModel, nn.Module):
         save_format = kwargs.pop('save_format', 'hf')  # 'hf' or 'megatron'
 
         if save_format == 'hf':
-            self._save_hf_format(output_dir, adapter_name)
+            self._save_hf_format(output_dir, optimizer_config.adapter_name)
         else:
-            self._save_megatron_format(output_dir, adapter_name)
+            self._save_megatron_format(output_dir, optimizer_config.adapter_name)
 
         self._save_tokenizer(output_dir, adapter_name=adapter_name)
         
@@ -893,9 +902,8 @@ class MegatronModel(TwinkleModel, nn.Module):
         For LoRA training:
         - Saves in PEFT format (adapter_model.safetensors + adapter_config.json)
         """
-        # Check if this is LoRA training (has adapter_name other than default)
-        is_lora = adapter_name and adapter_name != ''
-        is_peft_format = is_lora
+        # Check if this is LoRA training
+        is_peft_format = isinstance(self.strategy.unwrap_model(self.model)[0], PeftModel)
 
         # Create output directory on rank 0 only
         from megatron.core import parallel_state as mpu
@@ -1026,7 +1034,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             config_or_dir: LoRA config or path to saved adapter.
             **kwargs: Additional arguments.
         """
-        self._patch_adapter(adapter_name, config_or_dir, adapter_name, **kwargs)
+        self._patch_adapter(adapter_name, config_or_dir, _default_adapter_name, **kwargs)
 
 
     @remote_function(dispatch='all')
@@ -1087,7 +1095,7 @@ class MegatronModel(TwinkleModel, nn.Module):
 
         if optimizer_config.optimizer:
             expr += f'Optimizer: {optimizer_config.optimizer.__class__.__name__}\n'
-            expr += f'Learning rate: N/A\n'  # ChainedOptimizer has no defaults
+            expr += f'Learning rate: {optimizer_config.optimizer.chained_optimizers[0].config.lr}\n'
         if optimizer_config.lr_scheduler:
             expr += f'LR scheduler: {optimizer_config.lr_scheduler.__class__.__name__}\n'
         expr += f'Gradient accumulation steps: {optimizer_config.gradient_accumulation_steps}\n'
@@ -1112,9 +1120,9 @@ class MegatronModel(TwinkleModel, nn.Module):
             dist.init_process_group(backend='nccl')
         args = get_args()
         init_kwargs = {
-            'tensor_model_parallel_size': args.tensor_model_parallel_size,
-            'pipeline_model_parallel_size': args.pipeline_model_parallel_size,
-            'context_parallel_size': args.context_parallel_size,
+            'tensor_model_parallel_size': args.tensor_model_parallel_size or 1,
+            'pipeline_model_parallel_size': args.pipeline_model_parallel_size or 1,
+            'context_parallel_size': args.context_parallel_size or 1,
             'virtual_pipeline_model_parallel_size': args.virtual_pipeline_model_parallel_size,
             'expert_model_parallel_size': args.expert_model_parallel_size,
         }

@@ -298,7 +298,7 @@ class MegatronStrategy:
         else:
             loss = local_loss_sum / local_count.clamp(min=1)
 
-        return loss, {'loss': loss.detach()}
+        return loss, {'loss': loss.detach(), 'logits': output_tensor.detach()}
 
     def get_model_config(
         self,

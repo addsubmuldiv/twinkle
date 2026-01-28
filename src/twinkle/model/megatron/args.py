@@ -213,19 +213,19 @@ class TwinkleMegatronArgs:
 
     @property
     def tensor_model_parallel_size(self) -> int:
-        return self.device_mesh.tp_world_size
+        return self.device_mesh.tp_world_size or 1
 
     @property
     def tp_size(self) -> int:
-        return self.device_mesh.tp_world_size
+        return self.device_mesh.tp_world_size or 1
     
     @property
     def pipeline_model_parallel_size(self) -> int:
-        return self.device_mesh.pp_world_size
+        return self.device_mesh.pp_world_size or 1
 
     @property
     def pp_size(self) -> int:
-        return self.device_mesh.pp_world_size
+        return self.device_mesh.pp_world_size or 1
     
     @property
     def context_parallel_size(self) -> int:
@@ -241,7 +241,7 @@ class TwinkleMegatronArgs:
 
     @property
     def ep_size(self) -> int:
-        return self.device_mesh.ep_size
+        return self.device_mesh.ep_size or 1
     
     @property
     def expert_tensor_parallel_size(self) -> int:
@@ -323,8 +323,11 @@ class TwinkleMegatronArgs:
         vocab_size = getattr(text_config, 'vocab_size')
         assert vocab_size is not None, 'detect vocab_size in hf config failed'
         if padded_vocab_size is None:
-            divisor = device_mesh.tp_world_size * 128
-            padded_vocab_size = ((vocab_size + divisor - 1) // divisor) * divisor
+            if device_mesh.tp_world_size > 1:
+                divisor = device_mesh.tp_world_size * 128
+                padded_vocab_size = ((vocab_size + divisor - 1) // divisor) * divisor
+            else:
+                padded_vocab_size = vocab_size
         
         num_attention_heads = getattr(text_config, 'num_attention_heads', 32)
         num_key_value_heads = getattr(text_config, 'num_key_value_heads', num_attention_heads)
@@ -592,9 +595,9 @@ class TwinkleMegatronArgs:
             num_query_groups=num_query_groups,
             kv_channels=kv_channels,
             ffn_hidden_size=ffn_hidden_size,
-            tensor_model_parallel_size=self.tp_size,
-            pipeline_model_parallel_size=self.pp_size,
-            context_parallel_size=self.cp_size,
+            tensor_model_parallel_size=self.tp_size or 1,
+            pipeline_model_parallel_size=self.pp_size or 1,
+            context_parallel_size=self.cp_size or 1,
             expert_model_parallel_size=self.ep_size or 1,
             virtual_pipeline_model_parallel_size=self.vpp_size,
             sequence_parallel=use_sequence_parallel,

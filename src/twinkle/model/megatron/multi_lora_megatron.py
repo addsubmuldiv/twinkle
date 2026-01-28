@@ -39,6 +39,7 @@ class MultiLoraMegatronModel(MegatronModel):
                  **kwargs,
                  ):
         requires('megatron_core')
+        os.environ['TOKENIZERS_PARALLELISM'] = 'true'
         nn.Module.__init__(self)
         from twinkle.patch.megatron_peft import MegatronPeft
 
@@ -84,6 +85,7 @@ class MultiLoraMegatronModel(MegatronModel):
             **ac_kwargs,
         )
         set_args(args)
+        self._initialized = False
         self.model: List[nn.Module] = self._create_megatron_model(load_weights, **kwargs)
 
         self._model_wrapped = False
