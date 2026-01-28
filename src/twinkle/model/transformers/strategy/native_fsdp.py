@@ -73,43 +73,37 @@ def _build_mp_policy(mixed_precision: str) -> MixedPrecisionPolicy:
 def _build_fsdp_mesh(device_mesh: DeviceMesh, dims: Tuple[str, ...]) -> Optional[TorchDeviceMesh]:
     if device_mesh is None or device_mesh.mesh_dim_names is None:
         return None
-
-    dims_in_order = tuple(name for name in device_mesh.mesh_dim_names if name in dims)
-    if not dims_in_order:
+    flat_mesh = device_mesh.mesh.flatten()
+    if flat_mesh.size <= 1:
         return None
-
-    coord = device_mesh._get_coord()
-    indices = []
-    for i, name in enumerate(device_mesh.mesh_dim_names):
-        if name in dims_in_order:
-            indices.append(slice(None))
-        else:
-            indices.append(coord[i])
-
-    sub_mesh = device_mesh.mesh[tuple(indices)]
-    if sub_mesh.size <= 1:
-        return None
-    return TorchDeviceMesh(device_mesh.device_type, sub_mesh, mesh_dim_names=dims_in_order)
+    return TorchDeviceMesh(device_mesh.device_type, flat_mesh, mesh_dim_names=("fsdp",))
 
 
 def _collect_expert_params(model: nn.Module) -> Optional[Set[nn.Parameter]]:
     ignored: Set[nn.Parameter] = set()
+    ep_patched = False
     for module in model.modules():
         experts = getattr(module, "experts", None)
         if isinstance(experts, nn.ModuleList):
-            for expert in experts:
-                ignored.update(expert.parameters())
+            if getattr(module, "_ep_patched", False):
+                ep_patched = True
+                for expert in experts:
+                    ignored.update(expert.parameters())
 
-        if getattr(module, "_ep_ignore_shared_experts", False):
+        if getattr(module, "_ep_ignore_shared_experts", False) and getattr(module, "_ep_patched", False):
+            ep_patched = True
             shared = getattr(module, "shared_expert", None)
             if shared is not None:
                 ignored.update(shared.parameters())
 
+    if not ep_patched:
+        return None
     return ignored or None
 
 
 def _ensure_moe_patched_if_needed(model: nn.Module, device_mesh: DeviceMesh) -> None:
-    if device_mesh.ep_world_size <= 1:
+    ep_world_size = device_mesh.ep_world_size or 1
+    if ep_world_size <= 1:
         return
     for module in model.modules():
         experts = getattr(module, "experts", None)
