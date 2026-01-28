@@ -84,11 +84,13 @@ def _collect_expert_params(model: nn.Module) -> Optional[Set[nn.Parameter]]:
     ep_patched = False
     for module in model.modules():
         experts = getattr(module, "experts", None)
-        if isinstance(experts, nn.ModuleList):
-            if getattr(module, "_ep_patched", False):
-                ep_patched = True
+        if experts is not None and getattr(module, "_ep_patched", False):
+            ep_patched = True
+            if isinstance(experts, nn.ModuleList):
                 for expert in experts:
                     ignored.update(expert.parameters())
+            else:
+                ignored.update(experts.parameters())
 
         if getattr(module, "_ep_ignore_shared_experts", False) and getattr(module, "_ep_patched", False):
             ep_patched = True

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch.distributed import nn as dist_nn
 from torch import nn
 
@@ -32,9 +33,9 @@ def apply_expert_parallel(model: nn.Module, device_mesh: DeviceMesh, config: Opt
         return model
 
     if cfg.pad_to_max:
-        raise NotImplementedError("pad_to_max is not implemented in MVP.")
+        raise NotImplementedError("pad_to_max is not implemented.")
     if cfg.all_to_all != "torch":
-        raise NotImplementedError(f"all_to_all={cfg.all_to_all} is not supported in MVP.")
+        raise NotImplementedError(f"all_to_all={cfg.all_to_all} is not supported.")
 
     if not dist.is_initialized():
         raise RuntimeError("torch.distributed is not initialized, cannot enable expert parallel.")
@@ -64,7 +65,10 @@ def _merge_config(config: Optional[Dict[str, Any]]) -> ExpertParallelConfig:
 def find_moe_blocks(model: nn.Module) -> Iterable[nn.Module]:
     blocks = []
     for module in model.modules():
-        if not hasattr(module, "experts") or not isinstance(module.experts, nn.ModuleList):
+        experts = getattr(module, "experts", None)
+        if experts is None:
+            continue
+        if not _is_moe_experts(experts):
             continue
         if not _get_gate(module):
             continue
@@ -86,8 +90,13 @@ def shard_experts(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
     local_start = ep_rank * experts_per_rank
     local_end = local_start + experts_per_rank
 
-    local_experts = nn.ModuleList(block.experts[local_start:local_end])
-    block.experts = local_experts
+    if isinstance(block.experts, nn.ModuleList):
+        local_experts = nn.ModuleList(block.experts[local_start:local_end])
+        block.experts = local_experts
+        block._ep_tensor_experts = False
+    else:
+        _shard_tensor_experts(block.experts, local_start, local_end)
+        block._ep_tensor_experts = True
 
     block._ep_num_experts = num_experts
     block._ep_experts_per_rank = experts_per_rank
@@ -116,7 +125,7 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
     def forward(hidden_states: torch.Tensor, *args, **kwargs):
         ep_rank = block._ep_rank
         if args or kwargs:
-            raise RuntimeError("Expert parallel patch only supports forward(hidden_states) in MVP.")
+            raise RuntimeError("Expert parallel patch only supports forward(hidden_states).")
 
         input_dtype = hidden_states.dtype
         if hidden_states.ndim == 3:
@@ -129,14 +138,15 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
         else:
             raise ValueError(f"Unsupported hidden_states ndim: {hidden_states.ndim}")
 
-        router_logits = gate(hidden_states_2d)
-        router_dtype = _get_router_dtype(cfg.router_dtype, router_logits.dtype)
-        routing_weights = torch.softmax(router_logits, dim=-1, dtype=router_dtype)
-        routing_weights, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
-
-        if getattr(block, "norm_topk_prob", False):
-            routing_weights = routing_weights / routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(hidden_states_2d.dtype)
+        router_logits, routing_weights, selected_experts, cast_weights = _run_router(
+            gate=gate,
+            hidden_states=hidden_states_2d,
+            top_k=top_k,
+            router_dtype=_get_router_dtype(cfg.router_dtype, hidden_states_2d.dtype),
+            norm_topk_prob=getattr(block, "norm_topk_prob", False),
+        )
+        if cast_weights:
+            routing_weights = routing_weights.to(hidden_states_2d.dtype)
 
         num_tokens = hidden_states_2d.shape[0]
         flat_token_idx = torch.arange(num_tokens, device=hidden_states_2d.device).repeat_interleave(top_k)
@@ -192,7 +202,7 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
             if idx.numel() == 0:
                 continue
             expert_in = recv_tokens.index_select(0, idx)
-            expert_out = block.experts[expert_id](expert_in)
+            expert_out = _run_expert(block, expert_id, expert_in)
             recv_out.index_copy_(0, idx, expert_out)
 
         send_out = torch.empty_like(send_tokens)
@@ -227,7 +237,7 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
         if hidden_states.ndim == 3:
             final_hidden = final_hidden.view(batch_size, seq_len, hidden_dim)
 
-        if cfg.keep_router_logits:
+        if cfg.keep_router_logits and not getattr(block, "_ep_tensor_experts", False):
             return final_hidden, router_logits
         return final_hidden
 
@@ -259,10 +269,24 @@ def _get_gate(block: nn.Module):
 def _get_num_experts(block: nn.Module) -> int:
     if hasattr(block, "num_experts"):
         return int(block.num_experts)
-    return len(block.experts)
+    experts = getattr(block, "experts", None)
+    if experts is None:
+        raise ValueError("MoE block has no experts.")
+    if isinstance(experts, nn.ModuleList):
+        return len(experts)
+    if hasattr(experts, "num_experts"):
+        return int(experts.num_experts)
+    if hasattr(experts, "gate_up_proj"):
+        return int(experts.gate_up_proj.shape[0])
+    raise ValueError("Unable to infer num_experts for MoE block.")
 
 
 def _get_top_k(block: nn.Module) -> Optional[int]:
+    gate = _get_gate(block)
+    if gate is not None and hasattr(gate, "top_k"):
+        value = getattr(gate, "top_k")
+        if value is not None:
+            return int(value)
     for name in ("num_experts_per_tok", "top_k"):
         if hasattr(block, name):
             value = getattr(block, name)
@@ -288,3 +312,50 @@ def _maybe_run_shared_expert(block: nn.Module, hidden_states_2d: torch.Tensor, c
     if shared is None:
         return None
     return shared(hidden_states_2d)
+
+
+def _is_moe_experts(experts: Any) -> bool:
+    if isinstance(experts, nn.ModuleList):
+        return True
+    if hasattr(experts, "gate_up_proj") and hasattr(experts, "down_proj"):
+        return True
+    return False
+
+
+def _shard_tensor_experts(experts: nn.Module, start: int, end: int) -> None:
+    experts.gate_up_proj = nn.Parameter(experts.gate_up_proj.data[start:end].clone())
+    experts.down_proj = nn.Parameter(experts.down_proj.data[start:end].clone())
+    if hasattr(experts, "num_experts"):
+        experts.num_experts = end - start
+
+
+def _run_expert(block: nn.Module, expert_id: int, expert_in: torch.Tensor) -> torch.Tensor:
+    if not getattr(block, "_ep_tensor_experts", False):
+        return block.experts[expert_id](expert_in)
+    experts = block.experts
+    gate_up = experts.gate_up_proj[expert_id]
+    down = experts.down_proj[expert_id]
+    gate, up = F.linear(expert_in, gate_up).chunk(2, dim=-1)
+    out = experts.act_fn(gate) * up
+    return F.linear(out, down)
+
+
+def _run_router(
+    *,
+    gate: nn.Module,
+    hidden_states: torch.Tensor,
+    top_k: int,
+    router_dtype: torch.dtype,
+    norm_topk_prob: bool,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+    gate_out = gate(hidden_states)
+    if isinstance(gate_out, tuple) and len(gate_out) >= 3:
+        router_logits, routing_weights, selected_experts = gate_out[:3]
+        return router_logits, routing_weights, selected_experts, False
+
+    router_logits = gate_out
+    routing_weights = torch.softmax(router_logits, dim=-1, dtype=router_dtype)
+    routing_weights, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
+    if norm_topk_prob:
+        routing_weights = routing_weights / routing_weights.sum(dim=-1, keepdim=True)
+    return router_logits, routing_weights, selected_experts, True
