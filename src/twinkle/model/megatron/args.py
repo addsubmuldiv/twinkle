@@ -587,7 +587,6 @@ class TwinkleMegatronArgs:
         # Note: Only works with TransformerEngine and no bias in linear layers
         has_bias = not mg_config_dict.get('disable_bias_linear', True)
         bias_activation_fusion = use_swiglu and not has_bias
-
         config = TransformerConfig(
             num_layers=num_layers,
             hidden_size=mg_config_dict['hidden_size'],
@@ -595,10 +594,10 @@ class TwinkleMegatronArgs:
             num_query_groups=num_query_groups,
             kv_channels=kv_channels,
             ffn_hidden_size=ffn_hidden_size,
-            tensor_model_parallel_size=self.tp_size or 1,
-            pipeline_model_parallel_size=self.pp_size or 1,
-            context_parallel_size=self.cp_size or 1,
-            expert_model_parallel_size=self.ep_size or 1,
+            tensor_model_parallel_size=self.tp_size,
+            pipeline_model_parallel_size=self.pp_size,
+            context_parallel_size=self.cp_size,
+            expert_model_parallel_size=self.ep_size,
             virtual_pipeline_model_parallel_size=self.vpp_size,
             sequence_parallel=use_sequence_parallel,
             params_dtype=self.params_dtype,
