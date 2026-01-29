@@ -18,16 +18,17 @@ class LazyDataset(Dataset):
 
     @remote_function()
     def encode(self, **kwargs):
+        assert self.template is not None
+        assert self.template.truncation_strategy != 'split', 'Lazy tokenize does not support truncation_strategy==`split`'
         self.do_encode = True
 
     @remote_function()
     def check(self, **kwargs):
+        assert self.template is not None
         self.do_check = True
 
     @remote_function()
     def __getitem__(self, idx):
-        assert self.template is not None
-        assert self.template.truncation_strategy != 'split', 'Lazy tokenize does not support truncation_strategy==`split`'
         item = self.dataset[idx]
         # may raise errors
         if self.do_encode:

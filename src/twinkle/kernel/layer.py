@@ -1,6 +1,6 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 """Kernel module layer - Layer-level replacement with HF kernels integration."""
-from logging import getLogger
+from twinkle import get_logger
 from pathlib import Path
 from typing import Optional, Union, Any
 
@@ -10,11 +10,11 @@ from .base import (
     is_kernels_available,
     is_kernels_enabled,
     to_kernels_mode,
-    get_device_type,
 )
 from .registry import register_layer, get_global_layer_registry
+from twinkle import Platform
 
-logger = getLogger(__name__)
+logger = get_logger()
 
 
 def register_layer_kernel(
@@ -104,7 +104,7 @@ def apply_layer_kernel(
     get_global_layer_registry().sync_to_hf_kernels()
 
     if device is None:
-        device = get_device_type() or "cuda"
+        device = Platform.get_platform().device_prefix() or "cuda"
 
     kernel_mode = to_kernels_mode(mode)
 

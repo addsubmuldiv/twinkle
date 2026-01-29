@@ -1,15 +1,13 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-
 from dataclasses import dataclass
-from logging import getLogger
-from typing import Dict, Any, Optional, Type, List, Callable, Tuple
+from twinkle import get_logger
+from typing import Dict, Any, Optional, Type, List, Callable, Tuple, TYPE_CHECKING
 
 from .base import DeviceType, ModeType, is_kernels_available
-from kernels.layer.func import FuncRepositoryProtocol
+if TYPE_CHECKING:
+    from kernels.layer.func import FuncRepositoryProtocol
 
-
-
-logger = getLogger(__name__)
+logger = get_logger()
 
 
 class LayerRegistry:
@@ -111,7 +109,7 @@ class FunctionKernelSpec:
     func_name: str
     target_module: str
     func_impl: Optional[Callable]
-    repo: Optional[FuncRepositoryProtocol]
+    repo: Optional['FuncRepositoryProtocol']
     repo_id: Optional[str]
     revision: Optional[str]
     version: Optional[str]

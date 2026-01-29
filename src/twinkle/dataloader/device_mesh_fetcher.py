@@ -1,11 +1,26 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
+from typing import Callable, Any
+
+from torch.utils.data import Dataset
 from torch.utils.data._utils.fetch import _BaseDatasetFetcher
 from twinkle import DeviceMesh
 
 
 class DeviceMeshIterableFetcher(_BaseDatasetFetcher):
+    """A data sampler which fetch data by DeviceMesh.
 
-    def __init__(self, dataset, auto_collation, collate_fn, drop_last, batch_size: int, device_mesh: DeviceMesh, max_retries=20):
+    Args:
+        dataset: The input dataset.
+        auto_collation: The collect method when fetching batches. When input is a dataset, keep this param `true`.
+        collate_fn: The collate fn.
+        drop_last: Whether to drop the last not full batch.
+        batch_size: The batch size.
+        device_mesh: DeviceMesh instance.
+        max_retries: The maximum number of retries when fetching failed.
+    """
+
+    def __init__(self, dataset: Dataset, auto_collation: bool, collate_fn: Callable[[Any], Any],
+                 drop_last: bool, batch_size: int, device_mesh: DeviceMesh, max_retries:int=20):
         super().__init__(dataset, auto_collation, collate_fn, drop_last)
         self.dataset_iter = iter(dataset)
         self.ended = False
@@ -51,7 +66,7 @@ class DeviceMeshIterableFetcher(_BaseDatasetFetcher):
             data = next(self.dataset_iter)
 
         if self.device_mesh:
-            if len(data) < self.device_mesh.data_parallel_world_size:
+            if len(data) < self.device_mesh.data_world_size:
                 raise StopIteration
             else:
                 data = data[self.device_mesh.get_slice(len(data))]

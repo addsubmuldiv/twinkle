@@ -1,13 +1,9 @@
+# Copyright (c) ModelScope Contributors. All rights reserved.
 from __future__ import annotations
 
-"""Kernel module function - Function-level replacement with HF kernels integration."""
 import importlib
-from logging import getLogger
-from typing import Callable, Iterable, List, Optional
-
-from kernels.layer.func import FuncRepositoryProtocol
-from kernels._versions import select_revision_or_version
-from kernels.utils import get_kernel
+from twinkle import get_logger
+from typing import Callable, Iterable, List, Optional, TYPE_CHECKING
 from .registry import FunctionKernelSpec, get_global_function_registry
 from .base import (
     ModeType,
@@ -15,13 +11,15 @@ from .base import (
     validate_device_type,
     validate_mode,
 )
+if TYPE_CHECKING:
+    from kernels.layer.func import FuncRepositoryProtocol
 
-logger = getLogger(__name__)
+logger = get_logger()
 
 
 def _load_from_hub(
     *,
-    repo: Optional[FuncRepositoryProtocol],
+    repo: Optional['FuncRepositoryProtocol'],
     repo_id: Optional[str],
     revision: Optional[str],
     version: Optional[str],
@@ -37,6 +35,8 @@ def _load_from_hub(
 
         return impl, module_instance
 
+    from kernels._versions import select_revision_or_version
+    from kernels.utils import get_kernel
     assert repo_id is not None
     resolved = select_revision_or_version(repo_id, revision, version)
     kernel = get_kernel(repo_id, revision=resolved)
@@ -51,7 +51,7 @@ def register_function_kernel(
     func_name: str,
     target_module: str,
     func_impl: Optional[Callable] = None,
-    repo: Optional[FuncRepositoryProtocol] = None,
+    repo: Optional['FuncRepositoryProtocol'] = None,
     repo_id: Optional[str] = None,
     revision: Optional[str] = None,
     version: Optional[str] = None,
