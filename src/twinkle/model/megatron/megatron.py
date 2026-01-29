@@ -129,6 +129,7 @@ class MegatronModel(TwinkleModel, nn.Module):
     ):
         requires('megatron_core')
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
+        os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         nn.Module.__init__(self)
         from twinkle.patch.megatron_peft import MegatronPeft
 
@@ -1117,12 +1118,12 @@ class MegatronModel(TwinkleModel, nn.Module):
         from megatron.core import parallel_state
         from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
         if not dist.is_initialized():
-            dist.init_process_group(backend='nccl')
+            dist.init_process_group(backend='nccl', device_id=torch.device(Platform.get_local_device()))
         args = get_args()
         init_kwargs = {
-            'tensor_model_parallel_size': args.tensor_model_parallel_size or 1,
-            'pipeline_model_parallel_size': args.pipeline_model_parallel_size or 1,
-            'context_parallel_size': args.context_parallel_size or 1,
+            'tensor_model_parallel_size': args.tensor_model_parallel_size,
+            'pipeline_model_parallel_size': args.pipeline_model_parallel_size,
+            'context_parallel_size': args.context_parallel_size,
             'virtual_pipeline_model_parallel_size': args.virtual_pipeline_model_parallel_size,
             'expert_model_parallel_size': args.expert_model_parallel_size,
         }

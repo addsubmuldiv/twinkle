@@ -38,6 +38,7 @@ class MultiLoraMegatronModel(MegatronModel):
                  ):
         requires('megatron_core')
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
+        os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         nn.Module.__init__(self)
         from twinkle.patch.megatron_peft import MegatronPeft
 
