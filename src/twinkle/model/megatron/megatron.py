@@ -291,7 +291,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         else:
             _example = inputs[0] if isinstance(inputs, list) else inputs
             original_seq_length = _example['input_ids'].shape[1] if 'input_ids' in _example else _example[
-                'input_embedding']
+                'input_embedding'].shape[1]
             if cp_size > 1:
                 divisor = 2 * cp_size
             elif self.strategy.sequence_parallel and self.device_mesh.tp_world_size > 1:
@@ -621,7 +621,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         """
         from torch.nn.parallel import DistributedDataParallel as TorchDDP
         from megatron.core.distributed import DistributedDataParallel as MegatronDDP
-        return isinstance(self.model, (MegatronDDP, TorchDDP))
+        return isinstance(self.model[0], (MegatronDDP, TorchDDP))
 
     @remote_function(dispatch='all')
     def zero_grad(self, **kwargs):

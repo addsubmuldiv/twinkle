@@ -131,7 +131,7 @@ class MegatronStrategy:
         from megatron.core import parallel_state as mpu
         cp_size = self.device_mesh.cp_world_size
         tp_size = self.device_mesh.tp_world_size
-        cp_rank = self.device_mesh.cp_world_size
+        cp_rank = self.device_mesh.cp_rank
         input_ids = inputs.get('input_ids')
         position_ids = inputs.get('position_ids')
         attention_mask = inputs.get('attention_mask')
@@ -244,7 +244,7 @@ class MegatronStrategy:
         if cp_size > 1:
             # All-reduce the count across CP ranks
             total_count = local_count.clone()
-            torch.distributed.all_reduce(
+            torch.distributed.nn.all_reduce(
                 total_count,
                 op=torch.distributed.ReduceOp.SUM,
                 group=mpu.get_context_parallel_group()
@@ -252,7 +252,7 @@ class MegatronStrategy:
 
             # All-reduce the loss sum
             total_loss_sum = local_loss_sum.clone()
-            torch.distributed.all_reduce(
+            torch.distributed.nn.all_reduce(
                 total_loss_sum,
                 op=torch.distributed.ReduceOp.SUM,
                 group=mpu.get_context_parallel_group()
