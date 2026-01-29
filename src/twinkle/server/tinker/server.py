@@ -11,8 +11,8 @@ from ray import serve
 
 from tinker import types
 
-from twinkle.server.twinkle.validation import verify_request_token
-from .state import get_server_state, schedule_task
+from twinkle.server.twinkle.common.validation import verify_request_token
+from twinkle.server.twinkle.common.state import get_server_state, schedule_task
 from .common.io_utils import TrainingRunManager, CheckpointManager
 
 

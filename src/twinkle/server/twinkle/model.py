@@ -8,13 +8,15 @@ from fastapi import FastAPI, Request
 from peft import LoraConfig
 from pydantic import BaseModel
 from ray import serve
-from twinkle.server.twinkle.serialize import deserialize_object
+
 import twinkle
 from twinkle import DeviceGroup, DeviceMesh
 from twinkle.model import MultiLoraTransformersModel
 from twinkle.model.base import TwinkleModel
 from twinkle.data_format import InputFeature, Trajectory
-from .validation import verify_request_token, init_config_registry, ConfigRegistryProxy
+from .common.validation import verify_request_token
+from .common.state import get_server_state, ServerStateProxy
+from .common.serialize import deserialize_object
 
 # 请求体模型定义
 class CreateRequest(BaseModel):
@@ -136,7 +138,7 @@ def build_model_app(model_id: str,
             self.hb_thread = threading.Thread(target=self.countdown, daemon=True)
             self.hb_thread.start()
             self.adapter_lock = threading.Lock()
-            self.config_registry: ConfigRegistryProxy = init_config_registry()
+            self.state: ServerStateProxy = get_server_state()
             self.per_token_model_limit = int(os.environ.get("TWINKLE_PER_USER_MODEL_LIMIT", 3))
             self.key_token_dict = {}
 
@@ -155,18 +157,18 @@ def build_model_app(model_id: str,
 
         def handle_adapter_count(self, token: str, add: bool):
             user_key = token + '_' + 'model_adapter'
-            cur_count = self.config_registry.get_config(user_key) or 0
+            cur_count = self.state.get_config(user_key) or 0
             if add:
                 if cur_count < self.per_token_model_limit:
-                    self.config_registry.add_config(user_key, cur_count + 1)
+                    self.state.add_config(user_key, cur_count + 1)
                 else:
                     raise RuntimeError(f'Model adapter count limitation reached: {self.per_token_model_limit}')
             else:
                 if cur_count > 0:
                     cur_count -= 1
-                    self.config_registry.add_config(user_key, cur_count)
+                    self.state.add_config(user_key, cur_count)
                 if cur_count <= 0:
-                    self.config_registry.pop(user_key)
+                    self.state.pop_config(user_key)
 
         @app.post("/create")
         def create(self, request: Request, body: CreateRequest):

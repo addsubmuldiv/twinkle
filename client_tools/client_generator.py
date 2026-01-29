@@ -331,8 +331,8 @@ class {class_name}({inheritance}):
     """Client wrapper for {class_name} that calls server HTTP endpoints."""
 
     def __init__({init_params}):
-        assert TWINKLE_SERVER_URL
-        self.server_url = TWINKLE_SERVER_URL
+        from twinkle_client.http import get_base_url
+        self.server_url = get_base_url()
 
         response = http_post(
             url=f'{{self.server_url}}/processors/create',
@@ -451,7 +451,9 @@ class MultiLoraTransformersModel(TwinkleModel, PreTrainedModel):
     
     def __init__(self, model_id: str, **kwargs):
         """Initialize model client."""
-        self.server_url = TWINKLE_SERVER_URL
+        from twinkle_client.http import get_base_url
+        self.server_url = get_base_url()
+        
         if '://' in model_id:
             model_id = model_id.split('://')[1]
         self.server_url = f'{self.server_url}/models/{model_id}'
@@ -690,7 +692,9 @@ class VLLMSampler(Sampler):
     
     def __init__(self, model_id: str, **kwargs):
         """Create the sampler instance on server."""
-        self.server_url = TWINKLE_SERVER_URL
+        from twinkle_client.http import get_base_url
+        self.server_url = get_base_url()
+        
         self.adapter_name = None
         if '://' in model_id:
             model_id = model_id.split('://')[1]

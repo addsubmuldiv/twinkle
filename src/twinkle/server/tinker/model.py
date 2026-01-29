@@ -12,14 +12,12 @@ from tinker import types
 
 import twinkle
 from twinkle import DeviceGroup, DeviceMesh
-from twinkle.server.twinkle.validation import (ConfigRegistryProxy,
-                                               init_config_registry,
-                                               verify_request_token)
+from twinkle.server.twinkle.common.validation import verify_request_token
+from twinkle.server.twinkle.common.state import get_server_state, ServerStateProxy, schedule_task
 from twinkle.utils.logger import get_logger
 
 from .common import TwinkleCompatTransformersModel
 from .common.io_utils import (TrainingRunManager, CheckpointManager)
-from .state import get_server_state, schedule_task
 
 logger = get_logger()
 
@@ -61,8 +59,7 @@ def build_model_app(model_id: str,
                                               daemon=True)
             self.hb_thread.start()
             self.adapter_lock = threading.Lock()
-            self.config_registry: ConfigRegistryProxy = init_config_registry()
-            self.state = get_server_state()
+            self.state: ServerStateProxy = get_server_state()
             self.per_token_model_limit = int(
                 os.environ.get('TWINKLE_PER_USER_MODEL_LIMIT', 30))
             self.key_token_dict = {}
@@ -82,10 +79,10 @@ def build_model_app(model_id: str,
 
         def handle_adapter_count(self, token: str, add: bool):
             user_key = token + '_' + 'model_adapter'
-            cur_count: int = self.config_registry.get_config(user_key) or 0
+            cur_count: int = self.state.get_config(user_key) or 0
             if add:
                 if cur_count < self.per_token_model_limit:
-                    self.config_registry.add_config(user_key, cur_count + 1)
+                    self.state.add_config(user_key, cur_count + 1)
                 else:
                     raise RuntimeError(
                         f'Model adapter count limitation reached: {self.per_token_model_limit}'
@@ -93,9 +90,9 @@ def build_model_app(model_id: str,
             else:
                 if cur_count > 0:
                     cur_count -= 1
-                    self.config_registry.add_config(user_key, cur_count)
+                    self.state.add_config(user_key, cur_count)
                 if cur_count <= 0:
-                    self.config_registry.pop(user_key)
+                    self.state.pop_config(user_key)
 
         @staticmethod
         def get_adapter_name(request: Request, adapter_name: str) -> str:

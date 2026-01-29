@@ -1,11 +1,11 @@
 from numbers import Number
 from typing import Optional, Dict, Any, Mapping
-from .utils import TWINKLE_REQUEST_ID, TWINKLE_SERVER_TOKEN
+from .utils import TWINKLE_REQUEST_ID, get_base_url, get_api_key
 import requests
 
 
 def http_get(
-    url: str,
+    url: Optional[str]=None,
     params: Optional[Dict[str, Any]] = {},
     additional_headers: Optional[Dict[str, str]] = {},
     timeout: int = 300,
@@ -22,9 +22,11 @@ def http_get(
     Returns:
         requests.Response object
     """
+    url = url or get_base_url()
+    
     headers = {
         "X-Ray-Serve-Request-Id": TWINKLE_REQUEST_ID,
-        "Authorization": 'Bearer ' + TWINKLE_SERVER_TOKEN,
+        "Authorization": 'Bearer ' + get_api_key(),
     }
     
     if additional_headers:
@@ -49,7 +51,7 @@ def http_get(
 
 
 def http_post(
-    url: str,
+    url: Optional[str]=None,
     json_data: Optional[Dict[str, Any]] = {},
     data: Optional[Any] = {},
     additional_headers: Optional[Dict[str, str]] = {},
@@ -68,9 +70,11 @@ def http_post(
     Returns:
         requests.Response object
     """
+    url = url or get_base_url()
+    
     headers = {
         "X-Ray-Serve-Request-Id": TWINKLE_REQUEST_ID,
-        "Authorization": 'Bearer ' + TWINKLE_SERVER_TOKEN,
+        "Authorization": 'Bearer ' + get_api_key(),
     }
     
     if additional_headers:
