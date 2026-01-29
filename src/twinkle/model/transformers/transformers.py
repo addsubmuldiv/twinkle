@@ -144,6 +144,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                  fsdp_config: Dict[str, Any] = None,
                  grad_scaler_config: Dict[str, Any] = None,
                  **kwargs):
+        os.environ['TOKENIZERS_PARALLELISM'] = 'true'
         super(PreTrainedModel, self).__init__()
         if isinstance(model_cls, str):
             model_cls = getattr(transformers, model_cls)
@@ -189,7 +190,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         )
 
     @remote_function()
-    def forward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
+    def forward(self, *, inputs: Union[InputFeature, List[InputFeature], List[Trajectory]], **kwargs):
         """Call forward function and record the inputs and outputs.
 
         Args:

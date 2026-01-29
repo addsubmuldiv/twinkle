@@ -132,7 +132,8 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     @remote_function()
     def set_optimizer(self, optimizer_cls: Union[Type[Optimizer], str], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
-        super().set_optimizer(optimizer_cls, **kwargs)
+        with self.multi_adapter.adapter(kwargs.get("adapter_name")):
+            super().set_optimizer(optimizer_cls, **kwargs)
 
     @remote_function()
     def add_adapter_to_model(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], **kwargs):
