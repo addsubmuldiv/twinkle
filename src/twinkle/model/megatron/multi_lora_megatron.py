@@ -1,12 +1,10 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
-import re
 from typing import Any, Dict, List, Literal, Optional, Type, Union
 
 import torch
 import torch.nn as nn
 from peft import LoraConfig
-from peft import PeftModel
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PretrainedConfig, AutoConfig
@@ -178,12 +176,12 @@ class MultiLoraMegatronModel(MegatronModel):
             output_dir = 'output'
         checkpoint_dir = os.path.join(output_dir, name)
 
-        with self.multi_adapter.adapter(kwargs.get("adapter_name")) as tenant_adapter_name:
+        with self.multi_adapter.adapter(kwargs.get("adapter_name")) as real_adapter_name:
             save_format = kwargs.pop('save_format', 'hf')  # 'hf' or 'megatron'
             if save_format == 'hf':
-                self._save_hf_format(checkpoint_dir, tenant_adapter_name)
+                self._save_hf_format(checkpoint_dir, real_adapter_name)
             else:
-                self._save_megatron_format(checkpoint_dir, tenant_adapter_name)
+                self._save_megatron_format(checkpoint_dir, real_adapter_name)
 
             self._save_tokenizer(checkpoint_dir, adapter_name=kwargs.get("adapter_name"))
             import torch.distributed as dist

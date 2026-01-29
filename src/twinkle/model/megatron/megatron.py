@@ -1,4 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
+import inspect
 import json
 import os
 import re
@@ -790,12 +791,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         from megatron.core.distributed import DistributedDataParallelConfig
         model_chunks = self.model
         for model_chunk in model_chunks:
-            if not hasattr(model_chunk, 'ddp_config'):
-                model_chunk.ddp_config = DistributedDataParallelConfig(
-                    grad_reduce_in_fp32=True,
-                    use_megatron_fsdp=False,
-                )
-        
+            assert hasattr(model_chunk, 'ddp_config')
         optimizer = get_megatron_optimizer(
             config=opt_config,
             model_chunks=model_chunks,
@@ -1044,8 +1040,7 @@ class MegatronModel(TwinkleModel, nn.Module):
 
 
     @remote_function(dispatch='all')
-    def set_template(self, template_cls: Union[Type[template.Template], str],
-                     **kwargs):
+    def set_template(self, template_cls: Union[Template, Type[Template], str], **kwargs):
         """Set template for input encoding.
 
         Args:
@@ -1057,8 +1052,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config.template = construct_class(template_cls, Template, twinkle.template, **kwargs)
 
     @remote_function(dispatch='all')
-    def set_processor(self, processor_cls: Union[InputProcessor, Type[InputProcessor], str],
-                      **kwargs):
+    def set_processor(self, processor_cls: Union[InputProcessor, Type[InputProcessor], str], **kwargs):
         """Set input processor.
 
         Args:
@@ -1141,7 +1135,6 @@ class MegatronModel(TwinkleModel, nn.Module):
         
         # Filter out kwargs that are not valid for initialize_model_parallel
         # Dynamically check the signature to exclude unsupported parameters
-        import inspect
         valid_params = set(inspect.signature(parallel_state.initialize_model_parallel).parameters.keys())
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
         init_kwargs.update(filtered_kwargs)
