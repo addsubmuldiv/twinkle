@@ -8,7 +8,7 @@ from peft import LoraConfig
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PretrainedConfig, AutoConfig
-
+import torch.distributed as dist
 from twinkle import DeviceMesh, remote_class, remote_function, template
 from twinkle import requires
 from twinkle import torch_util
@@ -189,6 +189,17 @@ class MultiLoraMegatronModel(MegatronModel):
             # Final synchronization to ensure all ranks complete save
             if dist.is_initialized():
                 dist.barrier()
+
+    def load(self, name: Optional[str], output_dir: Optional[str] = None, **kwargs):
+        if output_dir is None:
+            output_dir = 'output'
+        checkpoint_dir = os.path.join(output_dir, name)
+        bridge = self._bridge
+        for _model in self.model:
+            bridge.load_weights(_model, checkpoint_dir, True, lora_converter=self.multi_adapter.load_lora_converter)
+
+        if dist.is_initialized():
+            dist.barrier()
 
     @remote_function(execute='first')
     def get_state_dict(self, **kwargs):

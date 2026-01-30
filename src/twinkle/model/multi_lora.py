@@ -404,8 +404,27 @@ class MultiLora(Patch):
                     _store_weights(_module)
             else:
                 _store_weights(self.module)
+
+    def load_lora_converter(self, name, parameter):
+        if 'embedding_A' in name:
+            r_saved = parameter.shape[1]
+            parameter = torch.cat(
+                (parameter, torch.zeros(parameter.shape[0], self.max_r-r_saved).to(parameter.dtype)), dim=1)
+        elif 'embedding_B' in name:
+            r_saved = parameter.shape[0]
+            parameter = torch.cat(
+                (parameter, torch.zeros(self.max_r - r_saved, parameter.shape[1]).to(parameter.dtype)), dim=0)
+        elif '_A' in name:
+            r_saved = parameter.shape[0]
+            parameter = torch.cat(
+                (parameter, torch.zeros(self.max_r - r_saved, parameter.shape[1]).to(parameter.dtype)), dim=0)
+        elif '_B' in name:
+            r_saved = parameter.shape[1]
+            parameter = torch.cat(
+                (parameter, torch.zeros(parameter.shape[0], self.max_r - r_saved).to(parameter.dtype)), dim=1)
+        return name, parameter
     
-    def lora_converter(self, name, parameter, adapter_name):
+    def save_lora_converter(self, name, parameter, adapter_name):
         _lora = self.find_lora(adapter_name)
         pattern = re.compile(rf'\.lora_\w+\.{adapter_name}\.')
         pattern_no_adapter = re.compile(rf'\.lora_\w+\.weight')
