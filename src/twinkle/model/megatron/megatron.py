@@ -66,7 +66,7 @@ class MegatronOptimizerGroup:
         """Check if gradient synchronization should happen."""
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return self.cur_step % gradient_accumulation_steps == 0 and self.cur_step > 0
+        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
 
 
     def __post_init__(self):
@@ -96,7 +96,7 @@ class MegatronOptimizerGroup:
             metrics = self.eval_metrics
         if len(metrics) > 0 and self.inputs is not None and self.outputs is not None:
             for metric in metrics:
-                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step-1})
+                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step})
 
     def calculate_metrics(self, is_training):
         self.accumulate_metrics(is_training)
@@ -779,7 +779,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         if dist.is_initialized():
             dist.barrier()
 
-    def _save_hf_format(self, output_dir: str, adapter_name: str):
+    def _save_hf_format(self, output_dir: str, adapter_name: str, lora_converter = None):
         """Save in HuggingFace format using bridge adapter.
 
         For distributed training:
@@ -810,20 +810,24 @@ class MegatronModel(TwinkleModel, nn.Module):
         self._bridge.save_weights(model,
                              output_dir,
                              is_peft_format=is_peft_format,
-                             adapter_name=adapter_name)
+                             adapter_name=adapter_name,
+                             lora_converter=lora_converter)
 
         # Save config on rank 0 only
         if dp_rank == 0:
             self.hf_config.save_pretrained(output_dir)
 
-    def _save_megatron_format(self, output_dir: str, adapter_name: str):
+    def _save_megatron_format(self, output_dir: str, adapter_name: str, lora_converter=None):
         """Save in Megatron checkpoint format."""
         os.makedirs(output_dir, exist_ok=True)
 
         state_dict = self._get_trainable_parameters(adapter_name)
-
-        # Convert to CPU
-        cpu_state_dict = {k: v.cpu() for k, v in state_dict.items()}
+        cpu_state_dict = {}
+        for k, v in state_dict.items():
+            if lora_converter is not None:
+                k, v = lora_converter(k, v)
+            if k is not None and v is not None:
+                cpu_state_dict[k] = v.cpu()
 
         # Save with rank info for distributed checkpointing
         rank = dist.get_rank() if dist.is_initialized() else 0

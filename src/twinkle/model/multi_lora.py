@@ -404,6 +404,25 @@ class MultiLora(Patch):
                     _store_weights(_module)
             else:
                 _store_weights(self.module)
+    
+    def lora_converter(self, name, parameter, adapter_name):
+        _lora = self.find_lora(adapter_name)
+        pattern = re.compile(rf'\.lora_\w+\.{adapter_name}\.')
+        pattern_no_adapter = re.compile(rf'\.lora_\w+\.weight')
+        if (pattern.search(name) or pattern_no_adapter.search(name)) and self.match_target_modules(name, _lora.tenant_config.target_modules):
+            _param = torch_util.to_local_tensor(parameter)
+            if 'embedding_A' in name:
+                _param = _param[:, :_lora.tenant_config.r]
+            elif 'embedding_B' in name:
+                _param = _param[:_lora.tenant_config.r, :]
+            elif '_A' in name:
+                _param = _param[:_lora.tenant_config.r, :]
+            elif '_B' in name:
+                _param = _param[:, :_lora.tenant_config.r]
+            name = name.replace(f'.{_lora.adapter_name}.', f'.')
+            return name, _param
+        else:
+            return None, None
 
     def set_state_dict(self, tenant_adapter_name, state_dict):
         _lora = self.find_lora_by_tenant(tenant_adapter_name)
@@ -412,7 +431,7 @@ class MultiLora(Patch):
         def _load_weights(_module):
             for name, parameter in _module.named_parameters():
                 if pattern.search(name) and self.match_target_modules(name, _lora.tenant_config.target_modules):
-                    name = name.replace(f'.{_lora.adapter_name}.', f'.{_lora.tenant_adapter_name}.')
+                    name = name.replace(f'.{_lora.adapter_name}.', f'.')
                     src_tensor = state_dict[name]
                     if 'embedding_A' in name:
                         r_saved = src_tensor.shape[1]
@@ -452,7 +471,7 @@ class MultiLora(Patch):
                         _param = _param[:_lora.tenant_config.r, :]
                     elif '_B' in name:
                         _param = _param[:, :_lora.tenant_config.r]
-                    name = name.replace(f'.{_lora.adapter_name}.', f'.{_lora.tenant_adapter_name}.')
+                    name = name.replace(f'.{_lora.adapter_name}.', f'.')
                     state_dict[name] = _param
             return state_dict
 

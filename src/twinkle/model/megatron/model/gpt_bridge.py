@@ -3,7 +3,7 @@
 
 import math
 from copy import copy
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Callable
 
 import megatron.core
 import torch
@@ -1479,7 +1479,7 @@ class GPTBridge:
         with torch.no_grad():
             yield from self._convert(mg_models, {}, hf_prefix, False, tqdm_desc=tqdm_desc)
 
-    def save_weights(self, mg_models, output_dir: str, is_peft_format: bool = False, adapter_name: str = 'default') -> None:
+    def save_weights(self, mg_models, output_dir: str, is_peft_format: bool = False, adapter_name: str = 'default', lora_converter: Callable = None) -> None:
         """Save the mg_model checkpoint in HF format"""
         torch.cuda.empty_cache()
         saver = StreamingSafetensorSaver(
@@ -1487,7 +1487,10 @@ class GPTBridge:
         for k, v in self.export_weights(
                 mg_models, target_device='cpu', only_last_rank=True, is_peft_format=is_peft_format,
                 adapter_name=adapter_name, tqdm_desc='Saving: '):
-            saver.add_tensor(k, v)
+            if lora_converter is not None:
+                k, v = lora_converter(k, v, adapter_name)
+            if k is not None and v is not None:
+                saver.add_tensor(k, v)
         saver.finalize()
         args = self.args
         if is_last_rank():

@@ -180,9 +180,9 @@ class MultiLoraMegatronModel(MegatronModel):
         with self.multi_adapter.adapter(kwargs.get("adapter_name")) as real_adapter_name:
             save_format = kwargs.pop('save_format', 'hf')  # 'hf' or 'megatron'
             if save_format == 'hf':
-                self._save_hf_format(checkpoint_dir, real_adapter_name)
+                self._save_hf_format(checkpoint_dir, real_adapter_name, lora_converter=self.multi_adapter.lora_converter)
             else:
-                self._save_megatron_format(checkpoint_dir, real_adapter_name)
+                self._save_megatron_format(checkpoint_dir, real_adapter_name, lora_converter=self.multi_adapter.lora_converter)
 
             self._save_tokenizer(checkpoint_dir, adapter_name=kwargs.get("adapter_name"))
             import torch.distributed as dist

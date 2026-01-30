@@ -59,7 +59,7 @@ class OptimizerGroup:
     def do_grad_sync(self, gradient_accumulation_steps: Optional[int] = None) -> bool:
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return self.cur_step % gradient_accumulation_steps == 0 and self.cur_step > 0
+        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
 
     def __post_init__(self):
         if self._device_mesh.data_world_size > 1:
@@ -90,7 +90,7 @@ class OptimizerGroup:
             metrics = self.eval_metrics
         if len(metrics) > 0 and self.inputs is not None and self.outputs is not None:
             for metric in metrics:
-                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step-1})
+                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step})
 
     def calculate_metrics(self, is_training):
         self.accumulate_metrics(is_training)
@@ -173,12 +173,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def _lazy_wrap_model(self):
         if not self._model_wrapped:
             assert len(self.optimizer_group) == 1
-            optimizer = self.optimizer_group[_default_adapter_name].optimizer
-            if optimizer is None:
-                optimizer = AdamW(self._create_param_group(_default_adapter_name, DEFAULT_LEARNING_RATE, DEFAULT_WEIGHT_DECAY), lr=DEFAULT_LEARNING_RATE)
-                self.optimizer_group[_default_adapter_name].optimizer = optimizer
+            optimizer_groups = [og for og in self.optimizer_group.values() if og.optimizer is not None]
+            assert optimizer_groups == 1
+            optimizer_group = optimizer_groups[0]
+            optimizer = optimizer_group.optimizer
+            assert optimizer 
             self.model, optimizer = self.strategy.wrap_model(self.model, optimizer)
-            self.optimizer_group[_default_adapter_name].optimizer = optimizer
+            optimizer_group.optimizer = optimizer
             self._model_wrapped = True
 
     def _construct_default_optimizer_group(self):
@@ -720,12 +721,12 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             else:
                 unwrapped_model.add_adapter(adapter_name, config)
 
-        self.optimizer_group[train_group] = self._construct_default_optimizer_group()
-        self.optimizer_group[train_group].adapter_name = adapter_name
-        self.optimizer_group[train_group].adapter_config = config
+        self.optimizer_group[adapter_name] = self._construct_default_optimizer_group()
+        self.optimizer_group[adapter_name].adapter_name = adapter_name
+        self.optimizer_group[adapter_name].adapter_config = config
         _gas_default = kwargs.get('gradient_accumulation_steps', 1)
-        self.optimizer_group[train_group].gradient_accumulation_steps = _gas_default
-        self._default_tokenizer = self.optimizer_group[train_group].template.processor
+        self.optimizer_group[adapter_name].gradient_accumulation_steps = _gas_default
+        self._default_tokenizer = self.optimizer_group[adapter_name].template.processor
 
     @remote_function()
     def add_adapter_to_model(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], **kwargs):

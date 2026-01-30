@@ -216,7 +216,9 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         self.multi_adapter.release_lora(adapter_name)
 
     def _get_nb_trainable_parameters(self, adapter_name, model):
-        return self.multi_adapter.get_nb_trainable_parameters(adapter_name)
+        with self.multi_adapter.adapter(adapter_name):
+            return self.multi_adapter.get_nb_trainable_parameters(adapter_name)
 
     def _get_trainable_parameters_example(self, adapter_name, model):
-        return self.multi_adapter.get_trainable_parameters_example(adapter_name)
+        with self.multi_adapter.adapter(adapter_name):
+            return self.multi_adapter.get_trainable_parameters_example(adapter_name)
