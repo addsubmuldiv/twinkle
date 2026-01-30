@@ -404,6 +404,25 @@ class MultiLora(Patch):
                     _store_weights(_module)
             else:
                 _store_weights(self.module)
+    
+    def lora_converter(self, name, parameter, adapter_name):
+        _lora = self.find_lora(adapter_name)
+        pattern = re.compile(rf'\.lora_\w+\.{adapter_name}\.')
+        pattern_no_adapter = re.compile(rf'\.lora_\w+\.weight')
+        if (pattern.search(name) or pattern_no_adapter.search(name)) and self.match_target_modules(name, _lora.tenant_config.target_modules):
+            _param = torch_util.to_local_tensor(parameter)
+            if 'embedding_A' in name:
+                _param = _param[:, :_lora.tenant_config.r]
+            elif 'embedding_B' in name:
+                _param = _param[:_lora.tenant_config.r, :]
+            elif '_A' in name:
+                _param = _param[:_lora.tenant_config.r, :]
+            elif '_B' in name:
+                _param = _param[:, :_lora.tenant_config.r]
+            name = name.replace(f'.{_lora.adapter_name}.', f'.')
+            return name, _param
+        else:
+            return None, None
 
     def set_state_dict(self, tenant_adapter_name, state_dict):
         _lora = self.find_lora_by_tenant(tenant_adapter_name)
@@ -412,19 +431,8 @@ class MultiLora(Patch):
         def _load_weights(_module):
             for name, parameter in _module.named_parameters():
                 if pattern.search(name) and self.match_target_modules(name, _lora.tenant_config.target_modules):
-                    # Remove the internal adapter name from parameter name to match the saved state_dict key
-                    # Example: base_model.model.model.layers.0.self_attn.q_proj.lora_A.lora_0.weight
-                    # becomes: base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight
-                    state_dict_key = re.sub(rf'\.lora_([AB]|embedding_[AB])\.{re.escape(_lora.adapter_name)}\.', r'.lora_\1.', name)
-                    
-                    # Try to get the tensor from state_dict
-                    src_tensor = None
-                    if state_dict_key in state_dict:
-                        src_tensor = state_dict[state_dict_key]
-                    
-                    if src_tensor is None:
-                        continue
-                    
+                    name = name.replace(f'.{_lora.adapter_name}.', f'.')
+                    src_tensor = state_dict[name]
                     if 'embedding_A' in name:
                         r_saved = src_tensor.shape[1]
                         parameter.data[:, :r_saved].copy_(src_tensor)
@@ -463,10 +471,7 @@ class MultiLora(Patch):
                         _param = _param[:_lora.tenant_config.r, :]
                     elif '_B' in name:
                         _param = _param[:, :_lora.tenant_config.r]
-                    # Remove the adapter name from the key completely
-                    # Example: base_model.model.model.layers.0.self_attn.q_proj.lora_A.lora_0.weight
-                    # becomes: base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight
-                    name = re.sub(rf'\.lora_([AB]|embedding_[AB])\.{re.escape(_lora.adapter_name)}\.', r'.lora_\1.', name)
+                    name = name.replace(f'.{_lora.adapter_name}.', f'.')
                     state_dict[name] = _param
             return state_dict
 
