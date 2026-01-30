@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def init_tinker_compat_client(base_url: Optional[str] = None, api_key: Optional[str] = None, **kwargs) -> ServiceClient:
     requires('tinker')
     from tinker import ServiceClient
-    from twinkle_client.http.utils import get_request_id, get_api_key()
+    from twinkle_client.http.utils import get_request_id, get_api_key
     
     default_headers = {
         "X-Ray-Serve-Request-Id": get_request_id(),
