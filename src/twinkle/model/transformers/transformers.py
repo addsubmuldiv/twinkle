@@ -59,7 +59,7 @@ class OptimizerGroup:
     def do_grad_sync(self, gradient_accumulation_steps: Optional[int] = None) -> bool:
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
+        return self.cur_step % gradient_accumulation_steps == 0 and self.cur_step > 0
 
     def __post_init__(self):
         if self._device_mesh.data_world_size > 1:

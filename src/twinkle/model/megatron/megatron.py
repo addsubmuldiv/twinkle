@@ -66,7 +66,7 @@ class MegatronOptimizerGroup:
         """Check if gradient synchronization should happen."""
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
+        return self.cur_step % gradient_accumulation_steps == 0 and self.cur_step > 0
 
 
     def __post_init__(self):
@@ -251,153 +251,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         Returns:
             Model outputs.
         """
-        self._lazy_wrap_model()
-        from functools import partial
-        from megatron.core.pipeline_parallel import get_forward_backward_func
-        from megatron.core import parallel_state as mpu
-
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
-        optimizer_config = self.optimizer_group[adapter_name]
-        loss_instance = self.optimizer_group[adapter_name].loss_instance
-
-        if (isinstance(inputs, dict) and self._not_encoded(inputs)) or (isinstance(inputs, list) and self._not_encoded(inputs[0])):
-            # Trajectory or List[Trajectory]
-            assert optimizer_config.template is not None, \
-                'Use set_template to add a template when trying to input `List[Trajectory]`'
-            if isinstance(inputs, dict):
-                inputs = [inputs]
-            inputs = optimizer_config.template.batch_encode(inputs) # noqa
-        processor: InputProcessor = optimizer_config.processor
-        assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
-
-        vpp_size = self.device_mesh.vpp_size
-        if vpp_size is None or vpp_size == 1:
-            inputs = [processor(inputs)]
-            micro_batch_size = inputs[0]['input_ids'].shape[0]
-        else:
-            if micro_batch_size is None:
-                micro_batch_size = 1
-            inputs = processor(inputs, micro_batch_size=micro_batch_size, variable_seq_lengths=self.variable_seq_lengths)
-
-        # Get parallelism settings for sequence padding and splitting
-        cp_size = self.device_mesh.cp_world_size
-        # Check actual sequence_parallel setting from model config
-        # Bridge may auto-enable sequence_parallel for MoE models
-        if self.variable_seq_lengths:
-            seq_length = None
-        else:
-            original_seq_length = inputs[0]['input_ids'].shape[1]
-            if cp_size > 1:
-                divisor = 2 * cp_size
-            elif self.strategy.sequence_parallel and self.device_mesh.tp_world_size > 1:
-                divisor = self.device_mesh.tp_world_size
-            else:
-                divisor = 1
-
-            if divisor > 1 and original_seq_length % divisor != 0:
-                seq_length = original_seq_length + (divisor - original_seq_length % divisor)
-            else:
-                seq_length = original_seq_length
-
-        def post_loss_function(output_tensor, inputs):
-            outputs['logits'] = output_tensor
-            losses = loss_instance(inputs, outputs)
-            return self.strategy.gather_loss_for_cp(losses, inputs['labels'])
-
-        # Define forward step function for Megatron
-        # forward_step_func(data_iterator, model) -> (output_tensor, partial(loss_func))
-        def forward_step_func(data_iterator, model):
-            batch = next(data_iterator)
-            batch = self.strategy.split_inputs_for_cp(batch)
-            input_ids = batch.get('input_ids')
-            position_ids = batch.get('position_ids')
-            attention_mask = batch.get('attention_mask')
-            batch_labels = batch.get('labels')
-
-            extra_kwargs = self.get_extra_vlm_kwargs(batch)
-
-            # Forward pass with labels - Megatron will compute loss internally
-            # This uses Megatron's compute_language_model_loss which properly handles
-            # vocab parallel cross entropy
-            output_tensor = model(
-                input_ids=input_ids,
-                position_ids=position_ids,
-                attention_mask=attention_mask,
-                # labels=batch_labels,  # Pass labels to let Megatron compute loss
-                **extra_kwargs,
-            )
-            return output_tensor, partial(post_loss_function, inputs=batch)
-
-        # Get Megatron's forward-backward function
-        # This automatically selects the right scheduler based on PP config:
-        # - PP > 1: forward_backward_pipelining_without_interleaving (or with interleaving if VPP)
-        # - PP = 1: forward_backward_no_pipelining
-        forward_backward_func = get_forward_backward_func()
-        vpp_size = self.device_mesh.vpp_size
-
-        if vpp_size is None or vpp_size == 1:
-            data_iter = iter(inputs)
-        else:
-            data_iter = [iter(inputs) for _ in range(0, vpp_size)]
-
-        self._accumulate_metric(optimizer_config, is_training=True)
-
-        # Run forward-backward with Megatron's scheduler
-        # Megatron handles all communication internally using proper process groups
-        losses = forward_backward_func(
-            forward_step_func=forward_step_func,
-            data_iterator=data_iter,
-            model=self.model,
-            num_microbatches=len(inputs),
-            seq_length=seq_length,
-            micro_batch_size=micro_batch_size,
-            forward_only=True,
-        )
-
-        # Extract loss from results (only last PP stage returns non-empty)
-        loss = torch.tensor(0.0).to(Platform.get_local_device())
-        count = 0
-        if losses:
-            for loss_dict in losses:
-                if isinstance(loss_dict, dict) and 'loss' in loss_dict:
-                    loss += loss_dict['loss']
-                    count += 1
-                elif isinstance(loss_dict, torch.Tensor):
-                    loss += loss_dict
-                    count += 1
-        
-        if count > 0:
-            loss /= count
-
-        # For PP > 1, broadcast loss from last PP stage to all ranks
-        # Note: mpu is imported at module level, no need to reimport
-        if mpu.get_pipeline_model_parallel_world_size() > 1:
-            loss_tensor = loss.detach().clone()
-            # Broadcast from last PP stage (rank with pipeline_model_parallel_rank == pp_size - 1)
-            src_rank = mpu.get_pipeline_model_parallel_last_rank()
-            pp_group = mpu.get_pipeline_model_parallel_group()
-
-            torch.distributed.broadcast(loss_tensor,
-                                        src=src_rank,
-                                        group=pp_group)
-
-            loss = loss_tensor.item()
-
-        dp_world_size = mpu.get_data_parallel_world_size()
-        if dp_world_size > 1:
-            if isinstance(loss, (int, float)):
-                loss = torch.tensor(loss, device=Platform.get_local_device())
-            # Average loss across DP group (with CP if enabled)
-            dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
-            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=dp_cp_group)
-
-        optimizer_config.inputs = inputs
-        optimizer_config.outputs = {
-            'loss': loss,
-        }
-        if isinstance(loss, torch.Tensor):
-            return loss.detach().cpu().float().numpy()
-        return float(loss)
+        return self.forward_backward(inputs=inputs, micro_batch_size=micro_batch_size, forward_only=True, **kwargs)
 
     @remote_function(collect='mean')
     def calculate_loss(self, **kwargs):
@@ -442,6 +296,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         from megatron.core import parallel_state as mpu
 
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        forward_only = kwargs.pop('forward_only', False)
         optimizer_config = self.optimizer_group[adapter_name]
         loss_instance = self.optimizer_group[adapter_name].loss_instance
 
@@ -487,8 +342,8 @@ class MegatronModel(TwinkleModel, nn.Module):
         def post_loss_function(output_tensor, inputs):
             outputs = {}
             outputs['logits'] = output_tensor
-            losses = loss_instance(inputs, outputs)
-            return self.strategy.gather_loss_for_cp(losses, inputs['labels'])
+            losses, counts = loss_instance(inputs, outputs)
+            return self.strategy.gather_loss_for_cp(losses, counts, output_tensor)
 
         # Define forward step function for Megatron
         # forward_step_func(data_iterator, model) -> (output_tensor, partial(loss_func))
@@ -537,17 +392,21 @@ class MegatronModel(TwinkleModel, nn.Module):
             num_microbatches=len(inputs),
             seq_length=seq_length,
             micro_batch_size=micro_batch_size,
-            forward_only=False,
+            forward_only=forward_only,
         )
 
         # Extract loss from results (only last PP stage returns non-empty)
         loss = torch.tensor(0.0).to(Platform.get_local_device())
+        logits = []
         count = 0
         if losses:
             for loss_dict in losses:
-                if isinstance(loss_dict, dict) and 'loss' in loss_dict:
-                    loss += loss_dict['loss']
-                    count += 1
+                if isinstance(loss_dict, dict):
+                    if 'loss' in loss_dict:
+                        loss += loss_dict['loss']
+                        count += 1
+                    if 'logits' in loss_dict:
+                        logits.append(loss_dict['logits'])
                 elif isinstance(loss_dict, torch.Tensor):
                     loss += loss_dict
                     count += 1
@@ -569,7 +428,8 @@ class MegatronModel(TwinkleModel, nn.Module):
 
             loss = loss_tensor.item()
 
-        optimizer_config.cur_step += 1
+        if not forward_only:
+            optimizer_config.cur_step += 1
 
         dp_world_size = mpu.get_data_parallel_world_size()
         if dp_world_size > 1:
@@ -580,12 +440,21 @@ class MegatronModel(TwinkleModel, nn.Module):
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=dp_cp_group)
 
         optimizer_config.inputs = inputs
-        optimizer_config.outputs = {
-            'loss': loss,
-        }
-        if isinstance(loss, torch.Tensor):
-            return loss.detach().cpu().float().numpy()
-        return float(loss)
+        if forward_only:
+            if len(set([logit.shape[0] for logit in logits])) == 1:
+                logits = torch.cat(logits, dim=0)
+            return {
+                'loss': loss,
+                'logits': logits,
+            }
+        else:
+            optimizer_config.outputs = {
+                'loss': loss,
+                'logits': logits,
+            }
+            if isinstance(loss, torch.Tensor):
+                return loss.detach().cpu().float().numpy()
+            return float(loss)
 
     @remote_function(dispatch='all')
     def clip_grad_norm(self,
