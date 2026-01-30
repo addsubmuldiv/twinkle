@@ -13,6 +13,10 @@ time.sleep(5)
 file_dir = os.path.abspath(os.path.dirname(__file__))
 config = OmegaConf.load(os.path.join(file_dir, 'server_config.yaml'))
 
+# Start Ray Serve with http_options from config
+http_options = OmegaConf.to_container(config.http_options, resolve=True)
+serve.start(http_options=http_options)
+
 APP_BUILDERS = {
     'main:model_qwen25_7B': build_model_app,
     # 'main:build_sampler_app': build_sampler_app,
