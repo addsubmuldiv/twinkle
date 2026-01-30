@@ -42,4 +42,5 @@ __all__ = [
     'TwinkleClient',
     'TwinkleClientError',
     'init_tinker_compat_client',
+    'init_twinkle_client'
 ]

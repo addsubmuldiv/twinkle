@@ -17,6 +17,7 @@ from twinkle.data_format import InputFeature, Trajectory
 from .common.validation import verify_request_token
 from .common.state import get_server_state, ServerStateProxy
 from .common.serialize import deserialize_object
+from .common.io_utils import TrainingRunManager, CheckpointManager, CreateModelRequest
 
 # 请求体模型定义
 class CreateRequest(BaseModel):
@@ -65,18 +66,17 @@ class SetLrSchedulerRequest(BaseModel):
         extra = "allow"
 
 class SaveRequest(BaseModel):
-    output_dir: str
     adapter_name: str
     save_optimizer: bool = False
-    checkpoint_name: Optional[str] = None
+    name: Optional[str] = None
 
     class Config:
         extra = "allow"
 
 class LoadRequest(BaseModel):
-    input_dir: str
     adapter_name: str
     load_optimizer: bool = False
+    name: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -323,38 +323,167 @@ def build_model_app(model_id: str,
 
         @app.post("/save")
         def save(self, request: Request, body: SaveRequest):
+            """
+            Save adapter weights with token-based isolation.
+            
+            This endpoint:
+            1. Saves adapter weights to token-specific directory
+            2. Saves checkpoint metadata with ownership tracking
+            
+            Args:
+                request: FastAPI request object (contains token in state)
+                body: SaveRequest with adapter_name, name, and save_optimizer flag
+                
+            Returns:
+                Dict with result containing the twinkle:// path to saved checkpoint
+            """
             adapter_name = self.get_adapter_name(request, adapter_name=body.adapter_name)
             self.assert_adapter_exists(adapter_name=adapter_name)
             extra_kwargs = body.model_extra or {}
-            ret = self.model.save(name=body.checkpoint_name, 
-                                  output_dir=body.output_dir, 
-                                  adapter_name=adapter_name, 
-                                  save_optimizer=body.save_optimizer, 
-                                  **extra_kwargs)
-            return {'result': ret}
+            
+            # Extract token for directory isolation
+            token = request.state.token
+            
+            # Get checkpoint name and save directory with token-based path
+            checkpoint_name = CheckpointManager.get_ckpt_name(body.name)
+            save_dir = CheckpointManager.get_save_dir(
+                model_id=adapter_name,
+                token=token,
+                is_sampler=False
+            )
+            
+            # Save the model weights
+            self.model.save(
+                name=checkpoint_name,
+                output_dir=save_dir,
+                adapter_name=adapter_name, 
+                save_optimizer=body.save_optimizer, 
+                **extra_kwargs
+            )
+            
+            # Save checkpoint metadata
+            twinkle_path = CheckpointManager.save(
+                adapter_name,
+                name=checkpoint_name,
+                token=token,
+                is_sampler=False
+            )
+            
+            return {'result': twinkle_path}
         
         @app.post("/load")
         def load(self, request: Request, body: LoadRequest):
+            """
+            Load adapter weights with token-based access validation.
+            
+            This endpoint:
+            1. Validates user has access to the checkpoint
+            2. Loads weights from token-specific directory
+            
+            Args:
+                request: FastAPI request object (contains token in state)
+                body: LoadRequest with adapter_name, name, and load_optimizer flag
+                
+            Returns:
+                Dict with result indicating load status
+            """
             adapter_name = self.get_adapter_name(request, adapter_name=body.adapter_name)
             self.assert_adapter_exists(adapter_name=adapter_name)
             extra_kwargs = body.model_extra or {}
-            ret = self.model.load(checkpoint_dir=body.input_dir, 
-                                  adapter_name=adapter_name, 
-                                  load_optimizer=body.load_optimizer, 
-                                  **extra_kwargs)
+            
+            # Extract token for directory isolation
+            token = request.state.token
+            
+            # Construct the checkpoint path and validate access
+            if body.name:
+                # User provided a checkpoint name
+                checkpoint_id = f"weights/{body.name}"
+                
+                # Verify checkpoint exists and user has access
+                checkpoint = CheckpointManager.get(adapter_name, checkpoint_id, token)
+                if not checkpoint:
+                    raise ValueError(
+                        f"Checkpoint not found or access denied: {body.name}"
+                    )
+                
+                # Get the actual directory path
+                output_dir = CheckpointManager.get_save_dir(
+                    model_id=adapter_name,
+                    token=token,
+                    is_sampler=False
+                )
+                
+                ret = self.model.load(
+                    name=body.name,
+                    output_dir=output_dir,
+                    adapter_name=adapter_name, 
+                    load_optimizer=body.load_optimizer, 
+                    **extra_kwargs
+                )
+            else:
+                # No checkpoint name provided - use default behavior
+                ret = self.model.load(
+                    name=body.name,
+                    adapter_name=adapter_name, 
+                    load_optimizer=body.load_optimizer, 
+                    **extra_kwargs
+                )
+            
             return {'result': ret}
 
         @app.post("/add_adapter_to_model")
         def add_adapter_to_model(self, request: Request, body: AddAdapterRequest):
+            """
+            Add a new adapter to the model.
+            
+            This endpoint:
+            1. Creates a new adapter with the specified configuration
+            2. Registers it in the adapter tracking system
+            3. Saves training run metadata with token-based isolation
+            
+            Args:
+                request: FastAPI request object (contains token in state)
+                body: AddAdapterRequest with adapter_name and config
+                
+            Returns:
+                Dict with status and adapter_name
+            """
             assert body.adapter_name, 'You need to specify a valid `adapter_name`'
             adapter_name = self.get_adapter_name(request, adapter_name=body.adapter_name)
             config = deserialize_object(body.config)
             extra_kwargs = body.model_extra or {}
+            
+            # Extract token for metadata storage
+            token = request.state.token
+            
             with self.adapter_lock:
                 self.model.add_adapter_to_model(adapter_name, config, **extra_kwargs)
+            
             self.adapter_records[adapter_name] = 0
-            self.key_token_dict[adapter_name] = request.state.token
-            self.handle_adapter_count(request.state.token, True)
+            self.key_token_dict[adapter_name] = token
+            self.handle_adapter_count(token, True)
+            
+            # Save training run metadata (similar to tinker's create_model)
+            # Create a training run config from the adapter configuration
+            lora_config = None
+            if isinstance(config, LoraConfig):
+                from .common.io_utils import LoraConfig as IoLoraConfig
+                lora_config = IoLoraConfig(
+                    rank=config.r,
+                    train_unembed=False,  # Default values
+                    train_mlp=True,
+                    train_attn=True
+                )
+            
+            run_config = CreateModelRequest(
+                base_model=model_id,  # Use the model_id from build_model_app
+                lora_config=lora_config,
+                user_metadata={'adapter_name': body.adapter_name}
+            )
+            
+            # Save training run metadata with token-based isolation
+            TrainingRunManager.save(adapter_name, run_config, token)
+            
             return {'status': 'ok', 'adapter_name': adapter_name}
 
         @app.post("/set_template")

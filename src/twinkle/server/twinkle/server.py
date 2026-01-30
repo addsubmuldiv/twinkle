@@ -170,16 +170,9 @@ def build_server_app(
             token = self._get_user_token(request)
             run = TrainingRunManager.get_with_permission(run_id, token)
             if not run:
-                # Check if run exists at all (for better error message)
-                run_exists = TrainingRunManager.get(run_id)
-                if run_exists:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Access denied: Training run {run_id} belongs to another user"
-                    )
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Training run {run_id} not found"
+                    detail=f"Training run {run_id} not found or access denied"
                 )
             return run
 
@@ -206,16 +199,9 @@ def build_server_app(
             token = self._get_user_token(request)
             response = CheckpointManager.list_checkpoints(run_id, token=token)
             if response is None:
-                # Check if run exists for better error message
-                run = TrainingRunManager.get(run_id)
-                if run:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Access denied: Training run {run_id} belongs to another user"
-                    )
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Training run {run_id} not found"
+                    detail=f"Training run {run_id} not found or access denied"
                 )
             return response
 
@@ -255,21 +241,9 @@ def build_server_app(
             
             success = CheckpointManager.delete(run_id, checkpoint_id, token)
             if not success:
-                # Determine the reason for failure
-                run = TrainingRunManager.get(run_id)
-                if not run:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Training run {run_id} not found"
-                    )
-                if run.model_owner != token:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Access denied: cannot delete checkpoints from another user's training run"
-                    )
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Checkpoint {checkpoint_id} not found in training run {run_id}"
+                    detail=f"Checkpoint {checkpoint_id} not found or access denied"
                 )
             
             return DeleteCheckpointResponse(
@@ -300,16 +274,9 @@ def build_server_app(
             token = self._get_user_token(request)
             response = CheckpointManager.get_weights_info(body.twinkle_path, token=token)
             if response is None:
-                # Check if weights exist for better error message
-                response_no_perm = CheckpointManager.get_weights_info(body.twinkle_path)
-                if response_no_perm:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Access denied: weights belong to another user"
-                    )
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Weights at {body.twinkle_path} not found"
+                    detail=f"Weights at {body.twinkle_path} not found or access denied"
                 )
             return response
 
@@ -348,21 +315,15 @@ def build_server_app(
                 )
             
             # Check ownership
-            run = TrainingRunManager.get_with_permission(run_id, token)
+            run = TrainingRunManager.get(run_id, token)
             if not run:
-                run_exists = TrainingRunManager.get(run_id)
-                if run_exists:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Access denied: training run belongs to another user"
-                    )
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Training run {run_id} not found"
+                    detail=f"Training run {run_id} not found or access denied"
                 )
             
-            # Get checkpoint
-            checkpoint = CheckpointManager.get(run_id, checkpoint_id)
+            # Get checkpoint with token-based path
+            checkpoint = CheckpointManager.get(run_id, checkpoint_id, token)
             if not checkpoint:
                 raise HTTPException(
                     status_code=404,
@@ -370,7 +331,7 @@ def build_server_app(
                 )
             
             # Return the filesystem path
-            ckpt_dir = CheckpointManager.get_ckpt_dir(run_id, checkpoint_id)
+            ckpt_dir = CheckpointManager.get_ckpt_dir(run_id, checkpoint_id, token)
             return {
                 "path": str(ckpt_dir),
                 "twinkle_path": checkpoint.twinkle_path

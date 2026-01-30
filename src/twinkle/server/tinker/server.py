@@ -11,7 +11,7 @@ from ray import serve
 
 from tinker import types
 
-from twinkle.server.twinkle.common.validation import verify_request_token
+from twinkle.server.twinkle.common.validation import verify_request_token, get_token_from_request
 from twinkle.server.twinkle.common.state import get_server_state, schedule_task
 from .common.io_utils import TrainingRunManager, CheckpointManager
 
@@ -168,11 +168,41 @@ def build_server_app(
 
         @app.get("/training_runs")
         async def get_training_runs(self, request: Request, limit: int = 20, offset: int = 0) -> types.TrainingRunsResponse:
-            return TrainingRunManager.list_runs(limit=limit, offset=offset)
+            """
+            List training runs for the current user.
+            
+            Uses token-based isolation to only show runs owned by the requesting user.
+            
+            Args:
+                request: FastAPI request with token in state
+                limit: Maximum number of results
+                offset: Pagination offset
+                
+            Returns:
+                TrainingRunsResponse with user's training runs
+            """
+            token = get_token_from_request(request)
+            return TrainingRunManager.list_runs(limit=limit, offset=offset, token=token)
 
         @app.get("/training_runs/{run_id}")
         async def get_training_run(self, request: Request, run_id: str) -> types.TrainingRun:
-            run = TrainingRunManager.get(run_id)
+            """
+            Get a specific training run.
+            
+            Uses token-based isolation to verify user owns the run.
+            
+            Args:
+                request: FastAPI request with token in state
+                run_id: The training run identifier
+                
+            Returns:
+                TrainingRun details
+                
+            Raises:
+                HTTPException 404 if run not found in user's token directory
+            """
+            token = get_token_from_request(request)
+            run = TrainingRunManager.get(run_id, token)
             if not run:
                 raise HTTPException(
                     status_code=404, detail=f"Training run {run_id} not found")
@@ -180,7 +210,23 @@ def build_server_app(
 
         @app.get("/training_runs/{run_id}/checkpoints")
         async def get_run_checkpoints(self, request: Request, run_id: str) -> types.CheckpointsListResponse:
-            response = CheckpointManager.list_checkpoints(run_id)
+            """
+            List checkpoints for a training run.
+            
+            Uses token-based isolation to verify user owns the run.
+            
+            Args:
+                request: FastAPI request with token in state
+                run_id: The training run identifier
+                
+            Returns:
+                CheckpointsListResponse with list of checkpoints
+                
+            Raises:
+                HTTPException 404 if run not found in user's token directory
+            """
+            token = get_token_from_request(request)
+            response = CheckpointManager.list_checkpoints(run_id, token)
             if not response:
                 raise HTTPException(
                     status_code=404, detail=f"Training run {run_id} not found")
@@ -188,14 +234,51 @@ def build_server_app(
 
         @app.delete("/training_runs/{run_id}/checkpoints/{checkpoint_id:path}")
         async def delete_run_checkpoint(self, request: Request, run_id: str, checkpoint_id: str) -> Any:
-            CheckpointManager.delete(run_id, checkpoint_id)
-            # We return 200 (null) even if not found to be idempotent, or could raise 404
+            """
+            Delete a checkpoint from a training run.
+            
+            Uses token-based isolation to verify user owns the checkpoint.
+            
+            Args:
+                request: FastAPI request with token in state
+                run_id: The training run identifier
+                checkpoint_id: The checkpoint identifier (path)
+                
+            Returns:
+                None (200 OK) if successful
+                
+            Raises:
+                HTTPException 404 if checkpoint not found in user's token directory
+            """
+            token = get_token_from_request(request)
+            success = CheckpointManager.delete(run_id, checkpoint_id, token)
+            if not success:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Checkpoint {checkpoint_id} not found for run {run_id}"
+                )
             return None
 
         @app.post("/weights_info")
         async def weights_info(self, request: Request, body: Dict[str, Any]) -> types.WeightsInfoResponse:
+            """
+            Get weights information from a tinker path.
+            
+            Uses token-based isolation to verify user owns the weights.
+            
+            Args:
+                request: FastAPI request with token in state
+                body: Dict with 'tinker_path' key
+                
+            Returns:
+                WeightsInfoResponse with weight details
+                
+            Raises:
+                HTTPException 404 if weights not found in user's token directory
+            """
+            token = get_token_from_request(request)
             tinker_path = body.get("tinker_path")
-            response = CheckpointManager.get_weights_info(tinker_path)
+            response = CheckpointManager.get_weights_info(tinker_path, token)
             if not response:
                 raise HTTPException(
                     status_code=404, detail=f"Weights at {tinker_path} not found")

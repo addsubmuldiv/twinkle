@@ -29,17 +29,52 @@ class FileManager:
 class TrainingRunManager(FileManager):
 
     @staticmethod
-    def get_base_dir() -> Path:
-        return Path(TWINKLE_DEFAULT_SAVE_DIR)
+    def get_base_dir(token: Optional[str] = None) -> Path:
+        """
+        Get base directory with optional token-based isolation.
+        
+        Args:
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Path to base directory, optionally scoped by token
+        """
+        base_path = Path(TWINKLE_DEFAULT_SAVE_DIR)
+        if token:
+            # Create token-based subdirectory for user isolation
+            # Sanitize token to avoid filesystem issues
+            sanitized_token = re.sub(r'[^\w\-]', '_', token)
+            return base_path / sanitized_token
+        return base_path
 
     @staticmethod
-    def get_model_dir(model_id: str) -> Path:
-        return TrainingRunManager.get_base_dir() / model_id
+    def get_model_dir(model_id: str, token: Optional[str] = None) -> Path:
+        """
+        Get model directory with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Path to model directory
+        """
+        return TrainingRunManager.get_base_dir(token) / model_id
 
     @staticmethod
-    def _read_info(model_id: str) -> Dict[str, Any]:
+    def _read_info(model_id: str, token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read training run metadata from disk.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Dictionary with metadata or empty dict if not found
+        """
         metadata_path = TrainingRunManager.get_model_dir(
-            model_id) / TRAIN_RUN_INFO_FILENAME
+            model_id, token) / TRAIN_RUN_INFO_FILENAME
         if not metadata_path.exists():
             return {}
         try:
@@ -49,8 +84,16 @@ class TrainingRunManager(FileManager):
             return {}
 
     @staticmethod
-    def _write_info(model_id: str, data: Dict[str, Any]):
-        model_dir = TrainingRunManager.get_model_dir(model_id)
+    def _write_info(model_id: str, data: Dict[str, Any], token: Optional[str] = None):
+        """
+        Write training run metadata to disk.
+        
+        Args:
+            model_id: The model identifier
+            data: Metadata to write
+            token: User's authentication token for directory isolation
+        """
+        model_dir = TrainingRunManager.get_model_dir(model_id, token)
         model_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = model_dir / TRAIN_RUN_INFO_FILENAME
         with open(metadata_path, 'w') as f:
@@ -59,6 +102,14 @@ class TrainingRunManager(FileManager):
     @classmethod
     def save(cls, model_id: str, run_config: types.CreateModelRequest,
              token: str):
+        """
+        Save training run metadata with token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            run_config: Training run configuration
+            token: User's authentication token (becomes model owner)
+        """
         lora_config = run_config.lora_config
         train_run_data = types.TrainingRun(
             training_run_id=model_id,
@@ -79,11 +130,21 @@ class TrainingRunManager(FileManager):
             new_data['train_mlp'] = lora_config.train_mlp
             new_data['train_attn'] = lora_config.train_attn
 
-        cls._write_info(model_id, new_data)
+        cls._write_info(model_id, new_data, token)
 
     @classmethod
-    def get(cls, model_id: str) -> Optional[types.TrainingRun]:
-        data = cls._read_info(model_id)
+    def get(cls, model_id: str, token: Optional[str] = None) -> Optional[types.TrainingRun]:
+        """
+        Get training run metadata with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            TrainingRun object or None if not found
+        """
+        data = cls._read_info(model_id, token)
         if not data:
             return None
         # Clean up fields that might be stored
@@ -91,16 +152,25 @@ class TrainingRunManager(FileManager):
         return types.TrainingRun(**data)
 
     @classmethod
-    def update(cls, model_id: str, updates: Dict[str, Any]):
-        info = cls._read_info(model_id)
+    def update(cls, model_id: str, updates: Dict[str, Any], token: Optional[str] = None):
+        """
+        Update training run metadata with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            updates: Dictionary of fields to update
+            token: User's authentication token for directory isolation
+        """
+        info = cls._read_info(model_id, token)
         if info:
             info.update(updates)
-            cls._write_info(model_id, info)
+            cls._write_info(model_id, info, token)
 
     @classmethod
     def list_runs(cls, limit: int = 20,
-                  offset: int = 0) -> types.TrainingRunsResponse:
-        base_dir = cls.get_base_dir()
+                  offset: int = 0,
+                  token: Optional[str] = None) -> types.TrainingRunsResponse:
+        base_dir = cls.get_base_dir(token)
         if not base_dir.exists():
             return types.TrainingRunsResponse(training_runs=[],
                                               cursor=types.Cursor(
@@ -136,14 +206,36 @@ class TrainingRunManager(FileManager):
 class CheckpointManager(FileManager):
 
     @staticmethod
-    def get_ckpt_dir(model_id: str, checkpoint_id: str) -> Path:
-        return TrainingRunManager.get_model_dir(model_id) / checkpoint_id
+    def get_ckpt_dir(model_id: str, checkpoint_id: str, token: Optional[str] = None) -> Path:
+        """
+        Get checkpoint directory with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Path to checkpoint directory
+        """
+        return TrainingRunManager.get_model_dir(model_id, token) / checkpoint_id
 
     @staticmethod
-    def get_save_dir(model_id: str, is_sampler=False) -> str:
+    def get_save_dir(model_id: str, token: str, is_sampler=False) -> str:
+        """
+        Get save directory with token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token (required for isolation)
+            is_sampler: Whether this is for sampler weights
+            
+        Returns:
+            String path to save directory
+        """
         weights_type = 'sampler_weights' if is_sampler else 'weights'
         checkpoint_id = Path(model_id) / weights_type
-        save_path = Path(TWINKLE_DEFAULT_SAVE_DIR) / checkpoint_id
+        save_path = TrainingRunManager.get_base_dir(token) / checkpoint_id
         return save_path.as_posix()
 
     @staticmethod
@@ -156,9 +248,20 @@ class CheckpointManager(FileManager):
 
     @classmethod
     def _read_ckpt_info(cls, model_id: str,
-                        checkpoint_id: str) -> Optional[Dict[str, Any]]:
+                        checkpoint_id: str, token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Read checkpoint metadata with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Dictionary with checkpoint metadata or None if not found
+        """
         meta_path = cls.get_ckpt_dir(model_id,
-                                     checkpoint_id) / CHECKPOINT_INFO_FILENAME
+                                     checkpoint_id, token) / CHECKPOINT_INFO_FILENAME
         if not meta_path.exists():
             return None
         try:
@@ -168,20 +271,42 @@ class CheckpointManager(FileManager):
             return None
 
     @classmethod
-    def _write_ckpt_info(cls, model_id: str, checkpoint_id: str, data: Dict[str, Any]):
-        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id)
+    def _write_ckpt_info(cls, model_id: str, checkpoint_id: str, data: Dict[str, Any], token: Optional[str] = None):
+        """
+        Write checkpoint metadata with token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            data: Checkpoint metadata to write
+            token: User's authentication token for directory isolation
+        """
+        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id, token)
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         meta_path = ckpt_dir / CHECKPOINT_INFO_FILENAME
         with open(meta_path, 'w') as f:
             json.dump(data, f, indent=2)
 
     @classmethod
-    def save(cls, model_id: str, name: str, is_sampler=False, public=False) -> str:
+    def save(cls, model_id: str, name: str, token: str, is_sampler=False, public=False) -> str:
+        """
+        Save checkpoint metadata with token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            name: Checkpoint name
+            token: User's authentication token (required for isolation)
+            is_sampler: Whether this is a sampler checkpoint
+            public: Whether the checkpoint is public
+            
+        Returns:
+            The twinkle path for the checkpoint
+        """
         weights_type = 'sampler_weights' if is_sampler else 'weights'
         checkpoint_type = 'sampler' if is_sampler else 'training'
         checkpoint_id = f'{weights_type}/{name}'
         tinker_path = f"twinkle://{model_id}/{checkpoint_id}"
-        checkpoint_path = cls.get_ckpt_dir(model_id, checkpoint_id)
+        checkpoint_path = cls.get_ckpt_dir(model_id, checkpoint_id, token)
         checkpoint = types.Checkpoint(
             checkpoint_id=checkpoint_id,
             checkpoint_type=checkpoint_type,
@@ -191,24 +316,45 @@ class CheckpointManager(FileManager):
             public=public
         )
         ckpt_data = checkpoint.model_dump(mode='json')
-        cls._write_ckpt_info(model_id, checkpoint.checkpoint_id, ckpt_data)
+        cls._write_ckpt_info(model_id, checkpoint.checkpoint_id, ckpt_data, token)
 
         # Optionally update last_checkpoint in run info
-        TrainingRunManager.update(model_id, {'last_checkpoint': ckpt_data})
+        TrainingRunManager.update(model_id, {'last_checkpoint': ckpt_data}, token)
         return tinker_path
 
     @classmethod
     def get(cls, model_id: str,
-            checkpoint_id: str) -> Optional[types.Checkpoint]:
-        data = cls._read_ckpt_info(model_id, checkpoint_id)
+            checkpoint_id: str, token: Optional[str] = None) -> Optional[types.Checkpoint]:
+        """
+        Get checkpoint metadata with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Checkpoint object or None if not found
+        """
+        data = cls._read_ckpt_info(model_id, checkpoint_id, token)
         if not data:
             return None
         return types.Checkpoint(**data)
 
     @classmethod
     def list_checkpoints(
-            cls, model_id: str) -> Optional[types.CheckpointsListResponse]:
-        run_dir = TrainingRunManager.get_model_dir(model_id)
+            cls, model_id: str, token: Optional[str] = None) -> Optional[types.CheckpointsListResponse]:
+        """
+        List checkpoints for a model with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            CheckpointsListResponse or None if model directory not found
+        """
+        run_dir = TrainingRunManager.get_model_dir(model_id, token)
         if not run_dir.exists():
             return None
 
@@ -221,7 +367,7 @@ class CheckpointManager(FileManager):
             for d in type_dir.iterdir():
                 if d.is_dir() and (d / CHECKPOINT_INFO_FILENAME).exists():
                     checkpoint_id = f"{weights_type}/{d.name}"
-                    ckpt = cls.get(model_id, checkpoint_id)
+                    ckpt = cls.get(model_id, checkpoint_id, token)
                     if ckpt:
                         checkpoints.append(ckpt)
 
@@ -232,12 +378,23 @@ class CheckpointManager(FileManager):
                                              cursor=None)
 
     @classmethod
-    def delete(cls, model_id: str, checkpoint_id: str) -> bool:
+    def delete(cls, model_id: str, checkpoint_id: str, token: Optional[str] = None) -> bool:
+        """
+        Delete a checkpoint with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
         # Basic safety check to prevent directory traversal
         if '..' in checkpoint_id:
             return False
 
-        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id)
+        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id, token)
 
         if ckpt_dir.exists():
             if ckpt_dir.is_dir():
@@ -249,18 +406,27 @@ class CheckpointManager(FileManager):
             # But finding true last requires listing all.
             # For simplicity, we can just clear it or leave it stale if acceptable.
             # To be correct:
-            all_ckpts = cls.list_checkpoints(model_id)
+            all_ckpts = cls.list_checkpoints(model_id, token)
             last_ckpt = all_ckpts.checkpoints[-1] if all_ckpts and all_ckpts.checkpoints else None
             TrainingRunManager.update(
                 model_id, {
                     'last_checkpoint':
                     last_ckpt.model_dump(mode='json') if last_ckpt else None
-                })
+                }, token)
             return True
         return False
 
     @classmethod
     def parse_tinker_path(cls, tinker_path: str) -> Optional[types.ParsedCheckpointTinkerPath]:
+        """
+        Parse a twinkle:// path into components.
+        
+        Args:
+            tinker_path: The twinkle:// path string
+            
+        Returns:
+            ParsedCheckpointTinkerPath or None if invalid format
+        """
         if not tinker_path.startswith("twinkle://"):
             return None
         parts = tinker_path[10:].split("/")
@@ -278,16 +444,26 @@ class CheckpointManager(FileManager):
 
     @classmethod
     def get_weights_info(cls,
-                         checkpoint_path: str) -> Optional[types.WeightsInfoResponse]:
+                         checkpoint_path: str, token: Optional[str] = None) -> Optional[types.WeightsInfoResponse]:
+        """
+        Get weights info with optional token-based isolation.
+        
+        Args:
+            checkpoint_path: The twinkle:// path
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            WeightsInfoResponse or None if not found
+        """
         tinker_path = cls.parse_tinker_path(checkpoint_path)
         if not tinker_path:
             return None
         ckpt_info = cls.get(tinker_path.training_run_id,
-                            tinker_path.checkpoint_id)
+                            tinker_path.checkpoint_id, token)
         if not ckpt_info:
             return None
         # weight info is stored in the training run info
-        run_info = TrainingRunManager._read_info(tinker_path.training_run_id)
+        run_info = TrainingRunManager._read_info(tinker_path.training_run_id, token)
         if not run_info:
             return None
         return types.WeightsInfoResponse(**run_info)

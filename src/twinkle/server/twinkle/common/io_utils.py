@@ -163,17 +163,54 @@ class TrainingRunManager(FileManager):
     """Manager for training run metadata and operations."""
 
     @staticmethod
-    def get_base_dir() -> Path:
-        return Path(TWINKLE_DEFAULT_SAVE_DIR)
+    def get_base_dir(token: str) -> Path:
+        """
+        Get base directory with token-based isolation.
+        
+        Token is REQUIRED for user isolation - each user has their own subdirectory.
+        
+        Args:
+            token: User's authentication token for directory isolation (REQUIRED)
+            
+        Returns:
+            Path to token-specific base directory
+        """
+        base_path = Path(TWINKLE_DEFAULT_SAVE_DIR)
+        # Sanitize token to avoid filesystem issues
+        sanitized_token = re.sub(r'[^\w\-]', '_', token)
+        return base_path / sanitized_token
 
     @staticmethod
-    def get_model_dir(model_id: str) -> Path:
-        return TrainingRunManager.get_base_dir() / model_id
+    def get_model_dir(model_id: str, token: str) -> Path:
+        """
+        Get model directory with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation (REQUIRED)
+            
+        Returns:
+            Path to model directory
+        """
+        return TrainingRunManager.get_base_dir(token) / model_id
 
     @staticmethod
-    def _read_info(model_id: str) -> Dict[str, Any]:
-        """Read training run metadata from disk."""
-        metadata_path = TrainingRunManager.get_model_dir(model_id) / TRAIN_RUN_INFO_FILENAME
+    def _read_info(model_id: str, token: str) -> Dict[str, Any]:
+        """
+        Read training run metadata from disk.
+        
+        Token is REQUIRED for user isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation (REQUIRED)
+            
+        Returns:
+            Dictionary with metadata or empty dict if not found
+        """
+        metadata_path = TrainingRunManager.get_model_dir(model_id, token) / TRAIN_RUN_INFO_FILENAME
         if not metadata_path.exists():
             return {}
         try:
@@ -183,9 +220,18 @@ class TrainingRunManager(FileManager):
             return {}
 
     @staticmethod
-    def _write_info(model_id: str, data: Dict[str, Any]):
-        """Write training run metadata to disk."""
-        model_dir = TrainingRunManager.get_model_dir(model_id)
+    def _write_info(model_id: str, data: Dict[str, Any], token: str):
+        """
+        Write training run metadata to disk.
+        
+        Token is REQUIRED for user isolation.
+        
+        Args:
+            model_id: The model identifier
+            data: Metadata to write
+            token: User's authentication token for directory isolation (REQUIRED)
+        """
+        model_dir = TrainingRunManager.get_model_dir(model_id, token)
         model_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = model_dir / TRAIN_RUN_INFO_FILENAME
         with open(metadata_path, 'w') as f:
@@ -194,7 +240,7 @@ class TrainingRunManager(FileManager):
     @classmethod
     def save(cls, model_id: str, run_config: CreateModelRequest, token: str):
         """
-        Save training run metadata.
+        Save training run metadata with token-based isolation.
         
         Args:
             model_id: Unique identifier for the model
@@ -222,67 +268,58 @@ class TrainingRunManager(FileManager):
             new_data['train_mlp'] = lora_config.train_mlp
             new_data['train_attn'] = lora_config.train_attn
 
-        cls._write_info(model_id, new_data)
+        cls._write_info(model_id, new_data, token)
 
     @classmethod
-    def get(cls, model_id: str) -> Optional[TrainingRun]:
-        """Get training run metadata by model_id."""
-        data = cls._read_info(model_id)
+    def get(cls, model_id: str, token: str) -> Optional[TrainingRun]:
+        """
+        Get training run metadata with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token for directory isolation (REQUIRED)
+            
+        Returns:
+            TrainingRun object or None if not found
+        """
+        data = cls._read_info(model_id, token)
         if not data:
             return None
         return TrainingRun(**data)
 
     @classmethod
-    def get_with_permission(cls, model_id: str, token: str) -> Optional[TrainingRun]:
+    def update(cls, model_id: str, updates: Dict[str, Any], token: str):
         """
-        Get training run metadata with ownership validation.
+        Update training run metadata with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
         
         Args:
             model_id: The model identifier
-            token: User's authentication token
-            
-        Returns:
-            TrainingRun if found and user owns it, None otherwise
+            updates: Dictionary of fields to update
+            token: User's authentication token for directory isolation (REQUIRED)
         """
-        run = cls.get(model_id)
-        if run and validate_ownership(token, run.model_owner):
-            return run
-        return None
-
-    @classmethod
-    def update(cls, model_id: str, updates: Dict[str, Any]):
-        """Update training run metadata."""
-        info = cls._read_info(model_id)
+        info = cls._read_info(model_id, token)
         if info:
             info.update(updates)
-            cls._write_info(model_id, info)
-
-    @classmethod
-    def update_with_permission(cls, model_id: str, updates: Dict[str, Any], token: str) -> bool:
-        """
-        Update training run metadata with ownership validation.
-        
-        Returns:
-            True if update succeeded, False if permission denied
-        """
-        run = cls.get(model_id)
-        if run and validate_ownership(token, run.model_owner):
-            cls.update(model_id, updates)
-            return True
-        return False
+            cls._write_info(model_id, info, token)
 
     @classmethod
     def list_runs(cls, limit: int = 20, offset: int = 0, 
-                  token: Optional[str] = None) -> TrainingRunsResponse:
+                  token: str = None) -> TrainingRunsResponse:
         """
-        List training runs with optional filtering by owner.
+        List training runs for a specific user.
+        
+        Token is REQUIRED to filter runs by owner.
         
         Args:
             limit: Maximum number of results
             offset: Offset for pagination
-            token: If provided, only return runs owned by this user
+            token: User's authentication token - only returns runs in this user's directory (REQUIRED)
         """
-        base_dir = cls.get_base_dir()
+        base_dir = cls.get_base_dir(token)
         if not base_dir.exists():
             return TrainingRunsResponse(
                 training_runs=[],
@@ -299,13 +336,12 @@ class TrainingRunManager(FileManager):
             reverse=True
         )
 
-        # Filter by owner if token provided
+        # All runs in the token directory belong to this user
         runs = []
         for d in candidates:
-            run = cls.get(d.name)
+            run = cls.get(d.name, token)
             if run:
-                if token is None or validate_ownership(token, run.model_owner):
-                    runs.append(run)
+                runs.append(run)
 
         total = len(runs)
         selected = runs[offset:offset + limit]
@@ -320,15 +356,36 @@ class CheckpointManager(FileManager):
     """Manager for checkpoint metadata and operations with permission control."""
 
     @staticmethod
-    def get_ckpt_dir(model_id: str, checkpoint_id: str) -> Path:
-        return TrainingRunManager.get_model_dir(model_id) / checkpoint_id
+    def get_ckpt_dir(model_id: str, checkpoint_id: str, token: Optional[str] = None) -> Path:
+        """
+        Get checkpoint directory with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Path to checkpoint directory
+        """
+        return TrainingRunManager.get_model_dir(model_id, token) / checkpoint_id
 
     @staticmethod
-    def get_save_dir(model_id: str, is_sampler: bool = False) -> str:
-        """Get the directory path for saving weights."""
+    def get_save_dir(model_id: str, token: str, is_sampler: bool = False) -> str:
+        """
+        Get save directory with token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            token: User's authentication token (required for isolation)
+            is_sampler: Whether this is for sampler weights
+            
+        Returns:
+            String path to save directory
+        """
         weights_type = 'sampler_weights' if is_sampler else 'weights'
         checkpoint_id = Path(model_id) / weights_type
-        save_path = Path(TWINKLE_DEFAULT_SAVE_DIR) / checkpoint_id
+        save_path = TrainingRunManager.get_base_dir(token) / checkpoint_id
         return save_path.as_posix()
 
     @staticmethod
@@ -341,9 +398,19 @@ class CheckpointManager(FileManager):
         return datetime.now().strftime('%Y%m%d_%H%M%S')
 
     @classmethod
-    def _read_ckpt_info(cls, model_id: str, checkpoint_id: str) -> Optional[Dict[str, Any]]:
-        """Read checkpoint metadata from disk."""
-        meta_path = cls.get_ckpt_dir(model_id, checkpoint_id) / CHECKPOINT_INFO_FILENAME
+    def _read_ckpt_info(cls, model_id: str, checkpoint_id: str, token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Read checkpoint metadata from disk with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation
+            
+        Returns:
+            Dictionary with checkpoint metadata or None if not found
+        """
+        meta_path = cls.get_ckpt_dir(model_id, checkpoint_id, token) / CHECKPOINT_INFO_FILENAME
         if not meta_path.exists():
             return None
         try:
@@ -353,9 +420,17 @@ class CheckpointManager(FileManager):
             return None
 
     @classmethod
-    def _write_ckpt_info(cls, model_id: str, checkpoint_id: str, data: Dict[str, Any]):
-        """Write checkpoint metadata to disk."""
-        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id)
+    def _write_ckpt_info(cls, model_id: str, checkpoint_id: str, data: Dict[str, Any], token: Optional[str] = None):
+        """
+        Write checkpoint metadata to disk with optional token-based isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            data: Checkpoint metadata to write
+            token: User's authentication token for directory isolation
+        """
+        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id, token)
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         meta_path = ckpt_dir / CHECKPOINT_INFO_FILENAME
         with open(meta_path, 'w') as f:
@@ -385,7 +460,7 @@ class CheckpointManager(FileManager):
         checkpoint_type = 'sampler' if is_sampler else 'training'
         checkpoint_id = f'{weights_type}/{name}'
         twinkle_path = f"twinkle://{model_id}/{checkpoint_id}"
-        checkpoint_path = cls.get_ckpt_dir(model_id, checkpoint_id)
+        checkpoint_path = cls.get_ckpt_dir(model_id, checkpoint_id, token)
         
         checkpoint = Checkpoint(
             checkpoint_id=checkpoint_id,
@@ -396,36 +471,44 @@ class CheckpointManager(FileManager):
             public=public
         )
         ckpt_data = checkpoint.model_dump(mode='json')
-        cls._write_ckpt_info(model_id, checkpoint.checkpoint_id, ckpt_data)
+        cls._write_ckpt_info(model_id, checkpoint.checkpoint_id, ckpt_data, token)
 
         # Update last_checkpoint in run info
-        TrainingRunManager.update(model_id, {'last_checkpoint': ckpt_data})
+        TrainingRunManager.update(model_id, {'last_checkpoint': ckpt_data}, token)
         return twinkle_path
 
     @classmethod
-    def get(cls, model_id: str, checkpoint_id: str) -> Optional[Checkpoint]:
-        """Get checkpoint metadata."""
-        data = cls._read_ckpt_info(model_id, checkpoint_id)
+    def get(cls, model_id: str, checkpoint_id: str, token: str) -> Optional[Checkpoint]:
+        """
+        Get checkpoint metadata with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            token: User's authentication token for directory isolation (REQUIRED)
+            
+        Returns:
+            Checkpoint object or None if not found
+        """
+        data = cls._read_ckpt_info(model_id, checkpoint_id, token)
         if not data:
             return None
         return Checkpoint(**data)
 
     @classmethod
-    def list_checkpoints(cls, model_id: str, token: Optional[str] = None) -> Optional[CheckpointsListResponse]:
+    def list_checkpoints(cls, model_id: str, token: str) -> Optional[CheckpointsListResponse]:
         """
-        List checkpoints for a training run.
+        List checkpoints for a training run with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
         
         Args:
             model_id: The model identifier
-            token: If provided, validate ownership before listing
+            token: User's authentication token (REQUIRED)
         """
-        # Validate ownership if token provided
-        if token:
-            run = TrainingRunManager.get(model_id)
-            if not run or not validate_ownership(token, run.model_owner):
-                return None
-        
-        run_dir = TrainingRunManager.get_model_dir(model_id)
+        run_dir = TrainingRunManager.get_model_dir(model_id, token)
         if not run_dir.exists():
             return None
 
@@ -438,7 +521,7 @@ class CheckpointManager(FileManager):
             for d in type_dir.iterdir():
                 if d.is_dir() and (d / CHECKPOINT_INFO_FILENAME).exists():
                     checkpoint_id = f"{weights_type}/{d.name}"
-                    ckpt = cls.get(model_id, checkpoint_id)
+                    ckpt = cls.get(model_id, checkpoint_id, token)
                     if ckpt:
                         checkpoints.append(ckpt)
 
@@ -450,26 +533,23 @@ class CheckpointManager(FileManager):
     @classmethod
     def delete(cls, model_id: str, checkpoint_id: str, token: str) -> bool:
         """
-        Delete a checkpoint with ownership validation.
+        Delete a checkpoint with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
         
         Args:
             model_id: The model identifier
             checkpoint_id: The checkpoint identifier
-            token: User's authentication token
+            token: User's authentication token (REQUIRED)
             
         Returns:
-            True if deleted successfully, False if permission denied or not found
+            True if deleted successfully, False if not found
         """
         # Basic safety check to prevent directory traversal
         if '..' in checkpoint_id:
             return False
-        
-        # Validate ownership
-        run = TrainingRunManager.get(model_id)
-        if not run or not validate_ownership(token, run.model_owner):
-            return False
 
-        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id)
+        ckpt_dir = cls.get_ckpt_dir(model_id, checkpoint_id, token)
 
         if ckpt_dir.exists():
             if ckpt_dir.is_dir():
@@ -478,12 +558,12 @@ class CheckpointManager(FileManager):
                 ckpt_dir.unlink()
 
             # Update last_checkpoint in run info
-            all_ckpts = cls.list_checkpoints(model_id)
+            all_ckpts = cls.list_checkpoints(model_id, token)
             last_ckpt = all_ckpts.checkpoints[-1] if all_ckpts and all_ckpts.checkpoints else None
             TrainingRunManager.update(
                 model_id, {
                     'last_checkpoint': last_ckpt.model_dump(mode='json') if last_ckpt else None
-                }
+                }, token
             )
             return True
         return False
@@ -507,29 +587,31 @@ class CheckpointManager(FileManager):
         )
 
     @classmethod
-    def get_weights_info(cls, checkpoint_path: str, token: Optional[str] = None) -> Optional[WeightsInfoResponse]:
+    def get_weights_info(cls, checkpoint_path: str, token: str) -> Optional[WeightsInfoResponse]:
         """
-        Get weights info with optional ownership validation.
+        Get weights info with token-based isolation.
+        
+        Token is REQUIRED for user isolation.
         
         Args:
             checkpoint_path: The twinkle:// path
-            token: If provided, validate ownership
+            token: User's authentication token (REQUIRED)
         """
         twinkle_path = cls.parse_twinkle_path(checkpoint_path)
         if not twinkle_path:
             return None
         
-        ckpt_info = cls.get(twinkle_path.training_run_id, twinkle_path.checkpoint_id)
+        ckpt_info = cls.get(twinkle_path.training_run_id, twinkle_path.checkpoint_id, token)
         if not ckpt_info:
             return None
         
         # Weight info is stored in the training run info
-        run_info = TrainingRunManager._read_info(twinkle_path.training_run_id)
+        run_info = TrainingRunManager._read_info(twinkle_path.training_run_id, token)
         if not run_info:
             return None
         
-        # Validate ownership if token provided
-        if token and not validate_ownership(token, run_info.get('model_owner', '')):
+        # Validate ownership (should already be enforced by token-based path, but double-check)
+        if not validate_ownership(token, run_info.get('model_owner', '')):
             return None
         
         return WeightsInfoResponse(

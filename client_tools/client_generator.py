@@ -610,20 +610,20 @@ class MultiLoraTransformersModel(TwinkleModel, PreTrainedModel):
         response.raise_for_status()
         return response.json()['result']
     
-    def save(self, output_dir: str, **kwargs):
+    def save(self, name: str, **kwargs):
         """Save model checkpoint."""
         response = http_post(
             url=f'{self.server_url}/save',
-            json_data={'output_dir': output_dir, 'adapter_name': self.adapter_name, **kwargs}
+            json_data={'name': name, 'adapter_name': self.adapter_name, **kwargs}
         )
         response.raise_for_status()
         return response.json()['result']
         
-    def load(self, input_dir: str, **kwargs):
+    def load(self, name: str, **kwargs):
         """Load model checkpoint."""
         response = http_post(
             url=f'{self.server_url}/load',
-            json_data={'input_dir': input_dir, 'adapter_name': self.adapter_name, **kwargs}
+            json_data={'name': name, 'adapter_name': self.adapter_name, **kwargs}
         )
         response.raise_for_status()
         return response.json()['result']

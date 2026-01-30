@@ -85,12 +85,30 @@ class TwinkleCompatTransformersModel(MultiLoraTransformersModel):
 
     @remote_function()
     def load(self, checkpoint_dir: str, **kwargs):
+        """
+        Load checkpoint with token-based isolation support.
+        
+        Args:
+            checkpoint_dir: The twinkle:// path to the checkpoint
+            **kwargs: Additional keyword arguments including optional 'token'
+        """
         # handle twinkle checkpoint format
         tinker_path = CheckpointManager.parse_tinker_path(checkpoint_dir)
         if not tinker_path:
             raise ValueError(f"Invalid twinkle checkpoint path: {checkpoint_dir}")
-        # check adapter files
-        weight_path = CheckpointManager.get_ckpt_dir(tinker_path.training_run_id, tinker_path.checkpoint_id)
+        
+        # Extract token from kwargs if provided (for user isolation)
+        token = kwargs.get('token', None)
+        
+        # check adapter files with token-based path
+        weight_path = CheckpointManager.get_ckpt_dir(
+            tinker_path.training_run_id, 
+            tinker_path.checkpoint_id,
+            token
+        )
+        if not weight_path or not weight_path.exists():
+            raise ValueError(f"Checkpoint not found at {weight_path}")
+        
         if (weight_path / 'adapter_config.json').exists():
             return super().load(name=weight_path.name, output_dir=weight_path.parent, **kwargs)
         elif (weight_path / tinker_path.training_run_id / 'adapter_config.json').exists():

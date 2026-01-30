@@ -177,7 +177,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         return self.multi_adapter.get_state_dict(kwargs.get("adapter_name"))
 
     @remote_function()
-    def save(self, name, output_dir=None, interval=1, **kwargs):
+    def save(self, name, output_dir: Optional[str] = None, interval=1, **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
         with self.multi_adapter.save_context(kwargs.get("adapter_name")):
             return super().save(name, output_dir, interval, **kwargs)

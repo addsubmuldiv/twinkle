@@ -66,7 +66,7 @@ class TwinkleClient:
         self,
         base_url: str = None,
         api_key: str = None,
-        route_prefix: Optional[str] = None
+        route_prefix: Optional[str] = 'server'
     ):
         self.base_url = base_url
         self.api_key = api_key

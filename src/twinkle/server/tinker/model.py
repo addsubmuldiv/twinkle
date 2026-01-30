@@ -287,12 +287,16 @@ def build_model_app(model_id: str,
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
                     self.assert_adapter_exists(adapter_name=adapter_name)
+                    
+                    # Extract token from request for user isolation
+                    token = request.state.token
 
-                    # get save dir
+                    # get save dir with token-based isolation
                     checkpoint_name = CheckpointManager.get_ckpt_name(
                         body.path)
                     save_dir = CheckpointManager.get_save_dir(
                         model_id=body.model_id,
+                        token=token,
                         is_sampler=False
                     )
 
@@ -302,7 +306,7 @@ def build_model_app(model_id: str,
                                     save_optimizer=True)
 
                     tinker_path = CheckpointManager.save(
-                        body.model_id, name=checkpoint_name, is_sampler=False)
+                        body.model_id, name=checkpoint_name, token=token, is_sampler=False)
 
                     return types.SaveWeightsResponse(path=tinker_path,
                                                      type='save_weights')
@@ -329,11 +333,17 @@ def build_model_app(model_id: str,
                     adapter_name = self.get_adapter_name(
                         request, adapter_name=body.model_id)
                     self.assert_adapter_exists(adapter_name=adapter_name)
+                    
+                    # Extract token from request for user isolation
+                    token = request.state.token
+                    
                     weight_path = body.path
                     load_optimizer = body.optimizer
+                    
                     self.model.load(checkpoint_dir=weight_path,
                                     load_optimizer=load_optimizer,
-                                    adapter_name=adapter_name)
+                                    adapter_name=adapter_name,
+                                    token=token)
                     return types.LoadWeightsResponse(path=body.path,
                                                      type='load_weights')
                 except Exception:

@@ -3,7 +3,7 @@ os.environ['RAY_DEBUG'] = '1'
 import ray
 from omegaconf import OmegaConf
 from ray import serve
-from twinkle.server import build_processor_app, build_sampler_app, build_model_app
+from twinkle.server import build_processor_app, build_sampler_app, build_model_app, build_server_app
 
 ray.init()
 serve.shutdown()
@@ -17,13 +17,14 @@ APP_BUILDERS = {
     'main:model_qwen25_7B': build_model_app,
     # 'main:build_sampler_app': build_sampler_app,
     'main:processor_app': build_processor_app,
+    'main:build_server_app': build_server_app,
 }
 
 for app_config in config.applications:
     print(f"Starting {app_config.name} at {app_config.route_prefix}...")
 
     builder = APP_BUILDERS[app_config.import_path]
-    args = OmegaConf.to_container(app_config.args, resolve=True)
+    args = OmegaConf.to_container(app_config.args, resolve=True) if app_config.args else {}
 
     deploy_options = {}
     deploy_config = app_config.deployments[0]
@@ -33,10 +34,8 @@ for app_config in config.applications:
         deploy_options['ray_actor_options'] = OmegaConf.to_container(deploy_config.ray_actor_options)
 
     app = builder(
-        device_group=args['device_group'],
-        device_mesh=args['device_mesh'],
         deploy_options=deploy_options,
-        **{k: v for k, v in args.items() if k not in ('device_group', 'device_mesh')}
+        **{k: v for k, v in args.items()}
     )
 
     serve.run(app, name=app_config.name, route_prefix=app_config.route_prefix)

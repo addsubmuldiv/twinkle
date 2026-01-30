@@ -38,7 +38,8 @@ def build_processor_app(nproc_per_node: int,
                         ncpu_proc_per_node:int,
                         device_group: Dict[str, Any],
                         device_mesh: Dict[str, Any],
-                        deploy_options: Dict[str, Any]):
+                        deploy_options: Dict[str, Any],
+                        **kwargs):
     app = FastAPI()
 
     @app.middleware("http")
