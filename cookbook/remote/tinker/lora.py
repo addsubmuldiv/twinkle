@@ -3,7 +3,7 @@ import dotenv
 dotenv.load_dotenv(".env")
 
 from twinkle_client import init_tinker_compat_client
-service_client = init_tinker_compat_client(base_url='http://localhost:8000')
+service_client = init_tinker_compat_client(base_url=os.environ['EAS_URL'])
 
 print("Available models:")
 for item in service_client.get_server_capabilities().supported_models:
