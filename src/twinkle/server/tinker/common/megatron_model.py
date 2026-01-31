@@ -10,19 +10,19 @@ from .io_utils import create_checkpoint_manager
 
 
 def _collect_forward_backward_results(results):
-    """Custom collect function for forward_backward that handles tuple (outputs, loss).
+    """Custom collect function for forward_backward that handles list [outputs, loss].
     
     Args:
-        results: List of tuples from each worker, where each tuple is (outputs_list, loss_float)
+        results: List of lists from each worker, where each list is [outputs_list, loss_float]
         
     Returns:
-        Tuple of (flattened_outputs, averaged_loss)
+        List of [flattened_outputs, averaged_loss]
     """
     if not results:
         return results
     
-    # results is a list of tuples: [(outputs1, loss1), (outputs2, loss2), ...]
-    # Flatten outputs (first element of each tuple)
+    # results is a list of lists: [[outputs1, loss1], [outputs2, loss2], ...]
+    # Flatten outputs (first element of each list)
     all_outputs = []
     all_losses = []
     for result in results:
@@ -33,7 +33,7 @@ def _collect_forward_backward_results(results):
     # Average the losses
     avg_loss = float(np.mean(all_losses))
     
-    return all_outputs, avg_loss
+    return [all_outputs, avg_loss]
 
 
 @remote_class(execute='all')
@@ -63,7 +63,7 @@ class TwinkleCompatMegatronModel(MultiLoraMegatronModel):
     This wrapper provides a direct forward_backward interface.
     """
 
-    @remote_function(dispatch='slice_dp', collect=_collect_forward_backward_results)
+    @remote_function(dispatch='slice_dp', collect=_collect_forward_backward_results, sync=True)
     def forward_backward(self, *, inputs: List[types.Datum], **kwargs):
         """Combined forward and backward pass.
         
@@ -101,7 +101,7 @@ class TwinkleCompatMegatronModel(MultiLoraMegatronModel):
         else:
             loss = float(loss)
             
-        return results, loss
+        return [results, loss]
 
     @remote_function(dispatch='slice_dp', collect='flatten')
     def forward_only(self, *, inputs: List[types.Datum], **kwargs):
