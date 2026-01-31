@@ -64,7 +64,7 @@ class MultiLora(Patch):
     def adapter(self, tenant_adapter_name: str):
         self.activate_adapter(tenant_adapter_name)
         yield self.find_lora_by_tenant(tenant_adapter_name).adapter_name
-        self.deactivate_adapter()
+        # self.deactivate_adapter()
     
     @contextmanager
     def save_context(self, tenant_adapter_name: str):
@@ -360,21 +360,21 @@ class MultiLora(Patch):
 
                 # Expand target_modules (e.g., 'all-linear' -> actual module names)
                 _config = deepcopy(config)
-                if _config.target_modules:
-                    if isinstance(_config.target_modules, str):
-                        target_modules = [_config.target_modules]
-                    else:
-                        target_modules = list(_config.target_modules)
-
-                    from .megatron.tuners.utils import get_target_modules
-                    expanded_modules = get_target_modules(_module, target_modules)
-                    _config.target_modules = expanded_modules
 
                 from .megatron.tuners.utils import patch_deepcopy
                 with patch_deepcopy():
                     if isinstance(_module, PeftModel):
                         _module.add_adapter(lora_tenant.adapter_name, _config)
                     else:
+                        if _config.target_modules:
+                            if isinstance(_config.target_modules, str):
+                                target_modules = [_config.target_modules]
+                            else:
+                                target_modules = list(_config.target_modules)
+
+                            from .megatron.tuners.utils import get_target_modules
+                            expanded_modules = get_target_modules(_module, target_modules)
+                            _config.target_modules = expanded_modules
                         _module = get_peft_model(_module, _config, lora_tenant.adapter_name)
 
                     for name, submodule in _module.named_modules():

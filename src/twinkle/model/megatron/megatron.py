@@ -319,7 +319,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         # Check actual sequence_parallel setting from model config
         # Bridge may auto-enable sequence_parallel for MoE models
         if self.variable_seq_lengths:
-            seq_length = None
+            seq_length = 4096
         else:
             original_seq_length = inputs[0]['input_ids'].shape[1]
             if cp_size > 1:

@@ -106,8 +106,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
             return super().clip_grad_norm(max_grad_norm, norm_type=norm_type, **kwargs)
 
     def _create_param_group(self, adapter_name: str, lr: float = 1e-5, weight_decay: float = 0.01, **kwargs):
-        with self.multi_adapter.adapter(adapter_name) as adapter_name:
-            return super()._create_param_group(adapter_name=adapter_name, lr=lr, weight_decay=weight_decay, **kwargs)
+        return super()._create_param_group(adapter_name=adapter_name, lr=lr, weight_decay=weight_decay, **kwargs)
 
     @remote_function()
     def step(self, **kwargs):
@@ -225,3 +224,8 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     def _get_trainable_parameters_example(self, adapter_name, model):
         with self.multi_adapter.adapter(adapter_name):
             return self.multi_adapter.get_trainable_parameters_example(adapter_name)
+    
+    def _get_trainable_parameters(self, adapter_name):
+        with self.multi_adapter.adapter(adapter_name) as real_adapter_name:
+            return super()._get_trainable_parameters(real_adapter_name)
+

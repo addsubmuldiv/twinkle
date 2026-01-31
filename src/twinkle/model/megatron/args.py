@@ -595,6 +595,7 @@ class TwinkleMegatronArgs:
             num_query_groups=num_query_groups,
             kv_channels=kv_channels,
             ffn_hidden_size=ffn_hidden_size,
+            moe_token_dispatcher_type='alltoall' if self.variable_seq_lengths else 'allgather',
             tensor_model_parallel_size=self.tp_size,
             pipeline_model_parallel_size=self.pp_size,
             context_parallel_size=self.cp_size,

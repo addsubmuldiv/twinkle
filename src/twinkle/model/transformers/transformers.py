@@ -68,13 +68,13 @@ class OptimizerGroup:
         if self._device_mesh.data_world_size > 1:
             self._dp_group = self._device_mesh.create_process_group(['dp', 'fsdp'])
         self.train_metrics = [
-            LossMetric(self._device_mesh, self._dp_group),
+            LossMetric(self._device_mesh, self._dp_group, loss_reduction='sum'),
             Accuracy(self._device_mesh, self._dp_group),
             TrainMetric(self._device_mesh, self._dp_group),
         ]
 
         self.eval_metrics = [
-            LossMetric(self._device_mesh, self._dp_group),
+            LossMetric(self._device_mesh, self._dp_group, loss_reduction='sum'),
             Accuracy(self._device_mesh, self._dp_group),
             TrainMetric(self._device_mesh, self._dp_group),
         ]

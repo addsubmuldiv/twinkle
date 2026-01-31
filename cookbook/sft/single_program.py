@@ -6,7 +6,7 @@ from twinkle import Platform, DeviceMesh
 from twinkle import get_device_placement, get_logger
 from twinkle.dataloader import DataLoader
 from twinkle.dataset import Dataset, DatasetMeta, LazyDataset, PackingDataset, IterableDataset, IterablePackingDataset
-from twinkle.model import TransformersModel
+from twinkle.model import TransformersModel, MultiLoraTransformersModel
 from twinkle.preprocessor import SelfCognitionProcessor
 if Platform.get_rank() == 0:
     import swanlab
@@ -16,7 +16,7 @@ if Platform.get_rank() == 0:
         project="TransformersModel",
     )
 
-device_mesh = DeviceMesh.from_sizes(dp_size=2, fsdp_size=2)
+device_mesh = DeviceMesh.from_sizes(dp_size=2)
 
 twinkle.initialize(mode='local', global_device_mesh=device_mesh)
 
@@ -42,9 +42,9 @@ def train():
     dataset.map(SelfCognitionProcessor('swift-robot', 'swift'))
     dataset.encode(batched=True)
     # dataset.pack_dataset()
-    dataloader = DataLoader(dataset=dataset, batch_size=4, num_workers=4)
+    dataloader = DataLoader(dataset=dataset, batch_size=2, num_workers=4)
 
-    model = TransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
+    model = MultiLoraTransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
 
     lora_config = LoraConfig(
         r=8,
