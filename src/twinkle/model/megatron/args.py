@@ -77,6 +77,7 @@ class TwinkleMegatronArgs:
     vocab_size: Optional[int] = None
     padded_vocab_size: Optional[int] = None
     kv_channels: Optional[int] = None  # head_dim
+    variable_seq_lengths: bool = True
     
     # =========================================================================
     # Parallelism settings
@@ -606,6 +607,7 @@ class TwinkleMegatronArgs:
             pipeline_dtype=self.params_dtype,  # Required when using pipeline parallelism
             use_cpu_initialization=self.use_cpu_initialization,
             add_qkv_bias=self.add_qkv_bias,
+            variable_seq_lengths=self.variable_seq_lengths,
             add_bias_linear=not mg_config_dict.get('disable_bias_linear',
                                                    True),
             gated_linear_unit=use_swiglu,

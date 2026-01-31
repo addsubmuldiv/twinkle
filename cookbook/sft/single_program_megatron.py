@@ -1,8 +1,7 @@
+import os
+os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
 from peft import LoraConfig
 import twinkle
-import os
-import numpy as np
-import torch
 from tqdm import tqdm
 from twinkle import DeviceMesh, Platform
 from twinkle import get_device_placement, get_logger
