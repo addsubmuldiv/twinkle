@@ -16,7 +16,7 @@ from twinkle.server.twinkle.common.validation import verify_request_token
 from twinkle.server.twinkle.common.state import get_server_state, ServerStateProxy, schedule_task
 from twinkle.utils.logger import get_logger
 
-from .common import TwinkleCompatTransformersModel
+from .common import TwinkleCompatTransformersModel, TwinkleCompatMegatronModel
 from .common.io_utils import create_training_run_manager, create_checkpoint_manager
 
 logger = get_logger()
@@ -26,7 +26,9 @@ def build_model_app(model_id: str,
                     nproc_per_node: int, 
                     device_group: Dict[str, Any],
                     device_mesh: Dict[str, Any],
-                    deploy_options: Dict[str, Any], **kwargs):
+                    deploy_options: Dict[str, Any],
+                    use_megatron: bool = False,
+                    **kwargs):
     app = FastAPI()
 
     @app.middleware('http')
@@ -40,20 +42,29 @@ def build_model_app(model_id: str,
         COUNT_DOWN = 60 * 30
 
         def __init__(self, nproc_per_node: int, device_group: Dict[str, Any],
-                     device_mesh: Dict[str, Any], **kwargs):
+                     device_mesh: Dict[str, Any], use_megatron: bool = False, **kwargs):
             self.device_group = DeviceGroup(**device_group)
             twinkle.initialize(mode='ray',
                                nproc_per_node=nproc_per_node,
                                groups=[self.device_group],
                                lazy_collect=False)
             self.device_mesh = DeviceMesh(**device_mesh)
-            # Initialize model immediately
-            self.model = TwinkleCompatTransformersModel(
-                model_id=model_id,
-                device_mesh=self.device_mesh,
-                remote_group=self.device_group.name,
-                **kwargs
-            )
+            self.use_megatron = use_megatron
+            # Initialize model immediately - choose backend based on use_megatron
+            if use_megatron:
+                self.model = TwinkleCompatMegatronModel(
+                    model_id=model_id,
+                    device_mesh=self.device_mesh,
+                    remote_group=self.device_group.name,
+                    **kwargs
+                )
+            else:
+                self.model = TwinkleCompatTransformersModel(
+                    model_id=model_id,
+                    device_mesh=self.device_mesh,
+                    remote_group=self.device_group.name,
+                    **kwargs
+                )
             self.adapter_records: Dict[str, int] = {}
             self.hb_thread = threading.Thread(target=self.countdown,
                                               daemon=True)
@@ -235,11 +246,19 @@ def build_model_app(model_id: str,
                     datum_list = body.forward_backward_input.data
                     loss_fn_config = body.forward_backward_input.loss_fn_config or {}
 
-                    output = self.model.forward(inputs=datum_list,
-                                                adapter_name=adapter_name)
-                    loss = self.model.calculate_loss(adapter_name=adapter_name,
-                                                     **loss_fn_config)
-                    self.model.backward(adapter_name=adapter_name)
+                    if self.use_megatron:
+                        # Megatron uses combined forward_backward, no separate backward/calculate_loss
+                        output, loss = self.model.forward_backward(
+                            inputs=datum_list,
+                            adapter_name=adapter_name,
+                            **loss_fn_config)
+                    else:
+                        # Transformers uses separate forward, calculate_loss, backward
+                        output = self.model.forward(inputs=datum_list,
+                                                    adapter_name=adapter_name)
+                        loss = self.model.calculate_loss(adapter_name=adapter_name,
+                                                         **loss_fn_config)
+                        self.model.backward(adapter_name=adapter_name)
                     return types.ForwardBackwardOutput(
                         loss_fn_output_type='CrossEntropyLossReturn',
                         loss_fn_outputs=output,
@@ -361,4 +380,4 @@ def build_model_app(model_id: str,
                                        model_id=body.model_id)
 
     return ModelManagement.options(**deploy_options).bind(
-        nproc_per_node, device_group, device_mesh, **kwargs)
+        nproc_per_node, device_group, device_mesh, use_megatron, **kwargs)
