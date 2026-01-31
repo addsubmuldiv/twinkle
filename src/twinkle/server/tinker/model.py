@@ -140,7 +140,7 @@ def build_model_app(model_id: str,
                                              adapter_name=adapter_name)
                     self.model.set_loss('CrossEntropyLoss',
                                         adapter_name=adapter_name)
-                    self.model.set_optimizer('AdamW',
+                    self.model.set_optimizer('Adam',
                                              adapter_name=adapter_name)
 
                 training_run_manager = create_training_run_manager(request.state.token)

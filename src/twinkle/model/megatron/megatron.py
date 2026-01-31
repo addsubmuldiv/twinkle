@@ -618,7 +618,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             self._model_wrapped = True
 
         # Check if requesting Megatron distributed optimizer
-        if not optimizer_cls or optimizer_cls in ('MegatronDistributedOptimizer', 'default'):
+        if not optimizer_cls or optimizer_cls in ('MegatronDistributedOptimizer', 'default', 'Adam'):
             optimizer_config.optimizer = self._create_megatron_optimizer(**kwargs) # noqa
         else:
             raise NotImplementedError(f'Unsupported optimizer: {optimizer_cls}, only support MegatronOptimizer currently.')
