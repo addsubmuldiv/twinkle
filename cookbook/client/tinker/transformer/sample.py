@@ -11,12 +11,16 @@ sampling_client = service_client.create_sampling_client(
     base_model=base_model)
 
 
+print(f"Using model {base_model}")
 tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
 # First, create a sampling client. We need to transfer weights
 
 # Now, we can sample from the model.
 prompt = types.ModelInput.from_ints(tokenizer.encode("English: coffee break\nPig Latin:"))
 params = types.SamplingParams(max_tokens=20, temperature=0.0, stop=["\n"]) # Greedy sampling
+
+print("Sampling...")
+# TODO: not support num_samples
 future = sampling_client.sample(prompt=prompt, sampling_params=params, num_samples=8)
 result = future.result()
 print("Responses:")
