@@ -778,9 +778,10 @@ class MegatronModel(TwinkleModel, nn.Module):
         if output_dir is None:
             output_dir = 'output'
         checkpoint_dir = os.path.join(output_dir, name)
+        adapter_name = kwargs.get('adapter_name')
         bridge = self._bridge
         for _model in self.strategy.unwrap_model(self.model):
-            bridge.load_weights(_model, checkpoint_dir)
+            bridge.load_weights(_model, checkpoint_dir, is_peft_format = (adapter_name != _default_adapter_name))
 
         if dist.is_initialized():
             dist.barrier()

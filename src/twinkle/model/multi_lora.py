@@ -312,11 +312,11 @@ class MultiLora(Patch):
                             lora_A, TEGroupedLinear) else lora_A.weight.dtype
                         x = x.to(dtype)
 
-                        lora_result = _lora_A(dropout(x))
+                        lora_result = _lora_A(dropout(x), *args, **kwargs)
                         if isinstance(lora_result, tuple):
                             lora_result = lora_result[0]
 
-                        lora_result = _lora_B(lora_result)
+                        lora_result = _lora_B(lora_result, *args, **kwargs)
                         if isinstance(lora_result, tuple):
                             lora_result = lora_result[0]
 
