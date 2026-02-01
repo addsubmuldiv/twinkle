@@ -21,7 +21,7 @@ for run in runs:
 
     for checkpoint in checkpoints:
         logger.info(checkpoint.model_dump_json(indent=2))
-        resume_path = checkpoint.twinkle_path
+        # resume_path = checkpoint.twinkle_path
 def train():
     dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition'))
     dataset.set_template('Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct', max_length=512)
@@ -40,9 +40,10 @@ def train():
     model.set_processor('InputProcessor', padding_side='right')
     # not set loss for megatron model
     model.set_optimizer('default', lr=1e-4)
-    model.set_lr_scheduler('default')
+    model.set_lr_scheduler('default', lr_decay_steps=1000, max_lr=1e-4)
     # Resume training if resume_path is provided
     if resume_path:
+        logger.info(f'Resuming training from {resume_path}')
         model.load(resume_path, load_optimizer=True)
     logger.info(model.get_train_configs())
     for step, batch in enumerate(dataloader):
