@@ -38,8 +38,6 @@ def build_server_app(
                 types.SupportedModel(model_name="Qwen/Qwen2.5-7B-Instruct"),
                 types.SupportedModel(model_name="Qwen/Qwen2.5-72B-Instruct"),
             ]
-            # sampling engine instance
-            self.sampler = kwargs.get("sampler", None)
 
         def _validate_base_model(self, base_model: str) -> None:
             """Validate that base_model is in supported_models list."""
@@ -169,6 +167,7 @@ def build_server_app(
             Otherwise, it proxies the request to the sampler service.
             """
             # Try to proxy to sampler service if model_path is provided
+            base_model = None
             if body.model_path:
                 # Extract base_model from model_path (twinkle://{model_id}/...)
                 base_model = self._get_base_model(body.model_path)
