@@ -66,7 +66,7 @@ class MegatronOptimizerGroup:
         """Check if gradient synchronization should happen."""
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
+        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 1
 
 
     def __post_init__(self):
@@ -129,7 +129,6 @@ class MegatronModel(TwinkleModel, nn.Module):
     ):
         requires('megatron_core')
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
-        os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         nn.Module.__init__(self)
         from twinkle.patch.megatron_peft import MegatronPeft
 
@@ -144,7 +143,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         self._seed = kwargs.pop('seed', None) or int(os.environ.get('TWINKLE_SEED', 42))
         self._default_tokenizer = None
         self.use_distributed_optimizer = kwargs.get('use_distributed_optimizer', True)
-        self.variable_seq_lengths = kwargs.get('variable_seq_lengths', False)
+        self.variable_seq_lengths = kwargs.get('variable_seq_lengths', True)
         torch_util.set_device()
 
         self.strategy = MegatronStrategy(self.device_mesh, mixed_precision=mixed_precision, **kwargs)
@@ -310,21 +309,18 @@ class MegatronModel(TwinkleModel, nn.Module):
         processor: InputProcessor = optimizer_config.processor
         assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
 
-        vpp_size = self.device_mesh.vpp_size
-        if vpp_size is None or vpp_size == 1:
-            inputs = [processor(inputs)]
-            micro_batch_size = inputs[0]['input_ids'].shape[0]
-        else:
-            if micro_batch_size is None:
-                micro_batch_size = 1
-            inputs = processor(inputs, micro_batch_size=micro_batch_size, variable_seq_lengths=self.variable_seq_lengths)
+        if micro_batch_size is None:
+            assert len(inputs) >= optimizer_config.gradient_accumulation_steps and len(inputs) % optimizer_config.gradient_accumulation_steps == 0
+            micro_batch_size = len(inputs) // optimizer_config.gradient_accumulation_steps
+        processor.use_megatron = True
+        inputs = processor(inputs, micro_batch_size=micro_batch_size, variable_seq_lengths=self.variable_seq_lengths)
 
         # Get parallelism settings for sequence padding and splitting
         cp_size = self.device_mesh.cp_world_size
         # Check actual sequence_parallel setting from model config
         # Bridge may auto-enable sequence_parallel for MoE models
         if self.variable_seq_lengths:
-            seq_length = None
+            seq_length = 4096
         else:
             original_seq_length = inputs[0]['input_ids'].shape[1]
             if cp_size > 1:
@@ -340,8 +336,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 seq_length = original_seq_length
 
         def post_loss_function(output_tensor, inputs):
-            outputs = {}
-            outputs['logits'] = output_tensor
+            outputs = {'logits': output_tensor}
             losses, counts = loss_instance(inputs, outputs)
             return self.strategy.gather_loss_for_cp(losses, counts, output_tensor)
 

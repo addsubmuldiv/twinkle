@@ -1,15 +1,16 @@
-from peft import LoraConfig
-import twinkle
 import os
-import numpy as np
-import torch
+os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+
 from tqdm import tqdm
+
+import twinkle
 from twinkle import DeviceMesh, Platform
 from twinkle import get_device_placement, get_logger
 from twinkle.dataloader import DataLoader
-from twinkle.dataset import Dataset, DatasetMeta, LazyDataset, PackingDataset, IterableDataset, IterablePackingDataset
-from twinkle.model import MultiLoraMegatronModel, MegatronModel
+from twinkle.dataset import Dataset, DatasetMeta
+from twinkle.model import MegatronModel
 from twinkle.preprocessor import SelfCognitionProcessor
+
 if Platform.get_rank() == 0:
     import swanlab
     swanlab.login(api_key=os.environ['SWANLAB_API_KEY'], save=True)

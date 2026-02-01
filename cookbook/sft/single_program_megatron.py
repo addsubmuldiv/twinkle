@@ -1,8 +1,7 @@
+import os
+os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
 from peft import LoraConfig
 import twinkle
-import os
-import numpy as np
-import torch
 from tqdm import tqdm
 from twinkle import DeviceMesh, Platform
 from twinkle import get_device_placement, get_logger
@@ -19,7 +18,7 @@ if Platform.get_rank() == 0:
     )
 
 
-device_mesh = DeviceMesh.from_sizes(pp_size=2, dp_size=2, tp_size=2, cp_size=2)
+device_mesh = DeviceMesh.from_sizes(pp_size=2, tp_size=2)
 twinkle.initialize(mode='local', global_device_mesh=device_mesh)
 
 logger = get_logger()
@@ -39,12 +38,12 @@ def eval(model):
     return metrics
 
 def train():
-    dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition', data_slice=range(2000)))
+    dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition', data_slice=range(100)))
     dataset.set_template('Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct', max_length=512)
     dataset.map(SelfCognitionProcessor('twinkle模型', 'twinkle团队'))
     dataset.encode(batched=True)
     # dataset.pack_dataset()
-    dataloader = DataLoader(dataset=dataset, batch_size=16, num_workers=0)
+    dataloader = DataLoader(dataset=dataset, batch_size=4, num_workers=0)
 
     model = MultiLoraMegatronModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct', mixed_precision='bf16', recompute_granularity='full', recompute_method='uniform', recompute_num_layers=1)
 
@@ -85,7 +84,7 @@ def train():
         #        model.save(f'checkpoint-{step}')
         #        loss_metric = float(metrics['loss'])
     model.save(f'last-checkpoint', adapter_name='default')
-    # model.load(f'last-checkpoint', adapter_name='default')
+    model.load(f'last-checkpoint', adapter_name='default')
     # model.remove_adapter(adapter_name='default')
 
 

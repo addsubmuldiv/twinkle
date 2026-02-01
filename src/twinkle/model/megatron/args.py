@@ -77,6 +77,7 @@ class TwinkleMegatronArgs:
     vocab_size: Optional[int] = None
     padded_vocab_size: Optional[int] = None
     kv_channels: Optional[int] = None  # head_dim
+    variable_seq_lengths: bool = True
     
     # =========================================================================
     # Parallelism settings
@@ -452,7 +453,7 @@ class TwinkleMegatronArgs:
         from megatron.core import parallel_state as mpu
         from megatron.core.transformer import TransformerConfig
         from megatron.core.transformer.enums import AttnBackend
-        from megatron.core.models.gpt import GPTModel
+        from .model.gpt_model import GPTModel
         from megatron.core.models.gpt.gpt_layer_specs import (
             get_gpt_layer_with_transformer_engine_spec, )
         from .model.register import get_megatron_model_meta
@@ -488,7 +489,7 @@ class TwinkleMegatronArgs:
         # For PEFT/LoRA models, we use a custom implementation that handles non-DDP models.
         from megatron.core.distributed import finalize_model_grads as _native_finalize_model_grads
 
-        def finalize_model_grads_for_lora(model, num_tokens=None, **kwargs):
+        def finalize_model_grads_for_lora(model, *args, **kwargs):
             from peft import PeftModel as _PeftModel
             from megatron.core.distributed import DistributedDataParallel as MegatronDDP
             
@@ -502,7 +503,7 @@ class TwinkleMegatronArgs:
             base_model = _get_base_model(model[0])
             if isinstance(base_model, MegatronDDP) or hasattr(base_model, 'ddp_config'):
                 # Use native implementation for DDP models
-                return _native_finalize_model_grads(model, num_tokens, **kwargs)
+                return _native_finalize_model_grads(model, *args, **kwargs)
 
             return
 
@@ -591,6 +592,7 @@ class TwinkleMegatronArgs:
             num_query_groups=num_query_groups,
             kv_channels=kv_channels,
             ffn_hidden_size=ffn_hidden_size,
+            moe_token_dispatcher_type='alltoall' if self.variable_seq_lengths else 'allgather',
             tensor_model_parallel_size=self.tp_size,
             pipeline_model_parallel_size=self.pp_size,
             context_parallel_size=self.cp_size,
@@ -603,6 +605,7 @@ class TwinkleMegatronArgs:
             pipeline_dtype=self.params_dtype,  # Required when using pipeline parallelism
             use_cpu_initialization=self.use_cpu_initialization,
             add_qkv_bias=self.add_qkv_bias,
+            variable_seq_lengths=self.variable_seq_lengths,
             add_bias_linear=not mg_config_dict.get('disable_bias_linear',
                                                    True),
             gated_linear_unit=use_swiglu,
