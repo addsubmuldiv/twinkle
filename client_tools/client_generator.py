@@ -645,6 +645,24 @@ class MultiLoraTransformersModel(TwinkleModel, PreTrainedModel):
         )
         response.raise_for_status()
         return response.json()['result']
+
+    def calculate_metric(self, is_training: bool = True, **kwargs):
+        """Calculate metrics from model outputs."""
+        response = http_post(
+            url=f'{self.server_url}/calculate_metric',
+            json_data={'is_training': is_training, 'adapter_name': self.adapter_name, **kwargs}
+        )
+        response.raise_for_status()
+        return response.json()['result']
+
+    def get_state_dict(self, **kwargs):
+        """Get model state dictionary."""
+        response = http_post(
+            url=f'{self.server_url}/get_state_dict',
+            json_data={'adapter_name': self.adapter_name, **kwargs}
+        )
+        response.raise_for_status()
+        return response.json()['result']
 '''
 
     # Write the model client file
