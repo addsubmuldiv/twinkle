@@ -316,6 +316,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         outputs = optimizer_config.outputs
         assert inputs is not None and outputs is not None, 'Cannot calculate loss of empty inputs and outputs'
         loss_value: torch.Tensor = loss_instance(inputs, outputs, **kwargs)
+        if self.sp_strategy is not None and 'labels' in inputs:
+            loss_value = self.sp_strategy.reduce_loss(loss_value, inputs['labels'])
         optimizer_config.loss_value = loss_value
         return loss_value.item()
 
