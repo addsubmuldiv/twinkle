@@ -1,8 +1,22 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import Union, List, Optional, Dict, Any
+from dataclasses import dataclass
+from typing import Union, List, Optional, Dict, Any, Literal
 import numpy as np
+import torch
+from twinkle import torch_util
 from twinkle import Platform, DeviceMesh, remote_class, remote_function
-from twinkle.data_format import InputFeature, to_transformers_dict
+from twinkle.data_format import InputFeature
+
+
+@dataclass
+class PackedSeqParams:
+    qkv_format: str = None
+    cu_seqlens_q: torch.Tensor = None
+    cu_seqlens_kv: torch.Tensor = None
+    cu_seqlens_q_padded: torch.Tensor = None
+    cu_seqlens_kv_padded: torch.Tensor = None
+    max_seqlen_q: int = None
+    max_seqlen_kv: int = None
 
 
 @remote_class()
@@ -34,11 +48,13 @@ class InputProcessor:
 
     def __init__(self, device_mesh: Optional[DeviceMesh] = None,
                  padding_free: bool = False,
+                 framework: Literal['transformers', 'megatron'] = 'transformers',
                  **kwargs):
         self.device_mesh = device_mesh
         self.padding_side = kwargs.get('padding_side', 'right')
         self.padding_free = padding_free
-        self.return_4d_attention_mask = kwargs.get('return_4d_attention_mask', False)
+        self.framework = framework
+        self.return_4d_attention_mask = self.framework == 'megatron'
 
     @remote_function()
     def __call__(self, inputs: Union[InputFeature, List[InputFeature]], **kwargs):
@@ -56,6 +72,11 @@ class InputProcessor:
     @remote_function()
     def prepare_inputs(self, inputs: InputFeature) -> InputFeature:
         import torch
+        if self.framework == 'megatron':
+            inputs = self._to_megatron_dict(inputs)
+        elif self.framework == 'transformers':
+            inputs = self._to_transformers_dict(inputs)
+
         for key in list(inputs.keys()):
             value = inputs[key]
             # Ray/pyarrow can return numpy or list scalars; normalize to tensors.
@@ -88,7 +109,8 @@ class InputProcessor:
                 padded_sequences.append(padded_seq)
             return torch.stack(padded_sequences)
 
-    def _create_4d_attention_mask(self, attention_mask):
+    @staticmethod
+    def _create_4d_attention_mask(attention_mask):
         import torch
         seq_lens = [s.shape[0] for s in attention_mask]
         max_len = max(seq_lens)
@@ -99,6 +121,67 @@ class InputProcessor:
             attention_mask[i, :, :, seq_len:] = 0
         attention_mask = ~attention_mask
         return attention_mask
+
+    @staticmethod
+    def _get_packed_seq_params(position_ids):
+        position_ids = position_ids.squeeze()
+        assert position_ids.shape[0] == 1, f'position_ids.shape: {position_ids.shape}'
+        position_ids_f = position_ids.flatten()
+        indices_q = torch.arange(position_ids_f.shape[0], device=position_ids_f.device, dtype=torch.int32)
+
+        cu_seqlens = torch.cat([
+            indices_q[position_ids_f == 0],
+            torch.tensor(position_ids_f.shape, device=position_ids_f.device, dtype=torch.int32),
+        ])
+
+        max_length = cu_seqlens.diff().max()  # position_ids_f.max() + 1
+        packed = PackedSeqParams(
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_kv=cu_seqlens,
+            max_seqlen_q=max_length,
+            max_seqlen_kv=max_length,
+            qkv_format='thd')
+
+        if torch_util.is_torch_npu_available():
+            packed.cu_seqlens_q_padded = cu_seqlens
+            packed.cu_seqlens_kv_padded = cu_seqlens
+
+        return packed
+
+    @staticmethod
+    def _any_packing_free(inputs):
+        is_padding_free = False
+        for _input in inputs:
+            position_ids = np.array(_input['position_ids'])
+            # multiple 0/1, multiple sequences
+            zero_count = np.sum(position_ids == 0)
+            one_count = np.sum(position_ids == 1)
+            is_padding_free = is_padding_free and (zero_count > 1 and one_count > 1)
+        return is_padding_free
+
+    @staticmethod
+    def _to_transformers_dict(feature: InputFeature) -> dict:
+        """Transfer the InputFeature object to a dict needed by `transformers` models."""
+        import torch
+        output = {}
+        _keys = ['input_ids', 'input_embeddings', 'attention_mask', 'position_ids', 'labels', 'completion_mask',
+                 'logits_to_keep', 'num_items_in_batch']
+        for key in list(feature.keys()):
+            if key in _keys:
+                output[key] = np.array(feature[key]) if not isinstance(feature[key], torch.Tensor) else feature[key]
+        return output
+
+    @staticmethod
+    def _to_megatron_dict(feature: InputFeature) -> dict:
+        """Transfer the InputFeature object to a dict needed by `transformers` models."""
+        import torch
+        output = {}
+        _keys = ['input_ids', 'input_embeddings', 'attention_mask', 'position_ids', 'labels', 'completion_mask',
+                 'logits_to_keep', 'num_items_in_batch', 'packed_seq_params']
+        for key in list(feature.keys()):
+            if key in _keys:
+                output[key] = np.array(feature[key]) if not isinstance(feature[key], torch.Tensor) else feature[key]
+        return output
 
     def _collate_macro_batch(self, inputs: List[InputFeature]) -> Dict[str, Any]:
         import torch
@@ -118,11 +201,12 @@ class InputProcessor:
 
         result = {}
 
-        if self.padding_free:
+        padding_free = self.padding_free or InputProcessor._any_packing_free(inputs)
+        if padding_free:
             for key in text_keys:
                 values = [item[key] for item in text_inputs]
-                if self.return_4d_attention_mask and key == 'attention_mask':
-                    # padding_free & 4D attention_mask is not needed
+                if key == 'attention_mask':
+                    # attention_mask is not needed
                     continue
                 if isinstance(values[0], np.ndarray):
                     value = np.expand_dims(np.concatenate(values, axis=0), axis=0)
@@ -136,6 +220,7 @@ class InputProcessor:
                     value = values
                 result[key] = value
             result = InputFeature(**result)
+            result['packed_seq_params'] = InputProcessor._get_packed_seq_params(result['position_ids'])
         else:
             for key in text_keys:
                 values = [item[key] for item in text_inputs]
@@ -161,7 +246,7 @@ class InputProcessor:
                 elif isinstance(values[0], torch.Tensor):
                     result[field] = torch.cat(values, dim=0)
 
-        return to_transformers_dict(result)
+        return result
 
     @remote_function()
     def collate_fn(self, inputs: List[InputFeature], micro_batch_size: Optional[int] = None, variable_seq_lengths=False) -> Union[Dict[str, Any], List[Dict[str, Any]]]:

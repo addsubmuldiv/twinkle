@@ -188,7 +188,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         return MegatronOptimizerGroup(
             loss_instance=VocabParallelCrossEntropyLoss(),
             template=Template(self.tokenizer_id),
-            processor=InputProcessor(self.device_mesh, return_4d_attention_mask=True),
+            processor=InputProcessor(self.device_mesh, framework='megatron'),
             _device_mesh=self.device_mesh,
         )
 
@@ -969,7 +969,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
         # Megatron use 4d attention mask
-        kwargs['return_4d_attention_mask'] = True
+        kwargs['framework'] = 'megatron'
         optimizer_config.processor = construct_class(processor_cls, InputProcessor, twinkle.processor, **kwargs)
 
     @remote_function(execute='first')
