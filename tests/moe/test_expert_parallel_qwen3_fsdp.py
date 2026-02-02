@@ -31,15 +31,6 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _ensure_ep_device_mesh(device_mesh: DeviceMesh) -> None:
-    if not hasattr(device_mesh, "get_dim_group"):
-        device_mesh.get_dim_group = lambda dim: device_mesh.create_process_group([dim])
-    if not hasattr(device_mesh, "ep_world_size"):
-        device_mesh.ep_world_size = device_mesh.get_dim_size("ep")
-    if not hasattr(device_mesh, "ep_rank"):
-        device_mesh.ep_rank = device_mesh._get_rank_for_dim("ep")
-
-
 def _find_moe_blocks(model: nn.Module) -> List[nn.Module]:
     blocks = []
     for module in model.modules():
@@ -180,7 +171,8 @@ def _load_qwen3_moe_config(model_id: str, local_files_only: bool):
             data["architectures"] = ["Qwen3MoeForCausalLM"]
         try:
             return AutoConfig.from_dict(data)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            print(f"AutoConfig.from_dict fallback to PretrainedConfig for {model_id}: {exc}")
             return PretrainedConfig.from_dict(data)
 
 
@@ -250,7 +242,6 @@ def _run_worker_ep_fsdp_pretrained(rank: int, world_size: int, port: int, model_
             mesh=np.arange(world_size).reshape(2, 2),
             mesh_dim_names=("fsdp", "ep"),
         )
-        _ensure_ep_device_mesh(device_mesh)
         ep_group = device_mesh.get_dim_group("ep")
 
         baseline_blocks = _find_moe_blocks(model.model)

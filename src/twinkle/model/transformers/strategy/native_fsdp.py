@@ -1,5 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import Dict, Any, Optional, Literal, Set, Tuple
+from typing import Dict, Any, Optional, Literal, Set
 
 import torch
 from torch import nn
@@ -24,7 +24,7 @@ class NativeFSDPStrategy:
         if self.device_mesh is None:
             return model, optimizer
 
-        fsdp_mesh = _build_fsdp_mesh(self.device_mesh, ("dp", "fsdp"))
+        fsdp_mesh = _build_fsdp_mesh(self.device_mesh)
         if fsdp_mesh is not None:
             _ensure_moe_patched_if_needed(model, self.device_mesh)
             mp_policy = _build_mp_policy(self.mixed_precision)
@@ -70,7 +70,7 @@ def _build_mp_policy(mixed_precision: str) -> MixedPrecisionPolicy:
     )
 
 
-def _build_fsdp_mesh(device_mesh: DeviceMesh, dims: Tuple[str, ...]) -> Optional[TorchDeviceMesh]:
+def _build_fsdp_mesh(device_mesh: DeviceMesh) -> Optional[TorchDeviceMesh]:
     if device_mesh is None or device_mesh.mesh_dim_names is None:
         return None
     flat_mesh = device_mesh.mesh.flatten()

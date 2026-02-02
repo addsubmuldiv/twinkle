@@ -197,13 +197,8 @@ def patch_forward(block: nn.Module, device_mesh: DeviceMesh, cfg: ExpertParallel
             group=ep_group,
         )
         recv_out = torch.empty_like(recv_tokens)
-        local_expert_count = getattr(block, "_ep_experts_per_rank", None)
-        if local_expert_count is None:
-            local_expert_count = _get_num_experts(block)
-        for expert_id in range(int(local_expert_count)):
+        for expert_id in torch.unique(recv_expert_ids).tolist():
             idx = (recv_expert_ids == expert_id).nonzero(as_tuple=False).view(-1)
-            if idx.numel() == 0:
-                continue
             expert_in = recv_tokens.index_select(0, idx)
             expert_out = _run_expert(block, expert_id, expert_in)
             recv_out.index_copy_(0, idx, expert_out)
