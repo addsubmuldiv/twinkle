@@ -44,8 +44,11 @@ def _find_moe_blocks(model: nn.Module) -> List[nn.Module]:
     blocks = []
     for module in model.modules():
         experts = getattr(module, "experts", None)
-        if not isinstance(experts, nn.ModuleList):
+        if experts is None:
             continue
+        if not isinstance(experts, nn.ModuleList):
+            if not (hasattr(experts, "gate_up_proj") and hasattr(experts, "down_proj")):
+                continue
         gate = getattr(module, "gate", None) or getattr(module, "router", None)
         if gate is None:
             continue
@@ -61,9 +64,53 @@ def _capture_router_logits(model: nn.Module):
         if gate is None:
             continue
         def _hook(module, inputs, output):
-            router_logits.append(output.detach())
+            if isinstance(output, tuple):
+                router_logits.append(output[0].detach())
+            else:
+                router_logits.append(output.detach())
         handles.append(gate.register_forward_hook(_hook))
     return router_logits, handles
+
+
+def _get_top_k(block: nn.Module) -> int:
+    if hasattr(block, "num_experts_per_tok") and getattr(block, "num_experts_per_tok") is not None:
+        return int(getattr(block, "num_experts_per_tok"))
+    if hasattr(block, "top_k") and getattr(block, "top_k") is not None:
+        return int(getattr(block, "top_k"))
+    gate = getattr(block, "gate", None) or getattr(block, "router", None)
+    if gate is not None and hasattr(gate, "top_k") and getattr(gate, "top_k") is not None:
+        return int(getattr(gate, "top_k"))
+    raise RuntimeError("Cannot infer top_k for MoE block.")
+
+
+def _capture_router_state(model: nn.Module):
+    states: List[Dict[str, torch.Tensor]] = []
+    handles = []
+    for block in _find_moe_blocks(model):
+        gate = getattr(block, "gate", None) or getattr(block, "router", None)
+        if gate is None:
+            continue
+        top_k = _get_top_k(block)
+        norm_topk_prob = getattr(block, "norm_topk_prob", False)
+
+        def _hook(module, inputs, output, *, _top_k=top_k, _norm=norm_topk_prob):
+            if isinstance(output, tuple):
+                router_logits, routing_weights, selected_experts = output[:3]
+            else:
+                router_logits = output
+                routing_weights = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
+                routing_weights, selected_experts = torch.topk(routing_weights, _top_k, dim=-1)
+                if _norm:
+                    routing_weights = routing_weights / routing_weights.sum(dim=-1, keepdim=True)
+            states.append(
+                {
+                    "selected_experts": selected_experts.detach().cpu(),
+                    "routing_weights": routing_weights.detach().cpu(),
+                }
+            )
+
+        handles.append(gate.register_forward_hook(_hook))
+    return states, handles
 
 
 def _collect_baseline_local_expert_grads(
@@ -72,7 +119,10 @@ def _collect_baseline_local_expert_grads(
     ep_world_size: int,
     ep_group,
 ) -> Dict[int, Dict[str, torch.Tensor]]:
-    num_experts = len(block.experts)
+    if isinstance(block.experts, nn.ModuleList):
+        num_experts = len(block.experts)
+    else:
+        num_experts = int(block.experts.gate_up_proj.shape[0])
     if num_experts % ep_world_size != 0:
         raise ValueError(
             f"num_experts ({num_experts}) must be divisible by ep_world_size ({ep_world_size})."
@@ -82,17 +132,31 @@ def _collect_baseline_local_expert_grads(
     local_end = local_start + experts_per_rank
     local_grads: Dict[int, Dict[str, torch.Tensor]] = {}
 
-    for global_idx, expert in enumerate(block.experts):
-        param_grads: Dict[str, torch.Tensor] = {}
-        for name, param in expert.named_parameters():
-            grad = param.grad
-            if grad is None:
-                grad = torch.zeros_like(param, dtype=param.dtype)
-            dist.all_reduce(grad, op=dist.ReduceOp.SUM, group=ep_group)
+    if isinstance(block.experts, nn.ModuleList):
+        for global_idx, expert in enumerate(block.experts):
+            param_grads: Dict[str, torch.Tensor] = {}
+            for name, param in expert.named_parameters():
+                grad = param.grad
+                if grad is None:
+                    grad = torch.zeros_like(param, dtype=param.dtype)
+                dist.all_reduce(grad, op=dist.ReduceOp.SUM, group=ep_group)
+                if local_start <= global_idx < local_end:
+                    param_grads[name] = grad.detach().cpu()
             if local_start <= global_idx < local_end:
-                param_grads[name] = grad.detach().cpu()
-        if local_start <= global_idx < local_end:
-            local_grads[global_idx] = param_grads
+                local_grads[global_idx] = param_grads
+    else:
+        gate_up = block.experts.gate_up_proj
+        down = block.experts.down_proj
+        gate_up_grad = gate_up.grad if gate_up.grad is not None else torch.zeros_like(gate_up)
+        down_grad = down.grad if down.grad is not None else torch.zeros_like(down)
+        dist.all_reduce(gate_up_grad, op=dist.ReduceOp.SUM, group=ep_group)
+        dist.all_reduce(down_grad, op=dist.ReduceOp.SUM, group=ep_group)
+        for global_idx in range(num_experts):
+            if local_start <= global_idx < local_end:
+                local_grads[global_idx] = {
+                    "gate_up_proj": gate_up_grad[global_idx].detach().cpu(),
+                    "down_proj": down_grad[global_idx].detach().cpu(),
+                }
 
     return local_grads
 
@@ -127,6 +191,8 @@ def _load_qwen3_moe_pretrained(model_id: str, local_files_only: bool, device: to
         config.num_hidden_layers = 1
     if hasattr(config, "use_cache"):
         config.use_cache = False
+    if hasattr(config, "_experts_implementation"):
+        config._experts_implementation = "eager"
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         config=config,
@@ -170,8 +236,11 @@ def _run_worker_ep_fsdp_pretrained(rank: int, world_size: int, port: int, model_
         )
 
         baseline_router_logits, baseline_handles = _capture_router_logits(model.model)
+        baseline_router_state, baseline_state_handles = _capture_router_state(model.model)
         baseline_out = model(input_ids=input_ids).logits
         for handle in baseline_handles:
+            handle.remove()
+        for handle in baseline_state_handles:
             handle.remove()
         baseline_out_ref = baseline_out.detach()
         baseline_out.sum().backward()
@@ -216,8 +285,11 @@ def _run_worker_ep_fsdp_pretrained(rank: int, world_size: int, port: int, model_
         model.model, _ = strategy.wrap_model(model.model, optimizer=None)
 
         ep_router_logits, ep_handles = _capture_router_logits(model.model)
+        ep_router_state, ep_state_handles = _capture_router_state(model.model)
         ep_out = model(input_ids=input_ids).logits
         for handle in ep_handles:
+            handle.remove()
+        for handle in ep_state_handles:
             handle.remove()
 
         out_diff = (ep_out - baseline_out_ref).abs()
@@ -242,6 +314,21 @@ def _run_worker_ep_fsdp_pretrained(rank: int, world_size: int, port: int, model_
         else:
             print(f"[rank{rank}] router_logits not captured for comparison.")
 
+        if baseline_router_state and ep_router_state:
+            for idx, (base_state, ep_state) in enumerate(zip(baseline_router_state, ep_router_state)):
+                base_sel = base_state["selected_experts"]
+                ep_sel = ep_state["selected_experts"]
+                if not torch.equal(base_sel, ep_sel):
+                    num_experts = int(base_sel.max().item()) + 1
+                    base_counts = torch.bincount(base_sel.reshape(-1), minlength=num_experts)
+                    ep_counts = torch.bincount(ep_sel.reshape(-1), minlength=num_experts)
+                    diff = (base_counts - ep_counts).abs()
+                    print(
+                        f"[rank{rank}] selected_experts[{idx}] mismatch "
+                        f"max_diff={diff.max().item()} mean_diff={diff.float().mean().item():.6e}",
+                        flush=True,
+                    )
+
         ep_out.sum().backward()
 
         ep_blocks = _find_moe_blocks(model.model)
@@ -250,36 +337,75 @@ def _run_worker_ep_fsdp_pretrained(rank: int, world_size: int, port: int, model_
         for block_idx, ep_block in enumerate(ep_blocks):
             baseline_grads = baseline_block_grads[block_idx]
             printed_grad_diff = False
-            for local_idx, expert in enumerate(ep_block.experts):
-                global_idx = ep_block._ep_local_start + local_idx
-                baseline_params = baseline_grads[global_idx]
-                for name, param in expert.named_parameters():
-                    baseline_grad = baseline_params[name]
-                    ep_grad = param.grad
-                    if ep_grad is None:
-                        assert torch.allclose(
-                            baseline_grad,
-                            torch.zeros_like(baseline_grad),
-                            rtol=1e-5,
-                            atol=1e-6,
-                        )
-                    else:
-                        base = baseline_grad.to(ep_grad.device, dtype=torch.float32)
-                        diff = (ep_grad.to(torch.float32) - base)
-                        rel = diff.norm() / (base.norm() + 1e-12)
-                        if rel.item() > 1e-3 and not printed_grad_diff:
-                            abs_diff = diff.abs()
-                            base_norm = base.norm().item()
-                            ep_norm = ep_grad.norm().item()
-                            ratio = ep_norm / base_norm if base_norm != 0 else float("inf")
-                            print(
-                                f"[rank{rank}] expert{global_idx}.{name} grad diff "
-                                f"mean={abs_diff.mean().item():.6e} max={abs_diff.max().item():.6e} "
-                                f"ep_norm={ep_norm:.6e} base_norm={base_norm:.6e} ratio={ratio:.6e} "
-                                f"rel_norm={rel.item():.6e}"
+            if isinstance(ep_block.experts, nn.ModuleList):
+                for local_idx, expert in enumerate(ep_block.experts):
+                    global_idx = ep_block._ep_local_start + local_idx
+                    baseline_params = baseline_grads[global_idx]
+                    for name, param in expert.named_parameters():
+                        baseline_grad = baseline_params[name]
+                        ep_grad = param.grad
+                        if ep_grad is None:
+                            assert torch.allclose(
+                                baseline_grad,
+                                torch.zeros_like(baseline_grad),
+                                rtol=1e-5,
+                                atol=1e-6,
                             )
-                            printed_grad_diff = True
-                        assert rel.item() <= 1e-3
+                        else:
+                            base = baseline_grad.to(ep_grad.device, dtype=torch.float32)
+                            diff = (ep_grad.to(torch.float32) - base)
+                            rel = diff.norm() / (base.norm() + 1e-12)
+                            if rel.item() > 1e-3 and not printed_grad_diff:
+                                abs_diff = diff.abs()
+                                base_norm = base.norm().item()
+                                ep_norm = ep_grad.norm().item()
+                                ratio = ep_norm / base_norm if base_norm != 0 else float("inf")
+                                print(
+                                    f"[rank{rank}] expert{global_idx}.{name} grad diff "
+                                    f"mean={abs_diff.mean().item():.6e} max={abs_diff.max().item():.6e} "
+                                    f"ep_norm={ep_norm:.6e} base_norm={base_norm:.6e} ratio={ratio:.6e} "
+                                    f"rel_norm={rel.item():.6e}"
+                                )
+                                printed_grad_diff = True
+                            assert rel.item() <= 1e-3
+            else:
+                gate_up = ep_block.experts.gate_up_proj
+                down = ep_block.experts.down_proj
+                gate_up_grad = gate_up.grad
+                down_grad = down.grad
+                for local_idx in range(gate_up.shape[0]):
+                    global_idx = ep_block._ep_local_start + local_idx
+                    baseline_params = baseline_grads[global_idx]
+                    for name, tensor, grad in (
+                        ("gate_up_proj", gate_up[local_idx], gate_up_grad),
+                        ("down_proj", down[local_idx], down_grad),
+                    ):
+                        baseline_grad = baseline_params[name]
+                        ep_grad = None if grad is None else grad[local_idx]
+                        if ep_grad is None:
+                            assert torch.allclose(
+                                baseline_grad,
+                                torch.zeros_like(baseline_grad),
+                                rtol=1e-5,
+                                atol=1e-6,
+                            )
+                        else:
+                            base = baseline_grad.to(ep_grad.device, dtype=torch.float32)
+                            diff = (ep_grad.to(torch.float32) - base)
+                            rel = diff.norm() / (base.norm() + 1e-12)
+                            if rel.item() > 1e-3 and not printed_grad_diff:
+                                abs_diff = diff.abs()
+                                base_norm = base.norm().item()
+                                ep_norm = ep_grad.norm().item()
+                                ratio = ep_norm / base_norm if base_norm != 0 else float("inf")
+                                print(
+                                    f"[rank{rank}] expert{global_idx}.{name} grad diff "
+                                    f"mean={abs_diff.mean().item():.6e} max={abs_diff.max().item():.6e} "
+                                    f"ep_norm={ep_norm:.6e} base_norm={base_norm:.6e} ratio={ratio:.6e} "
+                                    f"rel_norm={rel.item():.6e}"
+                                )
+                                printed_grad_diff = True
+                            assert rel.item() <= 1e-3
     finally:
         dist.destroy_process_group()
 

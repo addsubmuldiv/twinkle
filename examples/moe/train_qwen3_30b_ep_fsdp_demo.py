@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-from pathlib import Path
+from itertools import cycle
 from typing import Optional
 
 import numpy as np
 import torch
 import torch.distributed as dist
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
-
+from torch.utils.data import DataLoader
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
+from datasets import load_dataset
 from twinkle.model.moe import apply_expert_parallel
 from twinkle.model.transformers.strategy import NativeFSDPStrategy
 from twinkle.utils import DeviceMesh
@@ -55,11 +55,10 @@ def _init_dist(args) -> tuple[int, int, torch.device]:
     return rank, world_size, device
 
 
-def _load_qwen3_config(model_id: str, local_files_only: bool):
+def _load_qwen3_config(model_id: str):
     return AutoConfig.from_pretrained(
         model_id,
         trust_remote_code=True,
-        local_files_only=local_files_only,
     )
 
 
@@ -89,17 +88,17 @@ def main():
         description="Qwen3-30B EP+FSDP2 training demo")
     parser.add_argument("--model-id", type=str,
                         required=True, help="Local path or HF ID")
-    parser.add_argument("--local-files-only",
-                        action="store_true", help="Only load local files")
+    parser.add_argument("--dataset-id", type=str,
+                        default=os.environ.get("QWEN3_DATASET_ID", "ms://modelscope/competition_math"))
     parser.add_argument("--num-layers", type=int, default=1,
                         help="Override num_hidden_layers (default: 1)")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--seq-len", type=int, default=16)
     parser.add_argument("--steps", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--grad-accum-steps", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--ep-size", type=int, default=None,
                         help="Enable EP when > 1")
-    parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--rank", type=int, default=0,
                         help="Rank for non-torchrun launches")
     parser.add_argument("--world-size", type=int, default=1,
@@ -109,10 +108,10 @@ def main():
     args = parser.parse_args()
 
     rank, world_size, device = _init_dist(args)
-    torch.manual_seed(args.seed)
+    torch.manual_seed(42)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    config = _load_qwen3_config(args.model_id, args.local_files_only)
+    config = _load_qwen3_config(args.model_id)
     _maybe_set_num_layers(config, args.num_layers)
     if hasattr(config, "use_cache"):
         config.use_cache = False
@@ -123,7 +122,6 @@ def main():
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         trust_remote_code=True,
-        local_files_only=args.local_files_only,
     ).to(device)
     model.train()
 
@@ -153,35 +151,100 @@ def main():
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, foreach=False)
 
-    vocab_size = model.config.vocab_size
-    input_ids = torch.randint(
-        low=0,
-        high=vocab_size,
-        size=(args.batch_size, args.seq_len),
-        device=device,
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_id, trust_remote_code=True, local_files_only=args.local_files_only)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    def _tokenize_alpaca(example):
+        instruction = example.get("instruction") or example.get("prompt") or ""
+        inp = example.get("input") or ""
+        output = example.get("output") or example.get("response") or ""
+        if inp:
+            prompt = (
+                f"### Instruction:\n{instruction}\n\n### Input:\n{inp}\n\n"
+                f"### Response:\n"
+            )
+        else:
+            prompt = f"### Instruction:\n{instruction}\n\n### Response:\n"
+
+        full_text = prompt + output
+        prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        full_tokens = tokenizer(full_text, add_special_tokens=False)
+        input_ids = full_tokens["input_ids"]
+        attention_mask = full_tokens["attention_mask"]
+
+        if tokenizer.eos_token_id is not None:
+            input_ids = input_ids + [tokenizer.eos_token_id]
+            attention_mask = attention_mask + [1]
+
+        input_ids = input_ids[:args.seq_len]
+        attention_mask = attention_mask[:args.seq_len]
+
+        labels = input_ids.copy()
+        prompt_len = min(len(prompt_ids), len(labels))
+        for i in range(prompt_len):
+            labels[i] = -100
+
+        pad_id = tokenizer.pad_token_id
+        if len(input_ids) < args.seq_len:
+            pad_len = args.seq_len - len(input_ids)
+            input_ids = input_ids + [pad_id] * pad_len
+            attention_mask = attention_mask + [0] * pad_len
+            labels = labels + [-100] * pad_len
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+        }
+
+    if os.path.exists(args.dataset_id):
+        ext = os.path.splitext(args.dataset_id)[1].lstrip(".")
+        file_type = {"jsonl": "json", "txt": "text"}.get(ext, ext)
+        raw_dataset = load_dataset(
+            file_type, data_files=args.dataset_id, split="train")
+    else:
+        raw_dataset = load_dataset(args.dataset_id, split="train")
+    tokenized = raw_dataset.map(
+        _tokenize_alpaca, remove_columns=raw_dataset.column_names)
+
+    def _collate_fn(features):
+        return {k: torch.tensor([f[k] for f in features], device=device)
+                for k in features[0].keys()}
+
+    dataloader = DataLoader(
+        tokenized,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=_collate_fn,
+        drop_last=True,
     )
+    data_iter = cycle(dataloader)
 
-    for step in range(1, args.steps + 1):
-        torch.cuda.reset_peak_memory_stats(device)
-        outputs = model(input_ids=input_ids, labels=input_ids)
-        loss = outputs.loss
+    optimizer.zero_grad(set_to_none=True)
+    for step, batch in zip(range(1, args.steps + 1), data_iter):
+        outputs = model(**batch)
+        loss = outputs.loss / args.grad_accum_steps
         loss.backward()
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
 
-        loss_val = loss.detach()
-        try:
-            from torch.distributed.tensor import DTensor  # type: ignore
+        if step % args.grad_accum_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
 
-            if isinstance(loss_val, DTensor):
-                loss_val = loss_val.to_local()
-        except Exception:
-            pass
-        loss_val = loss_val.float().to(device)
-        dist.all_reduce(loss_val, op=dist.ReduceOp.SUM)
-        loss_val = loss_val / world_size
-        if rank == 0:
-            print(f"[step {step}] loss={loss_val.item():.6f}")
+            loss_val = (loss.detach() * args.grad_accum_steps)
+            try:
+                from torch.distributed.tensor import DTensor  # type: ignore
+
+                if isinstance(loss_val, DTensor):
+                    loss_val = loss_val.to_local()
+            except Exception:
+                pass
+            loss_val = loss_val.float().to(device)
+            dist.all_reduce(loss_val, op=dist.ReduceOp.SUM)
+            loss_val = loss_val / world_size
+            if rank == 0:
+                print(f"[step {step // args.grad_accum_steps}] loss={loss_val.item():.6f}")
 
     dist.barrier()
     dist.destroy_process_group()

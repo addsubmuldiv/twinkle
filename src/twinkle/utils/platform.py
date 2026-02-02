@@ -319,6 +319,8 @@ class DeviceMesh:
 
     def get_slice(self, total_length: int, rank: Optional[int] = None) -> slice:
         world_size = self.data_world_size
+        if world_size == 1:
+            return slice(0, total_length)
         if rank is None:
             rank = self.data_rank
             if rank is None:

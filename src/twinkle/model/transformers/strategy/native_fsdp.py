@@ -141,10 +141,25 @@ def _rebind_optimizer(optimizer: torch.optim.Optimizer, model: nn.Module) -> tor
             "Optimizer already has state. Create the optimizer after FSDP wrapping, "
             "or reinitialize it before training."
         )
+    name_to_param = dict(model.named_parameters())
+    ep_patched = any(getattr(module, "_ep_patched", False) for module in model.modules())
     if len(optimizer.param_groups) != 1:
-        raise RuntimeError(
-            "NativeFSDPStrategy currently supports a single optimizer param_group. "
-            "Please construct the optimizer after wrapping to preserve custom groups."
-        )
+        for group in optimizer.param_groups:
+            if "param_names" not in group:
+                raise RuntimeError(
+                    "NativeFSDPStrategy cannot rebind optimizer param_groups without param_names. "
+                    "Create the optimizer after wrapping, or include param_names in each group."
+                )
+            new_params = []
+            for name in group["param_names"]:
+                if name not in name_to_param:
+                    if ep_patched and ".experts." in name:
+                        continue
+                    raise RuntimeError(
+                        f"NativeFSDPStrategy could not find parameter '{name}' when rebinding optimizer."
+                    )
+                new_params.append(name_to_param[name])
+            group["params"] = new_params
+        return optimizer
     optimizer.param_groups[0]["params"] = list(model.parameters())
     return optimizer
