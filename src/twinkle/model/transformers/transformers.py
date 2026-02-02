@@ -441,17 +441,21 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         forbidden_name_patterns = [r"bias", r"layernorm", r"rmsnorm", r"(?:^|\.)norm(?:$|\.)", r"_norm(?:$|\.)"]
         decay_parameters = get_parameter_names(self.model, [torch.nn.LayerNorm], forbidden_name_patterns)
         params = self._get_trainable_parameters(adapter_name)
+        decay_param_names = [
+            n for n, p in params.items() if n in decay_parameters and p.requires_grad
+        ]
+        no_decay_param_names = [
+            n for n, p in params.items() if n not in decay_parameters and p.requires_grad
+        ]
         optimizer_grouped_parameters = [
             {
-                "params": [
-                    p for n, p in params.items() if (n in decay_parameters and p.requires_grad)
-                ],
+                "params": [params[n] for n in decay_param_names],
+                "param_names": decay_param_names,
                 "weight_decay": weight_decay, 'lr': lr
             },
             {
-                "params": [
-                    p for n, p in params.items() if (n not in decay_parameters and p.requires_grad)
-                ],
+                "params": [params[n] for n in no_decay_param_names],
+                "param_names": no_decay_param_names,
                 "weight_decay": 0.0, 'lr': lr
             },
         ]
