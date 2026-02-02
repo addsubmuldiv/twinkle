@@ -54,30 +54,30 @@ class InputProcessor:
         self.padding_free = padding_free
         self.framework = framework
         self.process_pipeline = [
+            self.prepare_inputs,
             self.pad_cp,
             self.collate_fn,
             self.to_transformers_dict,
-            self.prepare_inputs,
             self.add_extra_padding_free_args,
             self.split_cp,
-            self.to_dict,
+            self.prepare_outputs,
         ]
 
     @remote_function()
-    def __call__(self, inputs: Union[InputFeature, List[InputFeature]], **kwargs) -> List[InputFeature]:
+    def __call__(self, inputs: Union[InputFeature, List[InputFeature]], **kwargs) -> Union[InputFeature, List[InputFeature]]:
         for pipe in self.process_pipeline:
             inputs = pipe(inputs)
         return inputs
 
-    def to_dict(self, inputs: List[InputFeature], **kwargs) -> Union[List[InputFeature], InputFeature]:
+    def prepare_outputs(self, inputs: List[InputFeature], **kwargs) -> Union[List[InputFeature], InputFeature]:
         if self.framework == 'transformers':
             return inputs[0]
         else:
             return inputs
 
-    def prepare_inputs(self, inputs: List[InputFeature], **kwargs) -> List[InputFeature]:
-        import torch
-        for _input in inputs:
+    def prepare_inputs(self, inputs: Union[List[InputFeature], InputFeature], **kwargs) -> List[InputFeature]:
+        def to_tensor(_input):
+            import torch
             for key in list(_input.keys()):
                 value = _input[key]
                 # Ray/pyarrow can return numpy or list scalars; normalize to tensors.
@@ -85,14 +85,18 @@ class InputProcessor:
                 # so tensor ops like labels != ignore_index or .to(device) would fail without this.
                 if isinstance(value, np.ndarray):
                     value = torch.from_numpy(value)
-                elif isinstance(value, list) and value and isinstance(value[0], (int, float)):
+                elif isinstance(value, list) and isinstance(value[0], (int, float, np.number)):
                     value = torch.tensor(value)
                 if isinstance(value, torch.Tensor):
                     value = value.to(Platform.get_local_device())
+                    if value.dim() == 1:
+                        value = value.unsqueeze(0)
                 _input[key] = value
-        return inputs
+            return _input
 
-    def pad_cp(self, inputs: Union[List[InputFeature], InputFeature], **kwargs) ->List[InputFeature]:
+        return [to_tensor(_input) for _input in inputs]
+
+    def pad_cp(self, inputs: List[InputFeature], **kwargs) ->List[InputFeature]:
 
         def _pad_cp(_input: InputFeature) -> InputFeature:
             # Pad sequence for parallel compatibility
@@ -142,10 +146,7 @@ class InputProcessor:
             _input['labels'] = batch_labels
             return _input
 
-        if isinstance(inputs, list):
-            return [_pad_cp(_inp) for _inp in inputs]
-        else:
-            return [_pad_cp(inputs)]
+        return [_pad_cp(_inp) for _inp in inputs]
 
     def split_cp(self, inputs: List[Dict[str, Any]], **kwargs) -> List[Dict[str, Any]]:
 
@@ -271,10 +272,10 @@ class InputProcessor:
     def _any_packing_free(inputs):
         is_padding_free = False
         for _input in inputs:
-            position_ids = np.array(_input['position_ids'])
+            position_ids = _input['position_ids']
             # multiple 0/1, multiple sequences
-            zero_count = np.sum(position_ids == 0)
-            one_count = np.sum(position_ids == 1)
+            zero_count = torch.sum(position_ids == 0).item()
+            one_count = torch.sum(position_ids == 1).item()
             is_padding_free = is_padding_free or (zero_count > 1 and one_count > 1)
         return is_padding_free
 
@@ -286,14 +287,19 @@ class InputProcessor:
             output = {}
             _keys = ['input_ids', 'input_embeddings', 'attention_mask', 'position_ids', 'labels', 'completion_mask',
                      'logits_to_keep', 'num_items_in_batch']
-            for key in list(inputs.keys()):
+            for key in list(_input.keys()):
                 if key in _keys:
-                    output[key] = np.array(inputs[key]) if not isinstance(inputs[key], torch.Tensor) else inputs[key]
+                    output[key] = np.array(_input[key]) if not isinstance(_input[key], torch.Tensor) else _input[key]
             results.append(InputFeature(**output))
         return results
 
     def _collate_macro_batch(self, inputs: List[InputFeature]) -> InputFeature:
         import torch
+
+        for _input in inputs:
+            for key in list(_input.keys()):
+                if isinstance(_input[key], torch.Tensor):
+                    _input[key] = _input[key].squeeze()
 
         vlm_fields = {k: [] for k in self.VLM_CONCAT_FIELDS}
         text_inputs = []
@@ -317,13 +323,7 @@ class InputProcessor:
                 if key == 'attention_mask':
                     # attention_mask is not needed
                     continue
-                if isinstance(values[0], np.ndarray):
-                    value = np.expand_dims(np.concatenate(values, axis=0), axis=0)
-                    value = torch.from_numpy(value)
-                elif isinstance(values[0], list) and isinstance(values[0][0], (int, float, np.number)):
-                    values = [[v for lst in values for v in lst]]
-                    value = torch.tensor(values)
-                elif isinstance(values[0], torch.Tensor):
+                if isinstance(values[0], torch.Tensor):
                     value = torch.cat(values, dim=0).unsqueeze(0)
                 else:
                     value = values
@@ -333,14 +333,7 @@ class InputProcessor:
             for key in text_keys:
                 values = [item[key] for item in text_inputs]
                 if self.framework == 'megatron' and key == 'attention_mask':
-                    values = [torch.tensor(v) for v in values]
                     result[key] = self._create_4d_attention_mask(values)
-                elif isinstance(values[0], np.ndarray):
-                    values = [torch.from_numpy(v) for v in values]
-                    result[key] = InputProcessor._pad_sequence(values, self.padding_map[key], self.padding_side)
-                elif isinstance(values[0], list) and isinstance(values[0][0], (int, float, np.number)):
-                    values = [torch.tensor(v) for v in values]
-                    result[key] = InputProcessor._pad_sequence(values, self.padding_map[key], self.padding_side)
                 elif isinstance(values[0], torch.Tensor):
                     result[key] = InputProcessor._pad_sequence(values, self.padding_map[key], self.padding_side)
                 else:
@@ -349,10 +342,7 @@ class InputProcessor:
 
         for field, values in vlm_fields.items():
             if values:
-                if isinstance(values[0], np.ndarray):
-                    result[field] = torch.from_numpy(np.concatenate(values, axis=0))
-                elif isinstance(values[0], torch.Tensor):
-                    result[field] = torch.cat(values, dim=0)
+                result[field] = torch.cat(values, dim=0)
 
         return result
 
