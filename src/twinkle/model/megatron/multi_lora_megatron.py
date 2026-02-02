@@ -1,6 +1,6 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
-from typing import Any, Dict, List, Literal, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union, Callable
 
 import torch
 import torch.nn as nn
@@ -34,6 +34,7 @@ class MultiLoraMegatronModel(MegatronModel):
                  load_weights: bool = True,
                  recompute_granularity: Optional[str] = 'selective',  # Activation checkpointing
                  recompute_modules: Optional[list] = None,  # Modules to recompute
+                 sequence_parallel: bool = False,
                  max_loras:int = 5,
                  max_r:int = 32,
                  max_length: int = 8192,
@@ -56,11 +57,11 @@ class MultiLoraMegatronModel(MegatronModel):
         self._seed = kwargs.pop('seed', None) or int(os.environ.get('TWINKLE_SEED', 42))
         self._default_tokenizer = None
         self.use_distributed_optimizer = kwargs.get('use_distributed_optimizer', True)
-        self.variable_seq_lengths = kwargs.get('variable_seq_lengths', False)
+        self.variable_seq_lengths = kwargs.get('variable_seq_lengths', True)
         self.optimizer_group = {}
         torch_util.set_device()
 
-        self.strategy = MegatronStrategy(self.device_mesh, mixed_precision=mixed_precision, **kwargs)
+        self.strategy = MegatronStrategy(self.device_mesh, sequence_parallel=sequence_parallel, mixed_precision=mixed_precision, **kwargs)
 
         # Determine params_dtype and activation checkpointing kwargs
         params_dtype = torch.bfloat16
@@ -243,7 +244,7 @@ class MultiLoraMegatronModel(MegatronModel):
         super().set_template(template_cls, **kwargs)
 
     @remote_function()
-    def set_processor(self, processor_cls: Union[Type[InputProcessor], str], **kwargs):
+    def set_processor(self, processor_cls: Union[Type[InputProcessor], str, Callable], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
         super().set_processor(processor_cls, **kwargs)
 

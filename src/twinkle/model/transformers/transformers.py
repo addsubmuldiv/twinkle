@@ -4,7 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Literal
+from typing import Dict, Any, List, Literal, Callable
 from typing import overload, Type, Optional, Union
 
 import torch
@@ -41,8 +41,8 @@ class OptimizerGroup:
     adapter_config: PeftConfig = None
     optimizer: Optimizer = None
     lr_scheduler: LRScheduler = None
-    inputs: Dict[str, Any] = None
-    outputs: Dict[str, Any] = None
+    inputs: Optional[Dict[str, Any]] = None
+    outputs: Optional[Dict[str, Any]] = None
     loss_instance: Loss = CrossEntropyLoss
     loss_value: Any = None
     template: Template = None
@@ -51,6 +51,7 @@ class OptimizerGroup:
     scaler_has_nan: bool = False
     gradient_accumulation_steps: int = 1
     cur_step: int = 0
+    num_tokens: int = 0
     train_metrics: List[Metric] = field(default_factory=list)
     eval_metrics: List[Metric] = field(default_factory=list)
     _dp_group = None
@@ -59,19 +60,21 @@ class OptimizerGroup:
     def do_grad_sync(self, gradient_accumulation_steps: Optional[int] = None) -> bool:
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
+        else:
+            self.gradient_accumulation_steps = gradient_accumulation_steps
+        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 1
 
     def __post_init__(self):
         if self._device_mesh.data_world_size > 1:
             self._dp_group = self._device_mesh.create_process_group(['dp', 'fsdp'])
         self.train_metrics = [
-            LossMetric(self._device_mesh, self._dp_group),
+            LossMetric(self._device_mesh, self._dp_group, loss_reduction='sum'),
             Accuracy(self._device_mesh, self._dp_group),
             TrainMetric(self._device_mesh, self._dp_group),
         ]
 
         self.eval_metrics = [
-            LossMetric(self._device_mesh, self._dp_group),
+            LossMetric(self._device_mesh, self._dp_group, loss_reduction='sum'),
             Accuracy(self._device_mesh, self._dp_group),
             TrainMetric(self._device_mesh, self._dp_group),
         ]
@@ -90,7 +93,7 @@ class OptimizerGroup:
             metrics = self.eval_metrics
         if len(metrics) > 0 and self.inputs is not None and self.outputs is not None:
             for metric in metrics:
-                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step})
+                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step-1, 'gradient_accumulation_steps': self.gradient_accumulation_steps})
 
     def calculate_metrics(self, is_training):
         self.accumulate_metrics(is_training)
@@ -101,6 +104,8 @@ class OptimizerGroup:
         results = {}
         for metric in metrics:
             results.update(metric.calculate())
+        self.inputs = None
+        self.outputs = None
         return results
 
 
@@ -183,7 +188,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
     def _construct_default_optimizer_group(self):
         return OptimizerGroup(
-            loss_instance=CrossEntropyLoss(),
+            loss_instance=CrossEntropyLoss(reduction='sum'),
             template=Template(self.tokenizer_id),
             processor=InputProcessor(self.device_mesh),
             _device_mesh=self.device_mesh,
@@ -213,7 +218,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         processor: InputProcessor = optimizer_config.processor
         assert isinstance(processor, InputProcessor), 'Set a correct `InputProcessor` before forwarding'
         inputs: Dict[str, Any] = processor(inputs)
-        labels = inputs.pop('labels', None)
+        labels: torch.Tensor = inputs.pop('labels', None)
+        if labels is not None:
+            optimizer_config.num_tokens += (labels >= 0).sum().item()
         self._accumulate_metric(optimizer_config, is_training=True)
         outputs = self.model(**inputs)
         inputs['labels'] = labels
@@ -294,14 +301,10 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         loss_value = optimizer_config.loss_value
         assert loss_value is not None, 'Do forwarding and calculating loss before backward'
         scaler = optimizer_config.scaler
-        _gas = optimizer_config.gradient_accumulation_steps
-        if 'gradient_accumulation_steps' in kwargs:
-            _gas = kwargs['gradient_accumulation_steps']
         if scaler is None and self.mixed_precision == 'fp16':
             # Auto set a grad scaler
             self.set_grad_scaler(adapter_name=adapter_name)
             scaler = optimizer_config.scaler
-        loss_value = loss_value / _gas
         if scaler is not None:
             scaler.scale(loss_value).backward()
         else:
@@ -341,10 +344,12 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
+        if not optimizer_config.do_grad_sync(kwargs.get('gradient_accumulation_steps')):
+            return
+
         optimizer = optimizer_config.optimizer
         scaler = optimizer_config.scaler
         outputs = optimizer_config.outputs
-
         context = contextlib.nullcontext
         if self.device_mesh is not None and self.device_mesh.tp_world_size > 1:
             from torch.distributed.tensor.experimental import implicit_replication
@@ -354,12 +359,19 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             if scaler is not None:
                 scaler.unscale_(optimizer)
 
+            num_tokens = optimizer_config.num_tokens
+            num_tokens = torch_util.gather_object([num_tokens], self.device_mesh, optimizer_config._dp_group)
+            num_tokens = sum(num_tokens)
             parameters = self._get_trainable_parameters(adapter_name).values()
+            for p in parameters:
+                if p.grad is not None:
+                    p.grad.div_(num_tokens)
             grad_norm = torch.nn.utils.clip_grad_norm_(parameters, max_grad_norm, norm_type=norm_type)
             # Convert DTensor to local tensor for FSDP2 compatibility
             grad_norm = torch_util.to_local_tensor(grad_norm)
             grad_norm = grad_norm.item()
             outputs['grad_norm'] = grad_norm
+            optimizer_config.num_tokens = 0
             return grad_norm
 
     @remote_function(dispatch='all')
@@ -597,6 +609,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         save_kwargs = {}
 
         for key, value in state_dict.items():
+            key = key.replace(f'.{adapter_name}.', '.')
             processed_state_dict[key] = torch_util.to_local_tensor(value).cpu()
 
         if isinstance(model, PeftModel):
@@ -758,7 +771,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         optimizer_config.template = template
 
     @remote_function()
-    def set_processor(self, processor_cls: Union[Type[InputProcessor], str, InputProcessor], **kwargs):
+    def set_processor(self, processor_cls: Union[Type[InputProcessor], str, InputProcessor, Callable], **kwargs):
         """Set task processor to prepare the task inputs.
         Args:
             processor_cls: A processor_cls class name, a processor_cls plugin id, or a processor_cls class type/instance.

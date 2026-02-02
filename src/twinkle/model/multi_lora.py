@@ -47,11 +47,13 @@ class MultiLora(Patch):
         adapter_name = self.find_lora_by_tenant(tenant_adapter_name).adapter_name
         if isinstance(self.module, list):
             for _module in self.module:
-                _module.enable_adapter_layers()
-                _module.set_adapter(adapter_name)
+                # _module.enable_adapter_layers()
+                if _module.active_adapter != adapter_name:
+                    _module.set_adapter(adapter_name)
         else:
-            self.module.enable_adapter_layers()
-            self.module.set_adapter(adapter_name)
+            # self.module.enable_adapter_layers()
+            if self.module.active_adapter != adapter_name:
+                self.module.set_adapter(adapter_name)
 
     def deactivate_adapter(self):
         if isinstance(self.module, list):
@@ -64,7 +66,7 @@ class MultiLora(Patch):
     def adapter(self, tenant_adapter_name: str):
         self.activate_adapter(tenant_adapter_name)
         yield self.find_lora_by_tenant(tenant_adapter_name).adapter_name
-        self.deactivate_adapter()
+        # self.deactivate_adapter()
     
     @contextmanager
     def save_context(self, tenant_adapter_name: str):
@@ -95,7 +97,7 @@ class MultiLora(Patch):
                 _after(_module)
         else:
             _after(self.module)
-        self.deactivate_adapter()
+        # self.deactivate_adapter()
 
     def check_length(self, inputs: InputFeature):
         total_length = sum(len(_input['input_ids']) for _input in inputs)
@@ -316,11 +318,11 @@ class MultiLora(Patch):
                             lora_A, TEGroupedLinear) else lora_A.weight.dtype
                         x = x.to(dtype)
 
-                        lora_result = _lora_A(dropout(x))
+                        lora_result = _lora_A(dropout(x), *args, **kwargs)
                         if isinstance(lora_result, tuple):
                             lora_result = lora_result[0]
 
-                        lora_result = _lora_B(lora_result)
+                        lora_result = _lora_B(lora_result, *args, **kwargs)
                         if isinstance(lora_result, tuple):
                             lora_result = lora_result[0]
 
@@ -366,22 +368,25 @@ class MultiLora(Patch):
 
                 # Expand target_modules (e.g., 'all-linear' -> actual module names)
                 _config = deepcopy(config)
-                if _config.target_modules:
-                    if isinstance(_config.target_modules, str):
-                        target_modules = [_config.target_modules]
-                    else:
-                        target_modules = list(_config.target_modules)
-
-                    from .megatron.tuners.utils import get_target_modules
-                    expanded_modules = get_target_modules(_module, target_modules)
-                    _config.target_modules = expanded_modules
 
                 from .megatron.tuners.utils import patch_deepcopy
                 with patch_deepcopy():
                     if isinstance(_module, PeftModel):
                         _module.add_adapter(lora_tenant.adapter_name, _config)
                     else:
+                        # TODO first wrap needs parse target_modules, need to fix later
+                        _origin_target_modules = _config.target_modules
+                        if _config.target_modules:
+                            if isinstance(_origin_target_modules, str):
+                                target_modules = [_origin_target_modules]
+                            else:
+                                target_modules = list(_origin_target_modules)
+
+                            from .megatron.tuners.utils import get_target_modules
+                            _config.target_modules = get_target_modules(_module, target_modules)
                         _module = get_peft_model(_module, _config, lora_tenant.adapter_name)
+                        # set back _origin_target_modules(maybe `all-linear`) to avoid changed to a list.
+                        _config.target_modules = _origin_target_modules
 
                     for name, submodule in _module.named_modules():
                         if isinstance(submodule, LoraLayer):

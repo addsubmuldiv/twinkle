@@ -4,13 +4,14 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union, Callable
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from peft import PeftModel, PeftConfig
+from peft.tuners.lora import Linear as LoraLinear
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import AutoConfig
@@ -66,7 +67,7 @@ class MegatronOptimizerGroup:
         """Check if gradient synchronization should happen."""
         if gradient_accumulation_steps is None:
             gradient_accumulation_steps = self.gradient_accumulation_steps
-        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 0
+        return (self.cur_step-1) % gradient_accumulation_steps == 0 and self.cur_step > 1
 
 
     def __post_init__(self):
@@ -96,7 +97,7 @@ class MegatronOptimizerGroup:
             metrics = self.eval_metrics
         if len(metrics) > 0 and self.inputs is not None and self.outputs is not None:
             for metric in metrics:
-                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step})
+                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step-1})
 
     def calculate_metrics(self, is_training):
         self.accumulate_metrics(is_training)
@@ -129,7 +130,6 @@ class MegatronModel(TwinkleModel, nn.Module):
     ):
         requires('megatron_core')
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
-        os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         nn.Module.__init__(self)
         from twinkle.patch.megatron_peft import MegatronPeft
 
@@ -144,7 +144,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         self._seed = kwargs.pop('seed', None) or int(os.environ.get('TWINKLE_SEED', 42))
         self._default_tokenizer = None
         self.use_distributed_optimizer = kwargs.get('use_distributed_optimizer', True)
-        self.variable_seq_lengths = kwargs.get('variable_seq_lengths', False)
+        self.variable_seq_lengths = kwargs.get('variable_seq_lengths', True)
         torch_util.set_device()
 
         self.strategy = MegatronStrategy(self.device_mesh, mixed_precision=mixed_precision, **kwargs)
@@ -310,21 +310,18 @@ class MegatronModel(TwinkleModel, nn.Module):
         processor: InputProcessor = optimizer_config.processor
         assert isinstance(processor, InputProcessor), 'Set InputProcessor correctly before forwarding'
 
-        vpp_size = self.device_mesh.vpp_size
-        if vpp_size is None or vpp_size == 1:
-            inputs = [processor(inputs)]
-            micro_batch_size = inputs[0]['input_ids'].shape[0]
-        else:
-            if micro_batch_size is None:
-                micro_batch_size = 1
-            inputs = processor(inputs, micro_batch_size=micro_batch_size, variable_seq_lengths=self.variable_seq_lengths)
+        if micro_batch_size is None:
+            assert len(inputs) >= optimizer_config.gradient_accumulation_steps and len(inputs) % optimizer_config.gradient_accumulation_steps == 0
+            micro_batch_size = len(inputs) // optimizer_config.gradient_accumulation_steps
+        processor.use_megatron = True
+        inputs = processor(inputs, micro_batch_size=micro_batch_size, variable_seq_lengths=self.variable_seq_lengths)
 
         # Get parallelism settings for sequence padding and splitting
         cp_size = self.device_mesh.cp_world_size
         # Check actual sequence_parallel setting from model config
         # Bridge may auto-enable sequence_parallel for MoE models
         if self.variable_seq_lengths:
-            seq_length = None
+            seq_length = 4096
         else:
             original_seq_length = inputs[0]['input_ids'].shape[1]
             if cp_size > 1:
@@ -340,8 +337,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 seq_length = original_seq_length
 
         def post_loss_function(output_tensor, inputs):
-            outputs = {}
-            outputs['logits'] = output_tensor
+            outputs = {'logits': output_tensor}
             losses, counts = loss_instance(inputs, outputs)
             return self.strategy.gather_loss_for_cp(losses, counts, output_tensor)
 
@@ -618,7 +614,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             self._model_wrapped = True
 
         # Check if requesting Megatron distributed optimizer
-        if not optimizer_cls or optimizer_cls in ('MegatronDistributedOptimizer', 'default'):
+        if not optimizer_cls or optimizer_cls in ('MegatronDistributedOptimizer', 'default', 'Adam'):
             optimizer_config.optimizer = self._create_megatron_optimizer(**kwargs) # noqa
         else:
             raise NotImplementedError(f'Unsupported optimizer: {optimizer_cls}, only support MegatronOptimizer currently.')
@@ -783,9 +779,10 @@ class MegatronModel(TwinkleModel, nn.Module):
         if output_dir is None:
             output_dir = 'output'
         checkpoint_dir = os.path.join(output_dir, name)
+        adapter_name = kwargs.get('adapter_name')
         bridge = self._bridge
-        for _model in self.model:
-            bridge.load_weights(_model, checkpoint_dir)
+        for _model in self.strategy.unwrap_model(self.model):
+            bridge.load_weights(_model, checkpoint_dir, is_peft_format = (adapter_name != _default_adapter_name))
 
         if dist.is_initialized():
             dist.barrier()
@@ -910,6 +907,14 @@ class MegatronModel(TwinkleModel, nn.Module):
                     _model = get_peft_model(_model,
                                            config,
                                            adapter_name=adapter_name)
+                # setting average_gradients_across_tp_domain
+                for m in _model.modules():
+                    if isinstance(m, LoraLinear):
+                        # just check
+                        assert args.is_multimodal and not isinstance(m, LoraParallelLinear)
+                        for p in m.parameters():
+                            if p.requires_grad:
+                                p.average_gradients_across_tp_domain = True
             _models.append(_model)
         self.model = _models
 
@@ -953,7 +958,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config.template = construct_class(template_cls, Template, twinkle.template, **kwargs)
 
     @remote_function(dispatch='all')
-    def set_processor(self, processor_cls: Union[InputProcessor, Type[InputProcessor], str], **kwargs):
+    def set_processor(self, processor_cls: Union[InputProcessor, Type[InputProcessor], str, Callable], **kwargs):
         """Set input processor.
 
         Args:

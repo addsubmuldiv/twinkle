@@ -1,6 +1,6 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
-from typing import Dict, Any, List, Literal
+from typing import Dict, Any, List, Literal, Callable
 from typing import Type, Optional, Union
 
 from peft import PeftConfig, LoraConfig, PeftModel, load_peft_weights
@@ -106,8 +106,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
             return super().clip_grad_norm(max_grad_norm, norm_type=norm_type, **kwargs)
 
     def _create_param_group(self, adapter_name: str, lr: float = 1e-5, weight_decay: float = 0.01, **kwargs):
-        with self.multi_adapter.adapter(adapter_name) as adapter_name:
-            return super()._create_param_group(adapter_name=adapter_name, lr=lr, weight_decay=weight_decay, **kwargs)
+        return super()._create_param_group(adapter_name=adapter_name, lr=lr, weight_decay=weight_decay, **kwargs)
 
     @remote_function()
     def step(self, **kwargs):
@@ -170,7 +169,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         super().set_template(template_cls, **kwargs)
 
     @remote_function()
-    def set_processor(self, processor_cls: Union[Type[InputProcessor], str], **kwargs):
+    def set_processor(self, processor_cls: Union[Type[InputProcessor], str, Callable], **kwargs):
         self._check_adapter_valid(kwargs.get("adapter_name"))
         super().set_processor(processor_cls, **kwargs)
 
@@ -225,3 +224,8 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
     def _get_trainable_parameters_example(self, adapter_name, model):
         with self.multi_adapter.adapter(adapter_name):
             return self.multi_adapter.get_trainable_parameters_example(adapter_name)
+    
+    def _get_trainable_parameters(self, adapter_name):
+        with self.multi_adapter.adapter(adapter_name) as real_adapter_name:
+            return super()._get_trainable_parameters(real_adapter_name)
+
