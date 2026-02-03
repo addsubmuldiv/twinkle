@@ -272,6 +272,7 @@ class InputProcessor:
             position_ids = _input['position_ids']
             if position_ids.dim() == 1:
                 position_ids = position_ids.unsqueeze(0)
+            # Each row may contains multiple sequences
             for i in range(position_ids.shape[0]):
                 _position_ids = position_ids[i]
                 # multiple 0/1, multiple sequences
