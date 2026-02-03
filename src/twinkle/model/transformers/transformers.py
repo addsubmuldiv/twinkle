@@ -171,16 +171,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         if device_mesh is not None:
             sp_size = device_mesh.ulysses_size
             enable_sp = bool(sp_size and sp_size > 1)
-        self.sp_strategy = (
-            SequenceParallelStrategy(
-                device_mesh,
-                {},
-                model=self.model,
-                tokenizer_id=self.tokenizer_id,
-            )
-            if enable_sp
-            else None
-        )
+        self.sp_strategy = None
         self.grad_scaler_config = grad_scaler_config
         self._model_wrapped = False
         self.optimizer_group: Dict[str, OptimizerGroup] = {_default_adapter_name: self._construct_default_optimizer_group()}
@@ -703,9 +694,32 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         checkpoint_dir = os.path.join(output_dir, name)
         model = self.strategy.unwrap_model(self.model)
         if isinstance(model, PeftModel):
-            # Load to CPU to avoid safetensors device issues in Ray environment
             adapter_weights = load_peft_weights(checkpoint_dir, device="cpu")
-            set_peft_model_state_dict(model, adapter_weights, adapter_name=adapter_name)
+
+            def load_peft_weights_for_fsdp2(model, adapter_weights, adapter_name="default"):
+                from torch.distributed.tensor import DTensor, distribute_tensor
+                
+                model_sd = model.state_dict()
+                converted_weights = {}
+                for key, value in adapter_weights.items():
+                    if f'.{adapter_name}.weight' not in key:
+                        key = key.replace('.weight', f'.{adapter_name}.weight')
+                    if key in model_sd:
+                        param = model_sd[key]
+                        if isinstance(param, DTensor) and not isinstance(value, DTensor):
+                            value = distribute_tensor(
+                                value.to(param.device),
+                                param.device_mesh,
+                                param.placements
+                            )
+                    converted_weights[key] = value
+                
+                set_peft_model_state_dict(model, converted_weights, adapter_name=adapter_name)
+
+            if self.device_mesh.fsdp_world_size > 1:
+                load_peft_weights_for_fsdp2(model, adapter_weights, adapter_name=adapter_name)
+            else:
+                set_peft_model_state_dict(model, adapter_weights, adapter_name=adapter_name)
         
         if load_optimizer:
             self._load_optimizer(checkpoint_dir, adapter_name=adapter_name)
