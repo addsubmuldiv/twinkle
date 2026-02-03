@@ -25,31 +25,46 @@ class DeviceMesh:
     - vpp: Virtual Pipeline Parallel
 
     Examples:
-        # 8 GPUs: fsdp=4, tp=2
-        mesh = DeviceMesh(
-            mesh=np.array([[0, 1], [2, 3], [4, 5], [6, 7]]),
-            mesh_dim_names=("fsdp", "tp"),
-        )
+        # 8 GPUs: fsdp=4, dp=2
+        mesh = DeviceMesh.from_sizes(fsdp_size=4, dp_size=2)
 
-        # 16 GPUs: dp=2, fsdp=2, tp=2, pp=2
-        mesh = DeviceMesh(
-            mesh=np.arange(16).reshape(2, 2, 2, 2),
-            mesh_dim_names=("dp", "fsdp", "tp", "pp"),
-        )
+        # 16 GPUs: dp=2, cp=2, tp=2, pp=2
+        mesh = DeviceMesh.from_sizes(dp_size=2, cp_size=2, tp_size=2, pp_size=2)
     """
     mesh: np.ndarray
     mesh_dim_names: Optional[tuple[str, ...]]
     ep_size: Optional[int] = None
     etp_size: Optional[int] = None
+    # megatron only
     vpp_size: Optional[int] = None
+    # transformers only
     ulysses_size: Optional[int] = None
+    # megatron only
     sequence_parallel: bool = False
     device_type: str = 'cuda'
 
     @staticmethod
-    def from_sizes(world_size: int = 1, dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
+    def from_sizes(*, world_size: int = 1, dp_size: int = 1, fsdp_size: int = None, tp_size: int = None,
                    pp_size: int = None, ulysses_size: int = None, cp_size: int = None, ep_size: int = None,
                    etp_size: int = None,vpp_size: int = None, device_type: str = 'cuda', sequence_parallel: bool = False) -> "DeviceMesh":
+        """Create a default device mesh from the given sizes.
+
+        Args:
+            world_size: The global world size, can be referenced from other sizes
+            dp_size: The data parallel size
+            fsdp_size: The fsdp2 parallel size
+            tp_size: The tensor parallel size
+            pp_size: The pipeline parallel size
+            ulysses_size: The ulysses parallel size
+            cp_size: The context parallel size
+            ep_size: The expert parallel size
+            etp_size: The expert tensor parallel size
+            vpp_size: The virtual pipeline parallel size
+            device_type: The device type
+            sequence_parallel: Use sequence parallel or not, default false
+        Returns:
+            The device mesh instance
+        """
 
         origin_world_size = world_size
         mesh_dim_names = []
@@ -81,14 +96,6 @@ class DeviceMesh:
             mesh_dim_names.append("tp")
             if origin_world_size == 1:
                 world_size *= tp_size
-        """
-        fsdp/dp/pp/tp/cp(megatron only) will affect the world_size
-        sp here for two meanings:
-        1. for transformers sp, only affect input data
-        2. for megatron sp, limited by the tp
-        vpp affect the macro-batch and inner loop
-        ep affect the export groups
-        """
         return DeviceMesh(
             device_type=device_type,
             mesh=np.arange(world_size).reshape(mesh_dim_sizes),
@@ -104,7 +111,7 @@ class DeviceMesh:
         if not isinstance(self.mesh, np.ndarray):
             self.mesh = np.array(self.mesh)
 
-        valid_dim_names = {"dp", "fsdp", "tp", "pp", "sp", "cp", "ep"}
+        valid_dim_names = {"dp", "fsdp", "tp", "pp", "cp"}
         if self.mesh_dim_names is not None:
             if len(self.mesh_dim_names) != len(self.mesh.shape):
                 raise ValueError(
@@ -114,6 +121,8 @@ class DeviceMesh:
         assert all([name in valid_dim_names for name in self.mesh_dim_names])
 
     def create_process_group(self, dims):
+        """Create a process group by dims"""
+        import torch.distributed as dist
         rank = dist.get_rank()
         coords = np.argwhere(self.mesh == rank)[0]
         slices = []
@@ -127,6 +136,7 @@ class DeviceMesh:
         return dist.new_group(ranks=ranks)
 
     def get_dim_group(self, dims):
+        import torch.distributed as dist
         if isinstance(dims, str):
             dims = (dims,)
         if len(dims) != 1:
@@ -168,6 +178,7 @@ class DeviceMesh:
 
     @property
     def order(self):
+        """The order of the dimensions for megatron"""
         # TODO hard coded for now
         return 'tp-cp-ep-dp-pp'
 
@@ -283,6 +294,7 @@ class DeviceMesh:
 
     @property
     def data_rank(self) -> Optional[int]:
+        """Consider all dp/fsdp ranks, uses to determine how to distribute the data"""
         dp_rank = self.dp_rank
         fsdp_rank = self.fsdp_rank
         fsdp_world_size = self.fsdp_world_size
@@ -304,6 +316,8 @@ class DeviceMesh:
         return data_rank // ulysses_size
     
     def get_data_rank_from_global_rank(self, global_rank: int) -> int:
+        """Consider all dp/fsdp ranks and get the data rank of the global_rank,
+        uses to determine how to distribute the data in driver"""
         coord = self._get_coord_for_rank(global_rank)
         if coord is None:
             return 0
@@ -330,6 +344,7 @@ class DeviceMesh:
 
     @property
     def data_world_size(self) -> int:
+        """Consider all dp/fsdp ranks, uses to determine how to distribute the data"""
         dp_world_size = self.dp_world_size
         fsdp_world_size = self.fsdp_world_size
         if fsdp_world_size is not None and fsdp_world_size > 1:
@@ -351,17 +366,6 @@ class DeviceMesh:
             if rank is None:
                 rank = 0
                 world_size = 1
-
-        k, m = divmod(total_length, world_size)
-        start = rank * k + min(rank, m)
-        end = (rank + 1) * k + min(rank + 1, m)
-        return slice(start, end)
-
-    def get_slice_for_dim(self, dim_name: str, total_length: int) -> slice:
-        world_size = self._get_world_size_for_dim(dim_name)
-        rank = self._get_rank_for_dim(dim_name)
-        if rank is None:
-            raise ValueError(f'{dim_name} rank does not exist.')
 
         k, m = divmod(total_length, world_size)
         start = rank * k + min(rank, m)
@@ -400,41 +404,6 @@ class DeviceMesh:
         pp_world_size = self.pp_world_size or 1
         return self.get_pp_stage_ranks(pp_world_size - 1)
 
-    def get_ranks_in_dim(self, dim_name: str) -> list[int]:
-        dim_idx = self._get_dim_index(dim_name)
-        if dim_idx is None:
-            return [Platform.get_rank()]
-
-        coord = list(self._get_coord())
-        ranks = []
-        for i in range(self.mesh.shape[dim_idx]):
-            coord[dim_idx] = i
-            ranks.append(int(self.mesh[tuple(coord)]))
-        return ranks
-
-    def get_submesh(self, dim_name: str) -> "DeviceMesh":
-        dim_idx = self._get_dim_index(dim_name)
-        if dim_idx is None:
-            raise ValueError(f"Dimension '{dim_name}' not found in mesh_dim_names")
-
-        coord = self._get_coord()
-        indices = []
-        for i, c in enumerate(coord):
-            if i == dim_idx:
-                indices.append(slice(None))
-            else:
-                indices.append(c)
-
-        sub_mesh = self.mesh[tuple(indices)]
-        return DeviceMesh(
-            device_type=self.device_type,
-            mesh=sub_mesh,
-            mesh_dim_names=(dim_name,),
-        )
-
-    def __getitem__(self, dim_name: str) -> "DeviceMesh":
-        return self.get_submesh(dim_name)
-
     def has_dim(self, dim_name: str) -> bool:
         if self.mesh_dim_names is None:
             return False
@@ -450,6 +419,14 @@ class DeviceMesh:
 
 @dataclass
 class DeviceGroup:
+    """The device group to create/use resources
+
+    name: The name of the device group, should be unique.
+    ranks: The ranks of the device group, for example, 16, list(range(16))
+    device_type: The device_type of the device group
+    gpus_per_worker: The number of GPUs allocated for one process
+    _device_mesh: Do not use, only for show logs.
+    """
 
     name: str
     ranks: Union[List[int], int]
@@ -628,6 +605,11 @@ class Platform(ABC):
             idx = 0
         return platform.get_local_device(idx)
 
+    @staticmethod
+    def device_backend(platform: str = None):
+        platform = Platform.get_platform(platform)
+        return platform.device_backend()
+
 class GPU(Platform):
 
     @staticmethod
@@ -641,6 +623,10 @@ class GPU(Platform):
     @staticmethod
     def get_local_device(idx, **kwargs) -> str:
         return f'cuda:{idx}'
+
+    @staticmethod
+    def device_backend(platform: str = None):
+        return 'nccl'
 
 
 class NPU(Platform):
@@ -658,6 +644,10 @@ class NPU(Platform):
     def get_local_device(idx, **kwargs) -> str:
         return f'npu:{idx}'
 
+    @staticmethod
+    def device_backend(platform: str = None):
+        return 'hccl'
+
 
 class MPS(Platform):
 
@@ -672,6 +662,10 @@ class MPS(Platform):
     @staticmethod
     def get_local_device(idx, **kwargs) -> str:
         return f'mps'
+
+    @staticmethod
+    def device_backend(platform: str = None):
+        return 'gloo'
 
     @lru_cache
     @staticmethod
@@ -688,6 +682,7 @@ class MPS(Platform):
             return False
 
 def is_last_rank():
+    import torch.distributed as dist
     if not dist.is_initialized():
         return True
     return dist.get_rank() == dist.get_world_size() - 1

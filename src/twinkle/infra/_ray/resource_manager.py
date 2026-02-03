@@ -4,9 +4,6 @@ import math
 import os
 from typing import Dict, List
 
-import ray
-from ray.util.placement_group import PlacementGroup
-
 from twinkle import DeviceGroup
 from twinkle import Platform
 
@@ -28,6 +25,8 @@ class ResourceManager:
         cpu_pg_cpus_per_proc = int(os.environ.get("TWINKLE_CPU_PG_CPUS_PER_PROC", 1))
         cpu_pg_cpus_per_proc = max(cpu_pg_cpus_per_proc, 1)
 
+        import ray
+        from ray.util.placement_group import PlacementGroup
         all_ranks = []
         last_rank = -1
         cpu_proc_count = 0

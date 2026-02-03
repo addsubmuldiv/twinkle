@@ -45,7 +45,7 @@ class MultiLoraTransformersModel(TransformersModel, PreTrainedModel):
         self.grad_scaler_config = grad_scaler_config
         self._model_wrapped = False
         self.sp_strategy = None
-        # MultiLoRA does not support expert parallel; keep flags consistent with base class.
+        # Initialize expert parallel attributes (required by set_optimizer in TransformersModel)
         self._expert_parallel_config = None
         self._enable_expert_parallel = False
         self._expert_parallel_applied = False

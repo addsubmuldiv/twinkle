@@ -170,10 +170,6 @@ def get_device_placement(device_group=None) -> str:
 
         cell_w = max(4, len(str(mesh_array.max())) + 2)
 
-        # Column headers
-        col_label = dim_names[-1].upper() if dim_names else "COL"
-        row_label = dim_names[0].upper() if len(dim_names) >= 2 else "ROW"
-
         header = "      " + "".join(f"{i:^{cell_w}}" for i in range(show_cols))
         if cols > max_cols:
             header += " ⋯"
@@ -403,7 +399,7 @@ def _prepare_lazy_collect(args, kwargs):
     # if a worker received an actor handle,
     # lazy collect should be false to prevent any outer function receives an object ref
     from ._ray import RayHelper
-    if 'WORKER_NAME' not in os.environ:
+    if not os.environ.get('WORKER_NAME'):
         # If this is a driver
         return args, kwargs
     else:
@@ -430,7 +426,7 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
             if _mode == 'local':
                 # Get the actual device_mesh
                 device_mesh = _get_device_mesh_param(args, kwargs)
-                if device_mesh_name:
+                if device_mesh_name and _device_group is not None:
                     if device_mesh is None:
                         # Local mode can safely assign the default device mesh
                         device_mesh = _device_mesh
@@ -478,8 +474,9 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                         device_group = [dg for dg in _device_group if dg.name == remote_group][0]
                         device_group._device_mesh[self.__class__.__name__] = device_mesh
 
+                # This will solve the iterator cannot be passed through ray.
                 def __iter__(_self):
-                    if 'WORKER_NAME' in os.environ:
+                    if os.environ.get('WORKER_NAME'):
                         # This is a worker, iter keeps in the class, pass nothing to driver
                         _iter = _self.__iter_origin__()
                         assert _iter is not _self
@@ -554,6 +551,13 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                                 )
                         except Exception:
                             pass
+
+                        # This will depress the warnings of megatron and reduce overhead
+                        os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+                        # This will prevent the unlimited threads started by torch
+                        os.environ['TORCHINDUCTOR_COMPILE_THREADS'] = '1'
+                        # Use parallelism mode of tokenizers
+                        os.environ['TOKENIZERS_PARALLELISM'] = 'true'
                     if not device_mesh_name:
                         # pop the device_mesh
                         args = [arg for arg in args if not isinstance(arg, DeviceMesh)]

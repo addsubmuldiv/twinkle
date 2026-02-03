@@ -1,12 +1,14 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import re
-from typing import Callable, List, Optional
-import torch.nn as nn
+from typing import Callable, List, Optional, TYPE_CHECKING
 from .utils import deep_getattr
+if TYPE_CHECKING:
+    import torch.nn as nn
+
 
 def find_layers(
-    model: nn.Module,
-    cond: Callable[[str, nn.Module], bool],
+    model: 'nn.Module',
+    cond: Callable[[str, 'nn.Module'], bool],
     sub_module: Optional[str] = None,
     min_name_len: Optional[int] = None,
 ) -> List[str]:
@@ -74,6 +76,7 @@ def get_multimodal_target_regex(
     include_embedding: bool = False,
     exclude_router: bool = False,
 ) -> str:
+    import torch.nn as nn
     model_arch = model.model_meta.model_arch
     modules = []
     if not freeze_llm:

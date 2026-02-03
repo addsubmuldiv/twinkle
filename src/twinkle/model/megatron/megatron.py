@@ -4,7 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Type, Union, Callable
+from typing import Any, Dict, Generator, List, Literal, Optional, Tuple, Type, Union, Callable
 
 import torch
 import torch.distributed as dist
@@ -25,7 +25,7 @@ from twinkle import torch_util
 from twinkle.data_format import InputFeature, Trajectory
 from twinkle.hub import HubOperation
 from twinkle.loss import Loss, VocabParallelCrossEntropyLoss
-from twinkle.metric import Metric, LossMetric, Accuracy, TrainMetric
+from twinkle.metric import Metric, LossMetric, TrainMetric
 from twinkle.model.base import TwinkleModel
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
@@ -45,7 +45,7 @@ class MegatronOptimizerGroup:
     adapter_config: Any = None
     optimizer: Optimizer = None
     lr_scheduler: LRScheduler = None
-    inputs: Dict[str, Any] = None
+    inputs: List[InputFeature] = None
     outputs: Dict[str, Any] = None
     loss_instance: Loss = None
     loss_value: Any = None
@@ -97,7 +97,7 @@ class MegatronOptimizerGroup:
             metrics = self.eval_metrics
         if len(metrics) > 0 and self.inputs is not None and self.outputs is not None:
             for metric in metrics:
-                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step-1})
+                metric.accumulate(self.inputs, {**self.outputs, 'lr': self._get_lr(), 'step': self.cur_step-1, 'gradient_accumulation_steps': self.gradient_accumulation_steps})
 
     def calculate_metrics(self, is_training):
         self.accumulate_metrics(is_training)
@@ -786,7 +786,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         - Saves in PEFT format (adapter_model.safetensors + adapter_config.json)
         """
         # Check if this is LoRA training
-        is_peft_format = isinstance(self.strategy.unwrap_model(self.model)[0], PeftModel)
+        is_peft_format = (adapter_name != _default_adapter_name)
 
         # Create output directory on rank 0 only
         from megatron.core import parallel_state as mpu
@@ -840,7 +840,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         optimizer_config = self.optimizer_group[adapter_name]
         template_ins = optimizer_config.template
         if template_ins is not None:
-            template_ins.tokenizer.save_pretrained(output_dir)
+            template_ins.processor.save_pretrained(output_dir)
         else:
             self._default_tokenizer.save_pretrained(output_dir)
 
@@ -857,7 +857,43 @@ class MegatronModel(TwinkleModel, nn.Module):
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         return self._get_trainable_parameters(adapter_name)
 
-    def _patch_adapter(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], **kwargs):
+    def get_hf_state_dict(self, adapter_name: str = '') -> Generator[Tuple[str, torch.Tensor], None, None]:
+        """Get model weights in HuggingFace format as a generator.
+        
+        This method exports Megatron model weights to HuggingFace format using
+        the bridge's export_weights method. Returns a generator to avoid OOM
+        for large models - weights are converted one by one.
+        
+        This is the preferred method for weight synchronization to vLLM, as it:
+        1. Converts Megatron format to HF format on-the-fly
+        2. Uses generator pattern to avoid loading all weights into memory
+        3. Works with IPCWeightLoader's bucket-based transfer
+        
+        Args:
+            adapter_name: Name of the adapter. Empty string for base model.
+            
+        Yields:
+            Tuple of (parameter_name, tensor) in HuggingFace format.
+            
+        Example:
+            >>> for name, tensor in model.get_hf_state_dict():
+            ...     print(f"{name}: {tensor.shape}")
+        """
+        is_peft_format = bool(adapter_name)
+        model = self.strategy.unwrap_model(self.model)
+        
+        # Use bridge's export_weights which returns a generator
+        # This converts Megatron format to HF format on-the-fly
+        yield from self._bridge.export_weights(
+            model,
+            target_device=None,  # Keep on current device for IPC transfer
+            only_last_rank=False,  # All ranks participate in weight sync
+            is_peft_format=is_peft_format,
+            adapter_name=adapter_name if adapter_name else 'default',
+            tqdm_desc='Weight sync: ',
+        )
+
+    def _patch_adapter(self, adapter_name: str, config_or_dir: Union[PeftConfig, str, Dict[str, Any]], **kwargs):
         from .tuners.utils import set_linear_is_expert, get_target_modules, patch_deepcopy
         assert adapter_name, 'Use a non-empty adapter_name'
         model = self.strategy.unwrap_model(self.model)
@@ -876,7 +912,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                                                       'is_trainable', True))
                 config = _model.peft_config
             else:
-                if not isinstance(config_or_dir, LoraConfig):
+                if isinstance(config_or_dir, dict):
                     config_or_dir = LoraConfig(**config_or_dir)
                 config = config_or_dir
 
@@ -898,6 +934,9 @@ class MegatronModel(TwinkleModel, nn.Module):
                 for m in _model.modules():
                     if isinstance(m, LoraLinear):
                         # just check
+                        # TODO untested code
+                        args = get_args()
+                        from .tuners import LoraParallelLinear
                         assert args.is_multimodal and not isinstance(m, LoraParallelLinear)
                         for p in m.parameters():
                             if p.requires_grad:
@@ -954,7 +993,6 @@ class MegatronModel(TwinkleModel, nn.Module):
         """
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
         optimizer_config = self.optimizer_group[adapter_name]
-        # Megatron use 4d attention mask
         kwargs['framework'] = 'megatron'
         optimizer_config.processor = construct_class(processor_cls, InputProcessor, twinkle.processor, **kwargs)
 
@@ -1003,18 +1041,7 @@ class MegatronModel(TwinkleModel, nn.Module):
 
         from megatron.core import parallel_state
         from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
-        if not dist.is_initialized():
-            if torch.cuda.is_available():
-                backend = "nccl"
-            elif hasattr(torch, "npu") and torch.npu.is_available():
-                try:
-                    import torch_npu  # noqa: F401
-                    backend = "hccl"
-                except Exception:
-                    backend = "gloo"
-            else:
-                backend = "gloo"
-            dist.init_process_group(backend=backend, device_id=torch.device(Platform.get_local_device()))
+        self._try_init_process_group()
         args = get_args()
         init_kwargs = {
             'tensor_model_parallel_size': args.tensor_model_parallel_size,

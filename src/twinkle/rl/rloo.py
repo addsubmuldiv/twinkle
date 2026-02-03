@@ -1,8 +1,8 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import Union, List, Literal
-
-import torch
-from base import Advantage
+from typing import Union, List, Literal, TYPE_CHECKING
+from .base import Advantage
+if TYPE_CHECKING:
+    import torch
 
 
 class RLOOAdvantage(Advantage):
@@ -32,6 +32,7 @@ class RLOOAdvantage(Advantage):
         Returns:
             advantages: Tensor of shape [batch_size]
         """
+        import torch
         if not isinstance(rewards, torch.Tensor):
             rewards = torch.tensor(rewards, dtype=torch.float32)
 

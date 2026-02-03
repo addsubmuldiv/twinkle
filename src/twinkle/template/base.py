@@ -2,19 +2,21 @@
 import os
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import List, Optional, Dict, Any, Literal, Union
+from typing import List, Optional, Dict, Any, Literal, Union, TYPE_CHECKING, Callable
 
 import numpy as np
-from PIL import Image
+
 
 from twinkle.data_format import Trajectory, InputFeature, Message
 from twinkle.hub import HubOperation
 from .utils import tokenize_with_assistant_labels, transfer_to_standard_message
-import torch
+if TYPE_CHECKING:
+    import torch
+    from PIL import Image
 
 # Type aliases for multimodal data
-ImageInput = Union[str, Image.Image, "torch.Tensor"]
-VideoInput = Union[str, List[Image.Image], "torch.Tensor"]
+ImageInput = Union[str, 'Image.Image', "torch.Tensor"]
+VideoInput = Union[str, List['Image.Image'], "torch.Tensor"]
 AudioInput = Union[str, np.ndarray, "torch.Tensor"]
 
 
@@ -45,11 +47,11 @@ class Template:
         self.truncation_strategy = truncation_strategy
         self.default_system = default_system
         self._test_support_assistant_tokens_mask()
-        self.pre_pipeline = [
+        self.pre_pipeline: List[Callable[[Trajectory], List[Trajectory]]] = [
             self._add_default_system, # Add a default system field
             self._build_mm_messages, # turn to standard mm messages
         ]
-        self.post_pipeline = [
+        self.post_pipeline: List[Callable[[InputFeature], List[InputFeature]]] = [
             self._check_max_length, # Check and split input_features
             self._add_attention_fields, # Add useful fields
             self._roll_labels, # roll labels
@@ -82,7 +84,7 @@ class Template:
             ]
         try:
             outputs = self.processor.apply_chat_template(
-                conversation=dummy_inputs,
+                dummy_inputs,
                 return_assistant_tokens_mask=True,
                 return_dict=True,
                 tokenize=True
@@ -96,24 +98,24 @@ class Template:
             else:
                 # Processor doesn't support return_dict properly
                 self._template_support_assistant_tokens_mask = False
-        except Exception:
+        except Exception: # noqa
             # If any error occurs during testing, fall back to not supporting
             self._template_support_assistant_tokens_mask = False
 
-    def preprocess_image(self, image: ImageInput) -> Image.Image: 
+    def preprocess_image(self, image: ImageInput) -> 'Image.Image':
         return image
 
-    def preprocess_video(self, video: VideoInput) -> List[Image.Image]:
+    def preprocess_video(self, video: VideoInput) -> List['Image.Image']:
         return video
 
     def preprocess_audio(self, audio: AudioInput) -> np.ndarray:
         return audio
 
-    def preprocess_images(self, images: List[ImageInput]) -> List[Image.Image]:
+    def preprocess_images(self, images: List[ImageInput]) -> List['Image.Image']:
         """Preprocess a list of images."""
         return [self.preprocess_image(img) for img in images]
 
-    def preprocess_videos(self, videos: List[VideoInput]) -> List[List[Image.Image]]:
+    def preprocess_videos(self, videos: List[VideoInput]) -> List[List['Image.Image']]:
         """Preprocess a list of videos."""
         return [self.preprocess_video(video) for video in videos]
 
@@ -143,7 +145,6 @@ class Template:
         if self.use_chat_template and self.default_system:
             if trajectory['messages'][0]['role'] == 'user':
                 trajectory['messages'].insert(0, Message(role='system', content=self.default_system))
-            # Fix: use .get() to avoid KeyError - extend_message is optional in Trajectory (TypedDict total=False)
             for (_, messages) in trajectory.get('extend_message', []):
                 if messages and messages[0]['role'] == 'user':
                     messages.insert(0, Message(role='system', content=self.default_system))
@@ -180,6 +181,7 @@ class Template:
         return [input_feature]
 
     def _build_mm_messages(self, trajectory: Trajectory) -> List[Trajectory]:
+        # TODO code untested
         messages = trajectory['messages']
         # Get images/videos from trajectory level (common case) or message level
         traj_images = trajectory.get('images') or []
@@ -239,15 +241,12 @@ class Template:
     def _apply_chat_template(self, trajectory: Trajectory, add_generation_prompt: bool = False, **kwargs):
         messages = [dict(message) for message in trajectory['messages']]
         tools = [dict(tool) for tool in trajectory.get('tools', [])]
-        inputs = self.processor.apply_chat_template(conversation=messages, tools=tools, padding=False,
+        inputs = self.processor.apply_chat_template(messages, tools=tools, padding=False,
                                            tokenize=True, return_dict=True,
                                            add_generation_prompt=add_generation_prompt, return_tensors='pt', **kwargs)
         return inputs
 
     def encode(self, trajectory: Trajectory, add_generation_prompt: bool = False) -> InputFeature:
-        if self.is_mm:
-            trajectory = self._build_mm_messages(trajectory)[0]
-        
         if self.use_chat_template:
             if add_generation_prompt:
                 # For inference: just get input_ids with generation prompt, no labels needed
@@ -289,7 +288,7 @@ class Template:
         return rows
 
     @staticmethod
-    def map_row_to_col(rows: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
+    def map_row_to_col(rows: List[Union[Dict[str, Any], InputFeature]]) -> Dict[str, List[Any]]:
         if not rows:
             return {}
 
@@ -344,7 +343,7 @@ class Template:
     def batch_decode(self, token_ids: List[List[int]], **kwargs) -> List[str]:
         return [self.processor.decode(_ids, **kwargs) for _ids in token_ids]
 
-    def post_encode(self, model: torch.nn.Module, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def post_encode(self, model: 'torch.nn.Module', inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform inputs for model forward.
 
@@ -369,7 +368,7 @@ class Template:
         result['inputs_embeds'] = inputs_embeds
         return result
 
-    def _get_text_embeddings(self, model: torch.nn.Module, input_ids: torch.Tensor) -> torch.Tensor:
+    def _get_text_embeddings(self, model: 'torch.nn.Module', input_ids: 'torch.Tensor') -> 'torch.Tensor':
         """Get text embeddings from model."""
         embed_fn = None
         if hasattr(model, 'get_input_embeddings'):
@@ -384,7 +383,7 @@ class Template:
 
         return embed_fn(input_ids)
 
-    def _get_vision_embeddings(self, model: torch.nn.Module, inputs: Dict[str, Any]) -> Optional[torch.Tensor]:
+    def _get_vision_embeddings(self, model: 'torch.nn.Module', inputs: Dict[str, Any]) -> Optional['torch.Tensor']:
         """Get vision embeddings. Override in subclass."""
         return None
 
@@ -394,11 +393,11 @@ class Template:
 
     def _merge_vision_embeddings(
             self,
-            text_embeds: torch.Tensor,
-            vision_embeds: torch.Tensor,
-            input_ids: torch.Tensor,
+            text_embeds: 'torch.Tensor',
+            vision_embeds: 'torch.Tensor',
+            input_ids: 'torch.Tensor',
             inputs: Dict[str, Any]
-    ) -> torch.Tensor:
+    ) -> 'torch.Tensor':
         """Merge vision embeddings at placeholder positions."""
         vision_token_id = self._get_vision_token_id()
         if vision_token_id is None:
@@ -410,6 +409,6 @@ class Template:
 
         return text_embeds.masked_scatter(vision_mask, vision_embeds)
 
-    def _get_position_ids(self, inputs: Dict[str, Any]) -> Optional[torch.Tensor]:
+    def _get_position_ids(self, inputs: Dict[str, Any]) -> Optional['torch.Tensor']:
         """Get position_ids. Override for models with special position encoding."""
         return None

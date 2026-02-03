@@ -13,8 +13,8 @@ import twinkle
 from twinkle import DeviceGroup, DeviceMesh
 from twinkle.data_format import Trajectory, InputFeature
 from twinkle.sampler import VLLMSampler, Sampler
-from .common.validation import verify_request_token
-from .common.state import get_server_state, ServerStateProxy
+from twinkle.server.utils.validation import verify_request_token
+from twinkle.server.utils.state import get_server_state, ServerStateProxy
 from twinkle.sampler.types import SamplingParams, SampleResponse
 
 
@@ -121,6 +121,7 @@ def build_sampler_app(model_id: str,
             self.adapter_records[full_adapter_name] = 0
             self.key_token_dict[full_adapter_name] = request.state.token
 
+        # TODO: check if this is needed
         @app.post("/sync_weights")
         def sync_weights(self, request, *, state_dict: Dict[str, Any], adapter_name: str = ''):
             self.assert_adapter_valid(adapter_name)

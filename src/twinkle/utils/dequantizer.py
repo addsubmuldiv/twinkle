@@ -1,6 +1,6 @@
-from typing import Tuple
-
-import torch
+from typing import Tuple, TYPE_CHECKING
+if TYPE_CHECKING:
+    import torch
 
 
 class Fp8Dequantizer:
@@ -10,9 +10,10 @@ class Fp8Dequantizer:
 
     def convert(
         self,
-        quantized: torch.Tensor,
-        scales: torch.Tensor,
-    ) -> torch.Tensor:
+        quantized: 'torch.Tensor',
+        scales: 'torch.Tensor',
+    ) -> 'torch.Tensor':
+        import torch
         if not isinstance(quantized, torch.Tensor) or not isinstance(scales, torch.Tensor):
             raise TypeError('Fp8Dequantize expects tensors as inputs.')
         if quantized.dtype == torch.uint8:
@@ -36,8 +37,9 @@ class MxFp4Dequantizer:
 
     def convert(
         self,
-        blocks: torch.Tensor,
-        scales: torch.Tensor,
-    ) -> torch.Tensor:
+        blocks: 'torch.Tensor',
+        scales: 'torch.Tensor',
+    ) -> 'torch.Tensor':
+        import torch
         from transformers.integrations import convert_moe_packed_tensors
         return convert_moe_packed_tensors(blocks, scales)

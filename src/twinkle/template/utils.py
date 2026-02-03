@@ -1,10 +1,10 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
-from typing import List, Dict, Any, Tuple, Optional, Callable
+import inspect
+from typing import List, Dict, Any, Tuple, Optional, Callable, TYPE_CHECKING
 from copy import deepcopy, copy
-
-from transformers import PreTrainedTokenizer
-
 from twinkle.data_format import Trajectory, Message
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizer
 
 PLACEHOLDER = "<<<ASSISTANT_PLACEHOLDER_7f3d2a1b>>>"
 
@@ -79,7 +79,7 @@ def _is_vlm_processor(tokenizer) -> bool:
 
 
 def tokenize_with_assistant_labels(
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: 'PreTrainedTokenizer',
         encode_func: Callable,
         trajectory: Trajectory,
         placeholder: str = PLACEHOLDER,
@@ -115,7 +115,10 @@ def tokenize_with_assistant_labels(
     if isinstance(template_ids, torch.Tensor):
         template_ids = template_ids.tolist()[0]
 
-    placeholder_ids = tokenizer.encode(placeholder, add_special_tokens=False)
+    extra_kwargs = {}
+    if 'add_special_tokens' in inspect.signature(tokenizer.encode).parameters:
+        extra_kwargs['add_special_tokens'] = False
+    placeholder_ids = tokenizer.encode(placeholder, **extra_kwargs)
     template_parts = split_by_subsequence(template_ids, placeholder_ids)
 
     if len(template_parts) != assistant_count + 1:

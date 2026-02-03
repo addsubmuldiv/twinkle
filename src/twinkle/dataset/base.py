@@ -79,6 +79,8 @@ class Dataset(TorchDataset):
         """
         kwargs['batched'] = True # Only supported batched, because a single row may explode to several rows
         if 'load_from_cache_file' not in kwargs:
+            # By default, we don't use load_from_cache_file, because read cache will not consider the changes in the same file,
+            # which will cause unexpected behaviors.
             kwargs['load_from_cache_file'] = False
         with processing_lock('dataset'):
             # use a default lock because encode is to all datasets
@@ -116,7 +118,10 @@ class Dataset(TorchDataset):
                 num_proc = kwargs.get('num_proc', 1)
                 ext = os.path.splitext(dataset_id)[1].lstrip('.')
                 file_type = {'jsonl': 'json', 'txt': 'text'}.get(ext) or ext
-                kwargs = {'split': 'train', 'streaming': streaming, 'num_proc': num_proc}
+                if streaming:
+                    kwargs = {'split': 'train', 'streaming': True}
+                else:
+                    kwargs = {'split': 'train', 'num_proc': num_proc}
                 if file_type == 'csv':
                     kwargs['na_filter'] = False
                 dataset = load_dataset(file_type, data_files=dataset_id, **kwargs)
@@ -148,6 +153,8 @@ class Dataset(TorchDataset):
         """
         init_args = init_args or {}
         if 'load_from_cache_file' not in kwargs:
+            # By default, we don't use load_from_cache_file, because read cache will not consider the changes in the same file,
+            # which will cause unexpected behaviors.
             kwargs['load_from_cache_file'] = False
         preprocess_func = construct_class(preprocess_func, Preprocessor, twinkle.preprocessor, **init_args)
         if dataset_meta is None:
