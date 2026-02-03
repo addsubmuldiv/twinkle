@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.distributed import nn as dist_nn
 from torch import nn
 
-from ...utils import DeviceMesh
+from twinkle.utils import DeviceMesh
 
 
 @dataclass

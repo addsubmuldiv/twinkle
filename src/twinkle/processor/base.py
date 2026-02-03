@@ -50,6 +50,7 @@ class InputProcessor:
                  framework: Literal['transformers', 'megatron'] = 'transformers',
                  **kwargs):
         self.device_mesh = device_mesh
+        # right is always used in training, and is fit for megatron
         self.padding_side = kwargs.get('padding_side', 'right')
         self.padding_free = padding_free
         self.framework = framework

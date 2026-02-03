@@ -499,6 +499,8 @@ def remote_class(execute: Literal['first', 'peer', 'all'] = 'peer'):
                         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
                         # This will prevent the unlimited threads opened by torch
                         os.environ['TORCHINDUCTOR_COMPILE_THREADS'] = '1'
+                        # Use parallelism mode
+                        os.environ['TOKENIZERS_PARALLELISM'] = 'true'
                     if not device_mesh_name:
                         # pop the device_mesh
                         args = [arg for arg in args if not isinstance(arg, DeviceMesh)]

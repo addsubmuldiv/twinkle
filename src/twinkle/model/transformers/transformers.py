@@ -33,9 +33,8 @@ from twinkle.template import Template
 from twinkle.utils import torch_util, construct_class
 from twinkle.utils.grad_clip import normalize_and_clip_grad_norm
 from twinkle.model.base import TwinkleModel
-from twinkle.model.moe import apply_expert_parallel
+from twinkle.model.transformers.moe import apply_expert_parallel
 from twinkle.model.transformers.strategy import AccelerateStrategy, NativeFSDPStrategy
-from twinkle.model.transformers.strategy.sequence_parallel import SequenceParallelStrategy
 from twinkle.metric import LossMetric, Accuracy, TrainMetric
 
 
@@ -186,28 +185,44 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.device_mesh = device_mesh
         self.mixed_precision = mixed_precision
         self._fsdp_config = dict(fsdp_config or {})
+        self._ddp_config = ddp_config or {}
+        self._decide_strategy(strategy)
+        self.grad_scaler_config = grad_scaler_config
+        self._model_wrapped = False
+        self.optimizer_group: Dict[str, OptimizerGroup] = {_default_adapter_name: self._construct_default_optimizer_group()}
+
+    def _decide_strategy(self, strategy: Literal['accelerate', 'native_fsdp']):
         self._expert_parallel_config = self._fsdp_config.pop("expert_parallel", None)
         self._enable_expert_parallel = self._should_enable_expert_parallel(
-            self._expert_parallel_config, device_mesh)
+            self._expert_parallel_config, self.device_mesh)
         self._expert_parallel_applied = False
         use_native_fsdp = self._enable_expert_parallel or strategy == 'native_fsdp'
         if use_native_fsdp:
             self.strategy = NativeFSDPStrategy(
-                mixed_precision=mixed_precision,
+                mixed_precision=self.mixed_precision,
                 fsdp_config=self._fsdp_config,
-                device_mesh=device_mesh,
+                device_mesh=self.device_mesh,
             )
         else:
-            self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, ddp_config=ddp_config,
-                                               fsdp_config=self._fsdp_config, device_mesh=device_mesh)
+            self.strategy = AccelerateStrategy(mixed_precision=self.mixed_precision, ddp_config=self._ddp_config,
+                                               fsdp_config=self._fsdp_config, device_mesh=self.device_mesh)
+
         enable_sp = False
-        if device_mesh is not None:
-            sp_size = device_mesh.ulysses_size
+        if self.device_mesh is not None:
+            sp_size = self.device_mesh.ulysses_size
             enable_sp = bool(sp_size and sp_size > 1)
-        self.sp_strategy = None
-        self.grad_scaler_config = grad_scaler_config
-        self._model_wrapped = False
-        self.optimizer_group: Dict[str, OptimizerGroup] = {_default_adapter_name: self._construct_default_optimizer_group()}
+
+        from .strategy.sequence_parallel import SequenceParallelStrategy
+        self.sp_strategy = (
+            SequenceParallelStrategy(
+                self.device_mesh,
+                {},
+                model=self.model,
+                tokenizer_id=self.tokenizer_id,
+            )
+            if enable_sp
+            else None
+        )
 
     @staticmethod
     def _not_encoded(inputs):
@@ -220,7 +235,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             assert len(optimizer_groups) == 1
             optimizer_group = optimizer_groups[0]
             optimizer = optimizer_group.optimizer
-            assert optimizer
+            assert optimizer is not None
             self._maybe_apply_expert_parallel()
             if self.sp_strategy is not None:
                 self.sp_strategy.initialize()
@@ -340,7 +355,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         labels: torch.Tensor = inputs.pop('labels', None)
         if labels is not None:
             optimizer_config.num_tokens += (labels >= 0).sum().item()
-        self._accumulate_metric(optimizer_config, is_training=True)
+        optimizer_config.accumulate_metrics(True)
         outputs = self.model(**inputs)
         if self.sp_strategy is not None and labels is None:
             outputs = self.sp_strategy.postprocess_outputs(outputs)
@@ -377,7 +392,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             if self.sp_strategy is not None:
                 inputs = self.sp_strategy.preprocess_inputs(inputs)
             labels = inputs.pop('labels', None)
-            self._accumulate_metric(optimizer_config, is_training=False)
+            optimizer_config.accumulate_metrics(False)
             outputs = self.model(**inputs)
             if self.sp_strategy is not None and labels is None:
                 outputs = self.sp_strategy.postprocess_outputs(outputs)
@@ -385,10 +400,6 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         optimizer_config.inputs = inputs
         optimizer_config.outputs = outputs
         return outputs
-
-    @staticmethod
-    def _accumulate_metric(optimizer_config: OptimizerGroup, is_training):
-        optimizer_config.accumulate_metrics(is_training)
 
     @remote_function(collect='mean')
     def calculate_loss(self, **kwargs):
