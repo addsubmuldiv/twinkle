@@ -41,6 +41,7 @@ class RateLimiter:
         window_seconds: float = 1.0,
         token_cleanup_multiplier: float = 10.0,
         token_cleanup_interval: float = 60.0,
+        per_token_adapter_limit: int = 30,
     ):
         """Initialize the rate limiter.
         
@@ -53,16 +54,21 @@ class RateLimiter:
                 will be removed. Default is 10.0 (10x the window).
             token_cleanup_interval: How often to run the cleanup task in seconds.
                 Default is 60.0 (every minute).
+            per_token_adapter_limit: Maximum number of adapters per user token.
+                Default is 30.
         """
         self.rps_limit = rps_limit
         self.tps_limit = tps_limit
         self.window_seconds = window_seconds
         self.token_cleanup_multiplier = token_cleanup_multiplier
         self.token_cleanup_interval = token_cleanup_interval
+        self.per_token_adapter_limit = per_token_adapter_limit
         # Dict mapping user token -> list of (timestamp, token_count) tuples
         self._token_requests: Dict[str, List[Tuple[float, int]]] = {}
         # Track last activity time for each token
         self._last_activity: Dict[str, float] = {}
+        # Track adapter count per token
+        self._adapter_counts: Dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
         self._cleanup_started = False
@@ -115,6 +121,8 @@ class RateLimiter:
                             del self._token_requests[token]
                         if token in self._last_activity:
                             del self._last_activity[token]
+                        if token in self._adapter_counts:
+                            del self._adapter_counts[token]
                     
                     if tokens_to_remove:
                         logger.debug(
@@ -235,7 +243,51 @@ class RateLimiter:
         return {
             'active_tokens': len(self._token_requests),
             'tracked_tokens': len(self._last_activity),
+            'tracked_adapters': len(self._adapter_counts),
             'cleanup_threshold_seconds': self.window_seconds * self.token_cleanup_multiplier,
             'cleanup_interval_seconds': self.token_cleanup_interval,
             'cleanup_task_running': self._cleanup_started and self._cleanup_task and not self._cleanup_task.done(),
         }
+
+    async def check_adapter_limit(self, token: str, add: bool) -> Tuple[bool, Optional[str]]:
+        """Check and update adapter count for a user token.
+        
+        This method enforces per-user adapter limits to prevent resource exhaustion.
+        
+        Args:
+            token: User token to check/update.
+            add: True to add an adapter (increment count), False to remove (decrement count).
+            
+        Returns:
+            Tuple of (allowed: bool, reason: Optional[str]).
+            If allowed is False, reason contains the explanation.
+        """
+        async with self._lock:
+            current_count = self._adapter_counts.get(token, 0)
+            
+            if add:
+                # Check if adding would exceed limit
+                if current_count >= self.per_token_adapter_limit:
+                    return False, f"Adapter limit exceeded: {current_count}/{self.per_token_adapter_limit} adapters"
+                # Increment count
+                self._adapter_counts[token] = current_count + 1
+                return True, None
+            else:
+                # Decrement count (remove adapter)
+                if current_count > 0:
+                    self._adapter_counts[token] = current_count - 1
+                    # Clean up if count reaches zero
+                    if self._adapter_counts[token] == 0:
+                        del self._adapter_counts[token]
+                return True, None
+    
+    def get_adapter_count(self, token: str) -> int:
+        """Get current adapter count for a user token.
+        
+        Args:
+            token: User token to query.
+            
+        Returns:
+            Current number of adapters for this token.
+        """
+        return self._adapter_counts.get(token, 0)

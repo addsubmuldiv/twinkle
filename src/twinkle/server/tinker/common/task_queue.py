@@ -60,6 +60,7 @@ class TaskQueueConfig:
         enabled: Whether rate limiting is enabled.
         token_cleanup_multiplier: Multiplier for token cleanup threshold.
         token_cleanup_interval: How often to run cleanup task (seconds).
+        per_token_adapter_limit: Maximum number of adapters per user token.
     """
     rps_limit: float = 10.0           # 10 requests per second
     tps_limit: float = 10000.0        # 10000 input tokens per second
@@ -68,6 +69,7 @@ class TaskQueueConfig:
     enabled: bool = True              # Rate limiting enabled by default
     token_cleanup_multiplier: float = 10.0  # Remove tokens after 10x window inactivity
     token_cleanup_interval: float = 60.0    # Run cleanup every 60 seconds
+    per_token_adapter_limit: int = 30       # Maximum 30 adapters per user token
     
     @classmethod
     def from_dict(cls, config_dict: Optional[Dict[str, Any]] = None) -> 'TaskQueueConfig':
@@ -82,6 +84,7 @@ class TaskQueueConfig:
                 - enabled: whether rate limiting is enabled
                 - token_cleanup_multiplier: multiplier for token cleanup threshold
                 - token_cleanup_interval: cleanup task interval in seconds
+                - per_token_adapter_limit: maximum adapters per user token
                 
         Returns:
             TaskQueueConfig instance with values from dict merged with defaults.
@@ -102,6 +105,8 @@ class TaskQueueConfig:
                 config.token_cleanup_multiplier = float(config_dict['token_cleanup_multiplier'])
             if 'token_cleanup_interval' in config_dict:
                 config.token_cleanup_interval = float(config_dict['token_cleanup_interval'])
+            if 'per_token_adapter_limit' in config_dict:
+                config.per_token_adapter_limit = int(config_dict['per_token_adapter_limit'])
         return config
 
 
@@ -152,6 +157,7 @@ class TaskQueueMixin:
             window_seconds=self._task_queue_config.window_seconds,
             token_cleanup_multiplier=self._task_queue_config.token_cleanup_multiplier,
             token_cleanup_interval=self._task_queue_config.token_cleanup_interval,
+            per_token_adapter_limit=self._task_queue_config.per_token_adapter_limit,
         )
         # Start the cleanup task to prevent memory leaks
         self._rate_limiter.start_cleanup_task()
@@ -329,6 +335,32 @@ class TaskQueueMixin:
             Dict with active token count and cleanup configuration.
         """
         return self._rate_limiter.get_memory_stats()
+    
+    async def check_adapter_limit(self, token: str, add: bool) -> Tuple[bool, Optional[str]]:
+        """Check and update adapter count for a user token.
+        
+        This delegates to the rate limiter's adapter limit enforcement.
+        
+        Args:
+            token: User token to check/update.
+            add: True to add an adapter (increment count), False to remove (decrement count).
+            
+        Returns:
+            Tuple of (allowed: bool, reason: Optional[str]).
+            If allowed is False, reason contains the explanation.
+        """
+        return await self._rate_limiter.check_adapter_limit(token, add)
+    
+    def get_adapter_count(self, token: str) -> int:
+        """Get current adapter count for a user token.
+        
+        Args:
+            token: User token to query.
+            
+        Returns:
+            Current number of adapters for this token.
+        """
+        return self._rate_limiter.get_adapter_count(token)
     
     async def shutdown_task_queue(self) -> None:
         """Gracefully shutdown the task queue and cleanup tasks.
