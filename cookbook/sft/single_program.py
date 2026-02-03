@@ -49,7 +49,7 @@ def train():
     # dataset.pack_dataset()
     dataloader = DataLoader(dataset=dataset, batch_size=16, num_workers=0)
 
-    model = TransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
+    model = MultiLoraMegatronModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
 
     lora_config = LoraConfig(
         r=8,

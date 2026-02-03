@@ -8,6 +8,7 @@ from twinkle.loss.base import Loss
 from twinkle.metric import Metric
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
+from twinkle import torch_util, Platform
 
 
 class TwinkleModel(ABC):
@@ -99,3 +100,19 @@ class TwinkleModel(ABC):
     @abstractmethod
     def get_train_configs(self, **kwargs):
         ...
+
+    def _try_init_process_group(self):
+        import torch
+        import torch.distributed as dist
+        if not dist.is_available():
+            torch_util.set_device()
+            backend = Platform.device_backend()
+            init_kwargs = {
+                "backend": backend,
+                "init_method": "env://",
+                "rank": Platform.get_rank(),
+                "world_size": Platform.get_world_size(),
+            }
+            if backend in ("nccl", "hccl"):
+                init_kwargs["device_id"] = torch.device(Platform.get_local_device())
+            dist.init_process_group(**init_kwargs)
