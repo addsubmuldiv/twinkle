@@ -172,6 +172,8 @@ class ServerState:
         model_id: Optional[str],
         reason: Optional[str] = None,
         result: Any = None,
+        queue_state: Optional[str] = None,
+        queue_state_reason: Optional[str] = None,
     ) -> None:
         """Store task status with optional result.
         
@@ -189,6 +191,8 @@ class ServerState:
             model_id: Optional associated model_id.
             reason: Optional reason string (used for rate_limited status).
             result: Optional result data (used for completed/failed status).
+            queue_state: Optional queue state for tinker client (active/paused_rate_limit/paused_capacity).
+            queue_state_reason: Optional reason for the queue state.
         """
         # Serialize result if it has model_dump method
         if result is not None and hasattr(result, 'model_dump'):
@@ -207,6 +211,12 @@ class ServerState:
         # Include result for completed/failed status
         if result is not None:
             future_data['result'] = result
+        
+        # Include queue_state and queue_state_reason for tinker client compatibility
+        if queue_state is not None:
+            future_data['queue_state'] = queue_state
+        if queue_state_reason is not None:
+            future_data['queue_state_reason'] = queue_state_reason
         
         # Update or create the future entry
         if request_id in self.futures:
@@ -489,10 +499,12 @@ class ServerStateProxy:
         model_id: Optional[str],
         reason: Optional[str] = None,
         result: Any = None,
+        queue_state: Optional[str] = None,
+        queue_state_reason: Optional[str] = None,
     ) -> None:
         """Store task status with optional result (synchronous)."""
         ray.get(self._actor.store_future_status.remote(
-            request_id, status, model_id, reason, result
+            request_id, status, model_id, reason, result, queue_state, queue_state_reason
         ))
 
     # ----- Config Management -----

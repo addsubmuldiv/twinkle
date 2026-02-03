@@ -18,10 +18,12 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Tuple
+from twinkle.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from twinkle.server.utils.state import ServerStateProxy
 
+logger = get_logger()
 
 class TaskStatus(Enum):
     """Task lifecycle status."""
@@ -31,6 +33,18 @@ class TaskStatus(Enum):
     COMPLETED = "completed"       # Task completed successfully
     FAILED = "failed"             # Task failed with error
     RATE_LIMITED = "rate_limited" # Task rejected due to rate limiting
+
+
+class QueueState(Enum):
+    """Queue state for tinker client compatibility.
+    
+    These states are returned to the tinker client to indicate the current
+    state of the task queue and help the client adjust its retry behavior.
+    """
+    ACTIVE = "active"                     # Queue is actively processing tasks
+    PAUSED_RATE_LIMIT = "paused_rate_limit"  # Queue paused due to rate limiting
+    PAUSED_CAPACITY = "paused_capacity"   # Queue paused due to capacity limits
+    UNKNOWN = "unknown"                   # Unknown or unspecified state
 
 
 @dataclass
@@ -253,8 +267,10 @@ class TaskQueueMixin:
         async with self._worker_start_lock:
             # Double-check after acquiring lock (another coroutine might have started it)
             if not self._worker_started:
+                logger.debug(f"[TaskQueue] Starting background worker...")
                 self._worker_task = asyncio.create_task(self._queue_worker())
                 self._worker_started = True
+                logger.debug(f"[TaskQueue] Background worker started: {self._worker_task}")
     
     async def _queue_worker(self) -> None:
         """Background worker that processes tasks from the queue serially.
@@ -263,26 +279,32 @@ class TaskQueueMixin:
         executing them one at a time. This ensures thread-safe execution
         of model operations that cannot be parallelized.
         """
+        logger.debug(f"[TaskQueue] Worker started")
         while True:
             try:
                 # Wait for a task from the queue
+                logger.debug(f"[TaskQueue] Waiting for task... (queue size: {self._task_queue.qsize()})")
                 request_id, coro, model_id = await self._task_queue.get()
                 
+                logger.debug(f"[TaskQueue] Processing task {request_id}")
                 try:
                     # Update status to RUNNING
                     self.state.store_future_status(
-                        request_id, TaskStatus.RUNNING.value, model_id
+                        request_id, TaskStatus.RUNNING.value, model_id,
+                        queue_state=QueueState.ACTIVE.value
                     )
                     
                     # Execute the task
                     result = await coro
                     
+                    logger.debug(f"[TaskQueue] Task {request_id} completed successfully")
                     # Store completed result
                     self.state.store_future_status(
                         request_id, TaskStatus.COMPLETED.value, model_id, result=result
                     )
                 except Exception:
                     # Store error result
+                    logger.debug(f"[TaskQueue] Task {request_id} failed with error")
                     error_payload = {
                         'error': traceback.format_exc(),
                         'category': 'Server'
@@ -294,6 +316,7 @@ class TaskQueueMixin:
                     self._task_queue.task_done()
                     
             except asyncio.CancelledError:
+                logger.debug(f"[TaskQueue] Worker cancelled")
                 break
             except Exception:
                 # Log but don't crash the worker
@@ -330,30 +353,40 @@ class TaskQueueMixin:
         """
         request_id = f"req_{uuid.uuid4().hex}"
         
-        print(f"Scheduling task {request_id}")
+        logger.debug(f"[TaskQueue] Scheduling task {request_id}, rps_limit={self._task_queue_config.rps_limit}, enabled={self._task_queue_config.enabled}")
         
         # 1. Register PENDING status FIRST (fixes race condition)
         self.state.store_future_status(
-            request_id, TaskStatus.PENDING.value, model_id
+            request_id, TaskStatus.PENDING.value, model_id,
+            queue_state=QueueState.ACTIVE.value
         )
         
         # 2. Check rate limiting if enabled and token provided
         if self._task_queue_config.enabled and token:
+            logger.debug(f"[TaskQueue] Checking rate limit for token={token[:8]}... input_tokens={input_tokens}")
             allowed, reason = await self._rate_limiter.check_and_record(token, input_tokens)
             if not allowed:
+                logger.debug(f"[TaskQueue] Rate limited: {reason}")
                 self.state.store_future_status(
-                    request_id, TaskStatus.RATE_LIMITED.value, model_id, reason=reason
+                    request_id, TaskStatus.RATE_LIMITED.value, model_id, 
+                    reason=reason,
+                    queue_state=QueueState.PAUSED_RATE_LIMIT.value,
+                    queue_state_reason=reason
                 )
                 return {'request_id': request_id, 'model_id': model_id}
+            logger.debug(f"[TaskQueue] Rate limit check passed")
         
         # 3. Ensure worker is started
         await self._ensure_worker_started()
         
         # 4. Put task in queue and update status
+        logger.debug(f"[TaskQueue] Adding task {request_id} to queue (current size: {self._task_queue.qsize()})")
         await self._task_queue.put((request_id, coro, model_id))
         self.state.store_future_status(
-            request_id, TaskStatus.QUEUED.value, model_id
+            request_id, TaskStatus.QUEUED.value, model_id,
+            queue_state=QueueState.ACTIVE.value
         )
+        logger.debug(f"[TaskQueue] Task {request_id} queued, new queue size: {self._task_queue.qsize()}")
         
         return {'request_id': request_id, 'model_id': model_id}
     

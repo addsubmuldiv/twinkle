@@ -13,6 +13,7 @@ from tinker import types
 from twinkle.server.utils.validation import verify_request_token, get_token_from_request
 from twinkle.server.utils.state import get_server_state
 from .common.io_utils import create_training_run_manager, create_checkpoint_manager
+from .common.task_queue import QueueState
 
 
 def build_server_app(
@@ -163,14 +164,14 @@ def build_server_app(
         async def retrieve_future(self, request: Request, body: types.FutureRetrieveRequest) -> Any:
             """Retrieve the result of an async task.
             
-            This endpoint handles task lifecycle states:
+            This endpoint returns tinker-compatible responses:
             - 404: Task not found (request_id doesn't exist)
-            - 408: Task still processing (pending/queued/running) - client should retry
-            - 429: Rate limited - client should back off
-            - 200: Task completed (success or failure)
+            - 200 with {"type": "try_again"}: Task still processing (pending/queued/running)
+            - 200 with {"error": "...", "category": "..."}: Task failed
+            - 200 with result: Task completed successfully
             
             Returns:
-                Task result on success, or appropriate HTTP error.
+                Tinker-compatible response format.
             """
             record = self.state.get_future(body.request_id)
             if record is None:
@@ -178,24 +179,37 @@ def build_server_app(
             
             status = record.get("status")
             
-            # Task is still being processed - return 408 to indicate client should retry
+            # Task is still being processed - return try_again response
             if status in ("pending", "queued", "running"):
-                raise HTTPException(
-                    status_code=408,
-                    detail="Request still pending",
-                    headers={"X-Queue-State": status}
-                )
+                response_data = {"type": "try_again"}
+                
+                # Add queue_state and queue_state_reason if available
+                queue_state = record.get("queue_state")
+                queue_state_reason = record.get("queue_state_reason")
+                if queue_state:
+                    response_data["queue_state"] = queue_state
+                if queue_state_reason:
+                    response_data["queue_state_reason"] = queue_state_reason
+                
+                return response_data
             
             # Task was rejected due to rate limiting
             if status == "rate_limited":
                 reason = record.get("reason", "Rate limit exceeded")
-                raise HTTPException(
-                    status_code=429,
-                    detail=reason,
-                    headers={"X-Queue-State": "paused_rate_limit", "X-Queue-State-Reason": reason}
-                )
+                response_data = {"type": "try_again", "queue_state": QueueState.PAUSED_RATE_LIMIT.value}
+                if reason:
+                    response_data["queue_state_reason"] = reason
+                return response_data
             
-            # Task completed (either successfully or with error) - return the result
+            # Task failed - return error response
+            if status == "failed":
+                result = record.get("result", {})
+                return {
+                    "error": result.get("error", "Unknown error"),
+                    "category": result.get("category", "Server")
+                }
+            
+            # Task completed successfully - return the result
             result = record.get("result")
             if result is None:
                 raise HTTPException(status_code=500, detail="Task completed but no result found")
