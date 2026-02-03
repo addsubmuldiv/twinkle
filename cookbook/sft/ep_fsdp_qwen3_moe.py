@@ -16,7 +16,7 @@ logger = get_logger()
 MODEL_ID = os.environ.get(
     'QWEN3_MODEL_ID', 'ms://Qwen/Qwen3-30B-A3B-Instruct-2507')
 DATASET_ID = os.environ.get(
-    'QWEN3_DATASET_ID', 'ms://modelscope/competition_math')
+    'QWEN3_DATASET_ID', '/path/to/alpaca/dataset')
 TEMPLATE_ID = os.environ.get('QWEN3_TEMPLATE_ID', 'Template')
 PROCESSOR_ID = os.environ.get('QWEN3_PROCESSOR_ID', 'AlpacaProcessor')
 REMOTE_GROUP = 'model'

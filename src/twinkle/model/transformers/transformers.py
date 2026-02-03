@@ -31,9 +31,9 @@ from twinkle.metric import Metric
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
 from twinkle.utils import torch_util, construct_class
+from twinkle.utils.grad_clip import normalize_and_clip_grad_norm
 from twinkle.model.base import TwinkleModel
 from twinkle.model.moe import apply_expert_parallel
-from twinkle.model.transformers.grad_clip_utils import normalize_and_clip_grad_norm
 from twinkle.model.transformers.strategy import AccelerateStrategy, NativeFSDPStrategy
 from twinkle.model.transformers.strategy.sequence_parallel import SequenceParallelStrategy
 from twinkle.metric import LossMetric, Accuracy, TrainMetric
@@ -190,20 +190,16 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self._enable_expert_parallel = self._should_enable_expert_parallel(
             self._expert_parallel_config, device_mesh)
         self._expert_parallel_applied = False
-        if self._enable_expert_parallel:
+        use_native_fsdp = self._enable_expert_parallel or strategy == 'native_fsdp'
+        if use_native_fsdp:
             self.strategy = NativeFSDPStrategy(
                 mixed_precision=mixed_precision,
                 fsdp_config=self._fsdp_config,
                 device_mesh=device_mesh,
             )
         else:
-            if strategy == 'native_fsdp':
-            self.strategy = NativeFSDPStrategy(mixed_precision=mixed_precision,
-                                               fsdp_config=fsdp_config,
-                                               device_mesh=device_mesh)
-        else:
             self.strategy = AccelerateStrategy(mixed_precision=mixed_precision, ddp_config=ddp_config,
-                                                   fsdp_config=self._fsdp_config, device_mesh=device_mesh)
+                                               fsdp_config=self._fsdp_config, device_mesh=device_mesh)
         enable_sp = False
         if device_mesh is not None:
             sp_size = device_mesh.ulysses_size
@@ -581,8 +577,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             },
             {
                 "params": [
-                    p for n, p in params.items() if (n not in decay_parameters and p.requires_grad)
+                    params[n] for n in no_decay_param_names
                 ],
+                "param_names": no_decay_param_names,
                 "weight_decay": 0.0, 'lr': lr
             },
         ]
