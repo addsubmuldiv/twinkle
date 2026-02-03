@@ -360,7 +360,6 @@ def build_model_app(model_id: str,
             Returns:
                 UntypedAPIFuture wrapping SaveWeightsForSamplerResponseInternal.
             """
-            sampling_session_id = self.state.create_sampling_session( body.model_dump())
             async def _do_save_for_sampler():
                 try:
                     adapter_name = self.get_adapter_name(
@@ -387,8 +386,17 @@ def build_model_app(model_id: str,
                     tinker_path = checkpoint_manager.save(
                         body.model_id, name=checkpoint_name, is_sampler=True)
 
+                    # Create sampling session with resolved model_path/base_model.
+                    payload = body.model_dump()
+                    payload["model_path"] = tinker_path
+                    metadata = self.state.get_model_metadata(body.model_id) or {}
+                    if metadata.get("base_model"):
+                        payload["base_model"] = metadata["base_model"]
+                    sampling_session_id = self.state.create_sampling_session(payload)
+
+                    # Tinker client expects path to be None for ephemeral save.
                     return types.SaveWeightsForSamplerResponseInternal(
-                        path=tinker_path,
+                        path=None,
                         sampling_session_id=sampling_session_id
                     )
                 except Exception:

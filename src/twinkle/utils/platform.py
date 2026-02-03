@@ -6,9 +6,7 @@ import subprocess
 from abc import ABC
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Optional, Dict
-from typing import Type
-from typing import Union, List
+from typing import Any, Dict, List, Optional, Type, Union
 import torch.distributed as dist
 import numpy as np
 
@@ -420,6 +418,52 @@ class Platform(ABC):
     @staticmethod
     def get_platform_names() -> List[str]:
         return ['GPU', 'NPU', 'MPS']
+
+    @staticmethod
+    def resolve_visible_devices(
+        device_type: str,
+        *,
+        explicit: Any = None,
+        env_values: Optional[List[Any]] = None,
+        include_os_env: bool = True,
+    ) -> Optional[str]:
+        def _normalize(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, (list, tuple)):
+                return ','.join(str(v) for v in value)
+            if isinstance(value, int):
+                return str(value)
+            if isinstance(value, str):
+                return value
+            return None
+
+        if not device_type:
+            return None
+        if device_type.upper() == "CPU":
+            return None
+
+        try:
+            visible_env = Platform.get_platform(device_type.upper()).visible_device_env()
+        except Exception:
+            visible_env = None
+        if not visible_env:
+            return None
+
+        normalized = _normalize(explicit)
+        if normalized:
+            return normalized
+
+        if env_values:
+            for value in env_values:
+                normalized = _normalize(value)
+                if normalized:
+                    return normalized
+
+        if include_os_env:
+            return _normalize(os.environ.get(visible_env))
+
+        return None
 
     @staticmethod
     def get_platform(platform: str = None) -> Type['Platform']:

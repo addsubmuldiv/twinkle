@@ -86,6 +86,16 @@ def initialize(mode: Literal['local', 'ray'] = 'local',
         requires('ray')
         from ._ray import RayHelper
         assert groups is not None
+        # Auto-fill visible_devices from env if missing (mirrors server-side builder wrapper).
+        for group in groups:
+            if getattr(group, 'visible_devices', None):
+                continue
+            device_type = (group.device_type or '').upper()
+            if device_type == 'CPU':
+                continue
+            visible_devices = Platform.resolve_visible_devices(device_type)
+            if visible_devices:
+                group.visible_devices = visible_devices
         # groups is needed for ray
         _device_group = groups
         RayHelper.initialize(nproc_per_node=nproc_per_node,

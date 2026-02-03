@@ -20,6 +20,18 @@ def build_server_app(
     supported_models: Optional[List[types.SupportedModel]] = None,
     **kwargs
 ):
+    # Normalize supported_models to objects; passing raw dicts can trigger internal errors
+    # when creating LoRA training clients via the tinker API.
+    if supported_models:
+        normalized = []
+        for item in supported_models:
+            if isinstance(item, types.SupportedModel):
+                normalized.append(item)
+            elif isinstance(item, dict):
+                normalized.append(types.SupportedModel(**item))
+            else:
+                raise TypeError(...)
+        supported_models = normalized
     app = FastAPI()
 
     @app.middleware("http")

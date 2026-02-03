@@ -262,10 +262,11 @@ class RayHelper:
         else:
             ip, port = RayHelper.get_master_id_port(placement_groups[0]['placement_group'])
 
-        if device_config.device_type.upper() != 'CPU':
+        device_type_upper = (device_config.device_type or '').upper()
+        if device_type_upper != 'CPU':
             world_size = len(ranks)
-            visible_env = Platform.get_platform(device_config.device_type.upper()).visible_device_env()
-            device_type = Platform.get_platform(device_config.device_type.upper()).__name__
+            visible_env = Platform.get_platform(device_type_upper).visible_device_env()
+            device_type = Platform.get_platform(device_type_upper).__name__
 
             @ray.remote
             def get_node_visible_env(env_name: str):
@@ -298,7 +299,7 @@ class RayHelper:
                     'RANK':
                     str(pg_idx),
                     'LOCAL_RANK':
-                    str(local_rank),
+                    str(0),
                     'CLUSTER_NAME':
                     cluster_name,
                     'WORKER_NAME':
@@ -311,12 +312,14 @@ class RayHelper:
                 })
                 # Prefer explicitly specified visible_devices from config, avoid relying on environment variable passing.
                 # This is especially important for Ray Serve scenarios, as replica processes do not inherit the main process's environment variables.
-                base_visible = (
-                    getattr(device_config, 'visible_devices', None)
-                    or ray.get(get_node_visible_env.options(
+                node_visible = ray.get(
+                    get_node_visible_env.options(
                         placement_group=deploy_pg['placement_group']).remote(visible_env))
-                    or os.environ.get(visible_env)
-                    or env_vars.get(visible_env)
+                base_visible = Platform.resolve_visible_devices(
+                    device_type_upper,
+                    explicit=getattr(device_config, 'visible_devices', None),
+                    env_values=[node_visible, os.environ.get(visible_env), env_vars.get(visible_env)],
+                    include_os_env=False,
                 )
 
                 desired_visible = _map_visible_devices(base_visible, deploy_pg['gpu_rank'])
@@ -355,8 +358,8 @@ class RayHelper:
         else:
             world_size = len(ranks)
             workers = []
-            if device_config.device_type != 'CPU':
-                _visible_device_env = {Platform.get_platform(device_config.device_type.upper()).visible_device_env(): ''}
+            if device_type_upper != 'CPU':
+                _visible_device_env = {Platform.get_platform(device_type_upper).visible_device_env(): ''}
             else:
                 _visible_device_env = {}
             for rank, (deploy_pg, index) in enumerate(zip(placement_groups, list(range(world_size)))):
