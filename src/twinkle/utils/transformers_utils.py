@@ -7,8 +7,8 @@ if TYPE_CHECKING:
 
 
 def find_layers(
-    model: nn.Module,
-    cond: Callable[[str, nn.Module], bool],
+    model: 'nn.Module',
+    cond: Callable[[str, 'nn.Module'], bool],
     sub_module: Optional[str] = None,
     min_name_len: Optional[int] = None,
 ) -> List[str]:

@@ -342,7 +342,7 @@ class Template:
     def batch_decode(self, token_ids: List[List[int]], **kwargs) -> List[str]:
         return [self.processor.decode(_ids, **kwargs) for _ids in token_ids]
 
-    def post_encode(self, model: torch.nn.Module, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def post_encode(self, model: 'torch.nn.Module', inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform inputs for model forward.
 
