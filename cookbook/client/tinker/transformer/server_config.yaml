@@ -38,6 +38,9 @@ applications:
       queue_config:
         rps_limit: 100
         tps_limit: 10000
+      adapter_config:
+        per_token_adapter_limit: 30
+        adapter_timeout: 1800
     deployments:
       - name: ModelManagement
         autoscaling_config:

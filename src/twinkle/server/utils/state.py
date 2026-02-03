@@ -86,13 +86,15 @@ class ServerState:
 
     def register_model(self,
                        payload: Dict[str, Any],
-                       model_id: Optional[str] = None) -> str:
+                       model_id: Optional[str] = None,
+                       token: Optional[str] = None) -> str:
         """
         Register a new model with the server state.
         
         Args:
             payload: Model configuration containing base_model, lora_config, etc.
             model_id: Optional explicit model_id, otherwise auto-generated
+            token: Optional user token for tracking ownership
             
         Returns:
             The model_id for the registered model
@@ -109,6 +111,7 @@ class ServerState:
             'base_model': payload.get('base_model'),
             'user_metadata': payload.get('user_metadata') or {},
             'lora_config': payload.get('lora_config'),
+            'token': token,  # Store token for adapter cleanup integration
             'created_at': datetime.now().isoformat(),
         }
         return _model_id
@@ -466,8 +469,9 @@ class ServerStateProxy:
 
     def register_model(self,
                        payload: Dict[str, Any],
-                       model_id: Optional[str] = None) -> str:
-        return ray.get(self._actor.register_model.remote(payload, model_id))
+                       model_id: Optional[str] = None,
+                       token: Optional[str] = None) -> str:
+        return ray.get(self._actor.register_model.remote(payload, model_id, token))
 
     def unload_model(self, model_id: str) -> bool:
         return ray.get(self._actor.unload_model.remote(model_id))
