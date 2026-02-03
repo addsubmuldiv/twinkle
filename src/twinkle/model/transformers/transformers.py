@@ -258,13 +258,16 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
         rank = Platform.get_rank()
         world_size = Platform.get_world_size()
-        if rank < 0:
-            rank = 0
         if world_size <= 1:
             raise RuntimeError(
                 "EP+FSDP requires distributed launch with WORLD_SIZE>1 "
                 "and initialized rank env vars."
             )
+        if rank < 0 or rank >= world_size:
+            raise RuntimeError(
+                f"EP+FSDP requires a valid RANK in [0, {world_size - 1}], got {rank}."
+            )
+
 
         local_rank = Platform.get_local_rank()
         if local_rank < 0:
@@ -669,9 +672,11 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             weight_decay = kwargs.get('weight_decay', DEFAULT_WEIGHT_DECAY)
             params = self._create_param_group(adapter_name, lr=lr, weight_decay=weight_decay)
         if self._enable_expert_parallel and 'foreach' not in kwargs:
-            if optimizer_cls in ('AdamW', 'Adam'):
-                kwargs['foreach'] = False
-            elif isinstance(optimizer_cls, type) and issubclass(optimizer_cls, (AdamW, Adam)):
+            is_adam_family = (
+                optimizer_cls in ('AdamW', 'Adam')
+                or (isinstance(optimizer_cls, type) and issubclass(optimizer_cls, (AdamW, Adam)))
+            )
+            if is_adam_family:
                 kwargs['foreach'] = False
         optimizer_config.optimizer = construct_class(
             optimizer_cls,
