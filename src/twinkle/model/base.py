@@ -65,11 +65,11 @@ class TwinkleModel(ABC):
         ...
 
     @abstractmethod
-    def save(self, name: str, output_dir: str, interval: str = 1, **kwargs):
+    def save(self, name: str, output_dir: Optional[str] = None, **kwargs):
         ...
 
     @abstractmethod
-    def load(self, name: Optional[str], output_dir: Optional[str] = None, **kwargs):
+    def load(self, name: str, output_dir: Optional[str] = None, **kwargs):
         ...
 
     @abstractmethod
