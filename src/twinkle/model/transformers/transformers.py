@@ -775,7 +775,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 self._default_tokenizer.save_pretrained(output_dir)
 
     @remote_function()
-    def load(self, name: Optional[str] = None, output_dir: Optional[str] = None, **kwargs):
+    def load(self, name: str, output_dir: Optional[str] = None, **kwargs):
         """Load model state and optionally optimizer state from a checkpoint.
 
         Args:
@@ -787,12 +787,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """
         load_optimizer = kwargs.get('load_optimizer', False)
         adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
-        optimizer_config = self.optimizer_group[adapter_name]
-        if name is None:
-            name = f'checkpoint-step-{optimizer_config.cur_step}'
+
         if output_dir is None:
-            output_dir = 'output'
-        checkpoint_dir = os.path.join(output_dir, name)
+            # load from hub
+            token = kwargs.pop('token', None)
+            checkpoint_dir = HubOperation.download_model(name, token=token)
+        else:
+            checkpoint_dir = os.path.join(output_dir, name)
         model = self.strategy.unwrap_model(self.model)
         if isinstance(model, PeftModel):
             adapter_weights = load_peft_weights(checkpoint_dir, device="cpu")

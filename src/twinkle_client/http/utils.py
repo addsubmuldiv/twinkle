@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import datetime
 
 TWINKLE_SERVER_URL = os.environ.get("TWINKLE_SERVER_URL", "http://127.0.0.1:8000")
-TWINKLE_SERVER_TOKEN = os.environ.get("TWINKLE_SERVER_TOKEN", "tml-EMPTY_TOKEN") # Must start with tml-
+TWINKLE_SERVER_TOKEN = os.environ.get("TWINKLE_SERVER_TOKEN", "EMPTY_TOKEN")
 
 # Context variables for flexible configuration
 _base_url_context: ContextVar[Optional[str]] = ContextVar('base_url', default=None)

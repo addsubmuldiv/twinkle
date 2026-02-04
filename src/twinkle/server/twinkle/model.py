@@ -81,7 +81,7 @@ class SaveRequest(BaseModel):
 class LoadRequest(BaseModel):
     adapter_name: str
     load_optimizer: bool = False
-    name: Optional[str] = None
+    name: str
 
     class Config:
         extra = "allow"
@@ -139,7 +139,7 @@ def build_model_app(model_id: str,
 
     @serve.deployment(name="ModelManagement")
     @serve.ingress(app)
-    class ModelManagement(TwinkleModel):
+    class ModelManagement:
 
         COUNT_DOWN = 60 * 30
 
@@ -385,12 +385,16 @@ def build_model_app(model_id: str,
                 output_dir=save_dir,
                 adapter_name=adapter_name, 
                 save_optimizer=body.save_optimizer, 
+                push_to_hub = extra_kwargs.pop('push_to_hub', False),
+                hub_model_id = extra_kwargs.pop('hub_model_id', None),
+                hub_token = extra_kwargs.pop('hub_token', token),
+                async_upload = extra_kwargs.pop('async_upload', True),
                 **extra_kwargs
             )
             
             # Save checkpoint metadata
             twinkle_path = checkpoint_manager.save(
-                adapter_name,
+                model_id=adapter_name,
                 name=checkpoint_name,
                 is_sampler=False
             )
@@ -419,30 +423,23 @@ def build_model_app(model_id: str,
             
             # Extract token for directory isolation
             token = request.state.token
-            checkpoint_manager = create_checkpoint_manager(token)
             
-            # Construct the checkpoint path and validate access
-            if body.name:
-                # Check if body.name is a twinkle:// path or a simple checkpoint name
-                if body.name.startswith("twinkle://"):
-                    # Parse twinkle:// path
-                    parsed = checkpoint_manager.parse_twinkle_path(body.name)
-                    if not parsed:
-                        raise ValueError(f"Invalid twinkle path format: {body.name}")
-                    
-                    # Extract the checkpoint name from the parsed path
-                    # parsed.checkpoint_id is like "weights/step-8"
-                    checkpoint_id = parsed.checkpoint_id
-                    checkpoint_name = parsed.checkpoint_id.split('/')[-1]  # Extract "step-8"
-                    
-                    # Use the training_run_id from the path as the model_id
-                    model_id_to_load = parsed.training_run_id
-                else:
-                    # User provided a simple checkpoint name
-                    checkpoint_id = f"weights/{body.name}"
-                    checkpoint_name = body.name
-                    model_id_to_load = adapter_name
+            # Check if body.name is a twinkle:// path or a simple checkpoint name
+            if body.name.startswith("twinkle://"):
+                # Parse twinkle:// path
+                checkpoint_manager = create_checkpoint_manager(token)
+                parsed = checkpoint_manager.parse_twinkle_path(body.name)
+                if not parsed:
+                    raise ValueError(f"Invalid twinkle path format: {body.name}")
                 
+                # Extract the checkpoint name from the parsed path
+                # parsed.checkpoint_id is like "weights/step-8"
+                checkpoint_id = parsed.checkpoint_id
+                checkpoint_name = parsed.checkpoint_id.split('/')[-1]  # Extract "step-8"
+                
+                # Use the training_run_id from the path as the model_id
+                model_id_to_load = parsed.training_run_id
+
                 # Verify checkpoint exists and user has access
                 checkpoint = checkpoint_manager.get(model_id_to_load, checkpoint_id)
                 if not checkpoint:
@@ -464,11 +461,12 @@ def build_model_app(model_id: str,
                     **extra_kwargs
                 )
             else:
-                # No checkpoint name provided - use default behavior
+                # No twinkle checkpoint name provided - load from modelscope
                 ret = self.model.load(
                     name=body.name,
                     adapter_name=adapter_name, 
                     load_optimizer=body.load_optimizer, 
+                    token=token,
                     **extra_kwargs
                 )
             

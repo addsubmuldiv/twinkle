@@ -192,12 +192,26 @@ class MultiLoraMegatronModel(MegatronModel):
             # Final synchronization to ensure all ranks complete save
             if dist.is_initialized():
                 dist.barrier()
+                
+            push_to_hub = kwargs.get('push_to_hub', False)
+            hub_model_id = kwargs.get('hub_model_id', None)
+            hub_token = kwargs.get('hub_token', None)
+            async_upload = kwargs.get('async_upload', True)
+            if push_to_hub:
+                assert hub_model_id is not None and hub_token is not None
+                if async_upload:
+                    HubOperation.async_push_to_hub(repo_id=hub_model_id, folder_path=checkpoint_dir, token=hub_token, private=True)
+                else:
+                    HubOperation.push_to_hub(repo_id=hub_model_id, folder_path=checkpoint_dir, token=hub_token, private=True)
 
     @remote_function(dispatch='all')
-    def load(self, name: Optional[str], output_dir: Optional[str] = None, **kwargs):
+    def load(self, name: str, output_dir: Optional[str] = None, **kwargs):
         if output_dir is None:
-            output_dir = 'output'
-        checkpoint_dir = os.path.join(output_dir, name)
+            # load from hub
+            token = kwargs.pop('token', None)
+            checkpoint_dir = HubOperation.download_model(name, token=token)
+        else:
+            checkpoint_dir = os.path.join(output_dir, name)
         bridge = self._bridge
         with self.multi_adapter.save_context(kwargs.get("adapter_name")) as adapter_name:
             for _model in self.strategy.unwrap_model(self.model):

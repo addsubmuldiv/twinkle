@@ -436,13 +436,12 @@ def generate_models():
 import uuid
 from twinkle_client.http import TWINKLE_SERVER_URL
 from twinkle_client.http import http_post, heartbeat_manager
-from twinkle.model.base import TwinkleModel
 from transformers import PreTrainedModel, PretrainedConfig
 from twinkle import DeviceMesh
 from twinkle.data_format import InputFeature, Trajectory
 
 
-class MultiLoraTransformersModel(TwinkleModel, PreTrainedModel):
+class MultiLoraTransformersModel(PreTrainedModel):
     """Client wrapper for TwinkleModel that calls server HTTP endpoints.
     
     This client manages adapters and sends training/inference requests to the model server.
