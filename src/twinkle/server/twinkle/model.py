@@ -11,7 +11,6 @@ from ray import serve
 
 import twinkle
 from twinkle import DeviceGroup, DeviceMesh
-from twinkle.model import MultiLoraTransformersModel
 from twinkle.model.base import TwinkleModel
 from twinkle.data_format import InputFeature, Trajectory
 from twinkle.server.utils.validation import verify_request_token
@@ -156,6 +155,7 @@ def build_model_app(model_id: str,
                     **kwargs
                 )
             else:
+                from twinkle.model import MultiLoraTransformersModel
                 self.model = MultiLoraTransformersModel(
                     model_id=model_id,
                     device_mesh=self.device_mesh,
