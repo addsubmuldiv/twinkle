@@ -24,6 +24,7 @@ from tinker import types
 
 from twinkle.server.utils.validation import verify_request_token, get_token_from_request
 from twinkle.server.utils.state import get_server_state
+from twinkle.hub import HubOperation
 from .common.io_utils import create_training_run_manager, create_checkpoint_manager
 from .common.task_queue import QueueState
 
@@ -491,6 +492,82 @@ def build_server_app(
                 raise HTTPException(
                     status_code=404, detail=f"Weights at {tinker_path} not found")
             return response
+
+        @app.post("/training_runs/{run_id}/checkpoints/{checkpoint_id:path}/publish")
+        async def publish_checkpoint(
+            self,
+            request: Request,
+            run_id: str,
+            checkpoint_id: str
+        ) -> Response:
+            """
+            Publish a checkpoint to the hub.
+            
+            This endpoint uploads a checkpoint to a hub repository. The hub_model_id
+            is automatically generated from the checkpoint content and user token.
+            The upload is performed asynchronously by default.
+            
+            Args:
+                request: FastAPI request object (contains token in state)
+                run_id: The training run identifier
+                checkpoint_id: The checkpoint identifier (can include path like weights/checkpoint_name)
+                
+            Returns:
+                Response with 204 No Content status
+                
+            Raises:
+                HTTPException 404 if checkpoint not found or access denied
+            """
+            token = get_token_from_request(request)
+            
+            training_run_manager = create_training_run_manager(token)
+            checkpoint_manager = create_checkpoint_manager(token)
+            
+            # Check ownership and get training run info
+            run = training_run_manager.get(run_id)
+            if not run:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Training run {run_id} not found or access denied"
+                )
+            
+            # Get checkpoint with token-based path
+            checkpoint = checkpoint_manager.get(run_id, checkpoint_id)
+            if not checkpoint:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Checkpoint {checkpoint_id} not found"
+                )
+            
+            # Get the filesystem path for the checkpoint
+            checkpoint_dir = str(checkpoint_manager.get_ckpt_dir(run_id, checkpoint_id))
+            
+            # Generate hub_model_id from checkpoint content and user token
+            # Format: {username}/{run_id}_{checkpoint_name}
+            try:
+                from modelscope.hub.api import HubApi, ModelScopeConfig
+                hub_api = HubApi(token=token)
+                hub_api.login() # Save user info to local
+                username = ModelScopeConfig.get_user_info()[0]
+            except Exception:
+                # Fallback to using sanitized token as username
+                import re
+                username = re.sub(r'[^\w\-]', '_', token)[:20]
+            
+            # Extract checkpoint name from checkpoint_id (e.g., "weights/step-8" -> "step-8")
+            checkpoint_name = checkpoint_id.split('/')[-1]
+            hub_model_id = f"{username}/{run_id}_{checkpoint_name}"
+            
+            # Upload to hub asynchronously with default async_upload=True
+            HubOperation.async_push_to_hub(
+                repo_id=hub_model_id,
+                folder_path=checkpoint_dir,
+                token=token,
+                private=True
+            )
+            
+            # Return 204 No Content (successful with no response body)
+            return Response(status_code=204)
 
     # --- Proxy Endpoints ---------------------------------------------------------
 
