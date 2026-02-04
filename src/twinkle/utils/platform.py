@@ -347,16 +347,15 @@ class DeviceMesh:
         """Consider all dp/fsdp ranks, uses to determine how to distribute the data"""
         dp_world_size = self.dp_world_size
         fsdp_world_size = self.fsdp_world_size
-        if fsdp_world_size is not None and fsdp_world_size > 1:
-            if dp_world_size is not None:
-                data_world_size= dp_world_size * fsdp_world_size
-            else:
-                data_world_size = fsdp_world_size
-        if data_world_size is None:
-            data_world_size = 1
-
         ulysses_size = self.ulysses_size or 1
-        assert data_world_size % ulysses_size == 0, f'data_world_size: {data_world_size} cannot be divided by ulysses_size: {ulysses_size}.'
+        if fsdp_world_size is not None and fsdp_world_size > 1:
+            data_world_size = dp_world_size * fsdp_world_size if dp_world_size is not None else fsdp_world_size
+        else:
+            data_world_size = dp_world_size if dp_world_size is not None else 1
+
+        assert data_world_size % ulysses_size == 0, (
+            f'data_world_size: {data_world_size} cannot be divided by ulysses_size: {ulysses_size}.'
+        )
         return data_world_size // ulysses_size
     def get_slice(self, total_length: int, rank: Optional[int] = None) -> slice:
         world_size = self.data_world_size
