@@ -28,6 +28,7 @@ from twinkle.data_format import InputFeature, Trajectory
 from twinkle.hub import HubOperation
 from twinkle.loss import Loss, CrossEntropyLoss
 from twinkle.metric import Metric
+from twinkle.patch import Patch
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
 from twinkle.utils import torch_util, construct_class
@@ -175,13 +176,6 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         os.environ['TOKENIZERS_PARALLELISM'] = 'true'
         self._try_init_process_group()
         super(PreTrainedModel, self).__init__()
-        if isinstance(model_cls, str):
-            model_cls = getattr(transformers, model_cls)
-        if model_id is None:
-            self.model = model_cls.from_config(config, **kwargs)
-        else:
-            model_id = HubOperation.download_model(model_id)
-            self.model = model_cls.from_pretrained(model_id, config=config, **kwargs)
         self.model_id = model_id
         self.tokenizer_id = kwargs.get('tokenizer_id', self.model_id)
         # The Default tokenizer will be used to save with a model if no template was set.
@@ -192,6 +186,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self._ddp_config = ddp_config or {}
         self._decide_strategy(strategy)
         self.grad_scaler_config = grad_scaler_config
+        if isinstance(model_cls, str):
+            model_cls = getattr(transformers, model_cls)
+        if model_id is None:
+            self.model = model_cls.from_config(config, **kwargs)
+        else:
+            model_id = HubOperation.download_model(model_id)
+            self.model = model_cls.from_pretrained(model_id, config=config, **kwargs)
         self._model_wrapped = False
         self.optimizer_group: Dict[str, OptimizerGroup] = {_default_adapter_name: self._construct_default_optimizer_group()}
 
@@ -228,6 +229,15 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
             else None
         )
 
+    def _get_default_group(self):
+        """Get the only group has optimizer, else return the default one"""
+        names = [name for name, og in self.optimizer_group.items() if og.optimizer is not None]
+        if names:
+            assert len(names) == 1, 'Only one group is supported.'
+            return names[0]
+        else:
+            return _default_adapter_name
+
     @staticmethod
     def _not_encoded(inputs):
         assert isinstance(inputs, dict)
@@ -236,15 +246,18 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     def _lazy_wrap_model(self):
         if not self._model_wrapped:
             optimizer_groups = [og for og in self.optimizer_group.values() if og.optimizer is not None]
-            assert len(optimizer_groups) == 1
-            optimizer_group = optimizer_groups[0]
-            optimizer = optimizer_group.optimizer
-            assert optimizer is not None
             self._maybe_apply_expert_parallel()
             if self.sp_strategy is not None:
                 self.sp_strategy.initialize()
-            self.model, optimizer = self.strategy.wrap_model(self.model, optimizer)
-            optimizer_group.optimizer = optimizer
+            if len(optimizer_groups) == 1:
+                optimizer_group = optimizer_groups[0]
+                optimizer = optimizer_group.optimizer
+                assert optimizer is not None
+                self.model, optimizer = self.strategy.wrap_model(self.model, optimizer)
+                optimizer_group.optimizer = optimizer
+            else:
+                # maybe forward_only, no optimizer_group available
+                self.model = self.strategy.wrap_model(self.model)
             self._model_wrapped = True
 
     @staticmethod
@@ -299,7 +312,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         Returns:
             The output of the model forward.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         self._lazy_wrap_model()
         if (isinstance(inputs, dict) and self._not_encoded(inputs)) or (isinstance(inputs, list) and self._not_encoded(inputs[0])):
@@ -324,6 +337,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         inputs['labels'] = labels
         optimizer_config.inputs = inputs
         optimizer_config.outputs = outputs
+        optimizer_config.loss_value = outputs.get('aux_loss', 0)
         return outputs
 
     @remote_function(dispatch='slice_dp', collect='flatten')
@@ -337,7 +351,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         Returns:
             The output of the model forward.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         self._lazy_wrap_model()
         if (isinstance(inputs, dict) and self._not_encoded(inputs)) or (isinstance(inputs, list) and self._not_encoded(inputs[0])):
@@ -374,7 +388,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         Returns:
             A scalar loss value.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         loss_instance: Loss = optimizer_config.loss_instance
         assert isinstance(loss_instance, Loss), 'Set a loss_instance before calculating loss'
@@ -384,8 +398,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         loss_value: torch.Tensor = loss_instance(inputs, outputs, **kwargs)
         if self.sp_strategy is not None and 'labels' in inputs:
             loss_value = self.sp_strategy.reduce_loss(loss_value, inputs['labels'])
-        optimizer_config.loss_value = loss_value
-        return loss_value.item()
+        optimizer_config.loss_value += loss_value
+        outputs['loss'] = optimizer_config.loss_value
+        return optimizer_config.loss_value.item()
 
     @remote_function()
     def backward(self, **kwargs):
@@ -396,7 +411,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 gradient_accumulation_steps: Number of gradient accumulation steps.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         loss_value = optimizer_config.loss_value
         assert loss_value is not None, 'Do forwarding and calculating loss before backward'
@@ -410,6 +425,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         else:
             loss_value.backward()
         optimizer_config.cur_step += 1
+        optimizer_config.loss_value = None
 
     @remote_function(dispatch='slice_dp', collect='mean')
     def forward_backward(self, *, inputs: Union[InputFeature, List[InputFeature], Trajectory, List[Trajectory]], **kwargs):
@@ -424,9 +440,8 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         Returns:
             The output of the model forward.
         """
-        output = self.forward(inputs=inputs, **kwargs)
+        self.forward(inputs=inputs, **kwargs)
         loss = self.calculate_loss(**kwargs)
-        output['loss'] = loss
         self.backward(**kwargs)
         return loss
 
@@ -442,7 +457,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         Returns:
             Total norm of the parameter gradients (viewed as a single vector).
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if not optimizer_config.do_grad_sync(kwargs.get('gradient_accumulation_steps')):
             return
@@ -543,7 +558,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed for `optimizer.step`.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         grad_accum_steps = kwargs.pop('gradient_accumulation_steps', None)
         if not optimizer_config.do_grad_sync(grad_accum_steps):
@@ -586,7 +601,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed for `optimizer.zero_grad`.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if not optimizer_config.do_grad_sync(kwargs.pop('gradient_accumulation_steps', None)):
             return
@@ -603,7 +618,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed for `lr_scheduler.step`.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if not optimizer_config.do_grad_sync(kwargs.pop('gradient_accumulation_steps', None)):
             return
@@ -623,7 +638,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the loss instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         optimizer_config.loss_instance = construct_class(loss_cls, Loss, twinkle.loss, **kwargs)
 
@@ -639,7 +654,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 weight_decay: Weight decay
                 Any parameters needed to construct the optimizer instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if isinstance(optimizer_cls, Optimizer):
             optimizer_config.optimizer = optimizer_cls
@@ -687,13 +702,17 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the lr_scheduler instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         optimizer = optimizer_config.optimizer
         assert isinstance(optimizer, Optimizer), 'Set optimizer correctly before setting lr_scheduler'
         kwargs['optimizer'] = optimizer
         scheduler = construct_class(scheduler_cls, LRScheduler, [torch.optim.lr_scheduler, twinkle.module.scheduler], **kwargs)
         optimizer_config.lr_scheduler = scheduler
+
+    def apply_patch(self, patch_cls: Union[Patch, Type[Patch], str], **kwargs):
+        patch_ins = construct_class(patch_cls, Patch, twinkle.patch)
+        patch_ins.patch(self.model, **kwargs)
 
     def __del__(self):
         HubOperation.wait_for()
@@ -710,7 +729,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 save_optimizer: Whether to save optimizer state.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if name is None:
             name = f'checkpoint-step-{optimizer_config.cur_step}'
@@ -777,7 +796,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 load_optimizer: Whether to load optimizer and scheduler states.
         """
         load_optimizer = kwargs.get('load_optimizer', False)
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
 
         if output_dir is None:
             # load from hub
@@ -837,15 +856,15 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
 
     @remote_function(collect='first')
     def get_state_dict(self, **kwargs):
-        return self._get_trainable_parameters(kwargs.pop('adapter_name', _default_adapter_name))
+        return self._get_trainable_parameters(kwargs.pop('adapter_name', self._get_default_group()))
 
     @remote_function(collect='first')
     def calculate_metric(self, is_training, **kwargs):
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         return optimizer_config.calculate_metrics(is_training)
 
-    def _patch_adapter(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], train_group: str, **kwargs):
+    def _patch_adapter(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], **kwargs):
         assert adapter_name, 'Use a different adapter_name, current is empty.'
         unwrapped_model = self.strategy.unwrap_model(self.model)
         if isinstance(config_or_dir, str):
@@ -885,7 +904,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 is_trainable: Whether the adapter is trainable.
                 gradient_accumulation_steps: The number of gradient accumulation steps
         """
-        self._patch_adapter(adapter_name, config_or_dir, _default_adapter_name, **kwargs)
+        self._patch_adapter(adapter_name, config_or_dir, **kwargs)
 
     @remote_function()
     def set_template(self, template_cls: Union[Type[Template], str, Template], **kwargs):
@@ -898,7 +917,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the template_cls instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         kwargs['model_id'] = self.tokenizer_id
         template = construct_class(template_cls, Template, twinkle.template, **kwargs)
@@ -913,7 +932,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the processor_cls instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         kwargs['device_mesh'] = self.device_mesh
         processor = construct_class(processor_cls, InputProcessor, twinkle.processor, **kwargs)
@@ -927,7 +946,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the GradScaler instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         from torch.amp.grad_scaler import GradScaler
         grad_scaler_config = self.grad_scaler_config.copy()
@@ -943,7 +962,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the metric_cls instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         kwargs['device_mesh'] = self.device_mesh
         kwargs['process_group'] = optimizer_config._dp_group
@@ -966,9 +985,9 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         return trainable_param_names
 
     @remote_function(execute='first')
-    def get_train_configs(self, **kwargs):
+    def get_train_configs(self, **kwargs) -> str:
         expr = ''
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if optimizer_config.adapter_config is not None:
             config = optimizer_config.adapter_config.__dict__

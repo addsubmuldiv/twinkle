@@ -6,6 +6,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from twinkle.loss.base import Loss
 from twinkle.metric import Metric
+from twinkle.patch import Patch
 from twinkle.processor import InputProcessor
 from twinkle.template import Template
 from twinkle import torch_util, Platform
@@ -79,6 +80,10 @@ class TwinkleModel(ABC):
         ...
 
     @abstractmethod
+    def apply_patch(self, patch_cls: Union[Patch, Type[Patch], str], **kwargs):
+        ...
+
+    @abstractmethod
     def add_metric(self, metric_cls: Union[Metric, str], **kwargs):
         ...
 
@@ -99,7 +104,7 @@ class TwinkleModel(ABC):
         ...
 
     @abstractmethod
-    def get_train_configs(self, **kwargs):
+    def get_train_configs(self, **kwargs) -> str:
         ...
 
     def upload_to_hub(self, checkpoint_dir: str, hub_model_id: str, hub_token: Optional[str] = None, async_upload: bool = True):

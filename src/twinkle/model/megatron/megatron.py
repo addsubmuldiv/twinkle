@@ -19,6 +19,7 @@ from transformers import PretrainedConfig
 
 import twinkle
 import twinkle.metric
+import twinkle.patch
 from twinkle import DeviceMesh, remote_class, remote_function, template, Platform
 from twinkle import requires
 from twinkle import torch_util
@@ -33,6 +34,7 @@ from .strategy import MegatronStrategy
 from twinkle.utils import construct_class, exists
 from .args import get_args, set_args, TwinkleMegatronArgs
 from .model import get_megatron_model_meta, GPTBridge
+from ...patch import Patch
 
 
 @dataclass
@@ -976,6 +978,9 @@ class MegatronModel(TwinkleModel, nn.Module):
         """
         self._patch_adapter(adapter_name, config_or_dir, **kwargs)
 
+    def apply_patch(self, patch_cls: Union[Patch, Type[Patch], str], **kwargs):
+        patch_ins = construct_class(patch_cls, Patch, twinkle.patch)
+        patch_ins.patch(self.model, **kwargs)
 
     @remote_function(dispatch='all')
     def set_template(self, template_cls: Union[Template, Type[Template], str], **kwargs):
