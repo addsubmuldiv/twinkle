@@ -140,59 +140,6 @@ python cookbook/grpo/lora_npu.py
 
 查看 `cookbook/remote/tinker/ascend/` 目录了解远程训练服务端配置。
 
-## NPU 特定配置
-
-### 环境变量
-
-Twinkle 在 NPU 环境下会自动识别和使用以下环境变量：
-
-| 环境变量 | 说明 | 示例 |
-|---------|------|------|
-| `ASCEND_RT_VISIBLE_DEVICES` | 指定可见的 NPU 设备 | `0,1,2,3` |
-| `TRUST_REMOTE_CODE` | 允许加载远程代码 | `1` |
-| `TWINKLE_SEED` | 随机种子 | `42` |
-| `TWINKLE_FULL_DETERMINISM` | 完全确定性训练 | `1` |
-
-### 设备网格配置
-
-在 NPU 环境下，需要指定 `device_type='npu'`。以下是**已验证**的配置示例：
-
-```python
-from twinkle import DeviceMesh
-
-# 单卡
-device_mesh = DeviceMesh.from_sizes(dp_size=1, device_type='npu')
-
-# 2 卡 DP
-device_mesh = DeviceMesh.from_sizes(dp_size=2, device_type='npu')
-
-# 4 卡 DP + FSDP (2x2) - 已验证
-device_mesh = DeviceMesh.from_sizes(dp_size=2, fsdp_size=2, device_type='npu')
-```
-
-**注意**：TP/PP/EP 等高级并行策略暂无 NPU 验证，配置方式请参考 GPU 文档。
-
-### 设备组配置
-
-使用 Ray 模式时，需要在 DeviceGroup 中指定设备类型：
-
-```python
-from twinkle.infra import DeviceGroup
-
-device_groups = [
-    DeviceGroup(
-        name='actor',
-        ranks=[0, 1, 2, 3, 4, 5],  # Actor 使用 6 张卡
-        device_type='npu',
-    ),
-    DeviceGroup(
-        name='ref',
-        ranks=[6, 7],  # Reference 模型使用 2 张卡
-        device_type='npu',
-    ),
-]
-```
-
 ## 并行策略
 
 Twinkle 在 NPU 上目前支持以下**经过验证**的并行策略：

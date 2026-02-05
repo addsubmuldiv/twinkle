@@ -140,59 +140,6 @@ python cookbook/grpo/lora_npu.py
 
 Check the `cookbook/remote/tinker/ascend/` directory for remote training server configurations.
 
-## NPU-Specific Configuration
-
-### Environment Variables
-
-Twinkle automatically recognizes and uses the following environment variables in NPU environments:
-
-| Environment Variable | Description | Example |
-|---------------------|-------------|---------|
-| `ASCEND_RT_VISIBLE_DEVICES` | Specify visible NPU devices | `0,1,2,3` |
-| `TRUST_REMOTE_CODE` | Allow loading remote code | `1` |
-| `TWINKLE_SEED` | Random seed | `42` |
-| `TWINKLE_FULL_DETERMINISM` | Fully deterministic training | `1` |
-
-### Device Mesh Configuration
-
-In NPU environments, specify `device_type='npu'`. Here are **verified** configuration examples:
-
-```python
-from twinkle import DeviceMesh
-
-# Single card
-device_mesh = DeviceMesh.from_sizes(dp_size=1, device_type='npu')
-
-# 2-card DP
-device_mesh = DeviceMesh.from_sizes(dp_size=2, device_type='npu')
-
-# 4-card DP + FSDP (2x2) - Verified
-device_mesh = DeviceMesh.from_sizes(dp_size=2, fsdp_size=2, device_type='npu')
-```
-
-**Note**: Advanced parallelism strategies like TP/PP/EP have not been verified on NPU. Please refer to GPU documentation for configuration details.
-
-### Device Group Configuration
-
-When using Ray mode, specify device type in DeviceGroup:
-
-```python
-from twinkle.infra import DeviceGroup
-
-device_groups = [
-    DeviceGroup(
-        name='actor',
-        ranks=[0, 1, 2, 3, 4, 5],  # Actor uses 6 cards
-        device_type='npu',
-    ),
-    DeviceGroup(
-        name='ref',
-        ranks=[6, 7],  # Reference model uses 2 cards
-        device_type='npu',
-    ),
-]
-```
-
 ## Parallelism Strategies
 
 Currently **verified** parallelism strategies on Twinkle NPU:
