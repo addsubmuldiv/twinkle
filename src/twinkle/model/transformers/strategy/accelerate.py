@@ -108,8 +108,8 @@ class AccelerateStrategy:
             **fsdp_config,
         )
         # Enable memory efficient model loading in transformers(see `is_fsdp_enabled` in transformers)
-        os.environ['ACCELERATE_USE_FSDP'] = '1'
-        os.environ['FSDP_CPU_RAM_EFFICIENT_LOADING'] = '1'
+        # os.environ['ACCELERATE_USE_FSDP'] = '1'
+        # os.environ['FSDP_CPU_RAM_EFFICIENT_LOADING'] = '1'
         return fsdp_plugin
 
     def wrap_model(self, model, *args):
