@@ -176,7 +176,34 @@ class CheckpointManager(BaseCheckpointManager):
     
     def _parse_checkpoint(self, data: Dict[str, Any]) -> Checkpoint:
         """Parse checkpoint data into Checkpoint model."""
+        data = data.copy()
+        # Transform tinker_path to twinkle_path if needed
+        if 'tinker_path' in data and 'twinkle_path' not in data:
+            data['twinkle_path'] = data.pop('tinker_path')
+        elif 'twinkle_path' not in data and 'path' in data:
+            data['twinkle_path'] = data.pop('path')
         return Checkpoint(**data)
+    
+    def get(self, model_id: str, checkpoint_id: str) -> Optional[Checkpoint]:
+        """
+        Get checkpoint metadata with backwards compatibility.
+        
+        Args:
+            model_id: The model identifier
+            checkpoint_id: The checkpoint identifier
+            
+        Returns:
+            Checkpoint object or None if not found
+        """
+        data = self._read_ckpt_info(model_id, checkpoint_id)
+        if not data:
+            return None
+        # Handle backwards compatibility: construct twinkle_path if missing
+        if 'twinkle_path' not in data and 'tinker_path' not in data and 'path' not in data:
+            if 'checkpoint_id' in data:
+                data = data.copy()
+                data['twinkle_path'] = f"{self.path_prefix}{model_id}/{data['checkpoint_id']}"
+        return self._parse_checkpoint(data)
     
     def _create_checkpoints_response(self, checkpoints: List[Checkpoint]) -> CheckpointsListResponse:
         """Create a checkpoints list response."""

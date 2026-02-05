@@ -56,6 +56,7 @@ def train():
     if resume_path:
         logger.info(f'Resuming training from {resume_path}')
         model.load(resume_path, load_optimizer=True)
+    # Start training
     logger.info(model.get_train_configs())
     for step, batch in enumerate(dataloader):
         output = model.forward_backward(inputs=batch)
@@ -66,10 +67,12 @@ def train():
         model.zero_grad()
         model.lr_step()
 
+    # Save the model
     twinkle_path = model.save(name=f'step-{step}', save_optimizer=True)
     logger.info(f"Saved checkpoint: {twinkle_path}")
     
-    hub_model_id = 'AlexEz/twinkle-self-cognition-2'
+    # Upload the model to ModelScope
+    hub_model_id = 'AlexEz/twinkle-self-cognition'
     model.upload_to_hub(
         checkpoint_dir=twinkle_path, 
         hub_model_id=hub_model_id, 

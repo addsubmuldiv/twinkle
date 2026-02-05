@@ -1,7 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
-import threading
-import time
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, Request
@@ -11,10 +9,11 @@ from ray import serve
 
 import twinkle
 from twinkle import DeviceGroup, DeviceMesh
-from twinkle.model.base import TwinkleModel
 from twinkle.data_format import InputFeature, Trajectory
+from twinkle.server.utils.adapter_manager import AdapterManagerMixin
 from twinkle.server.utils.validation import verify_request_token
 from twinkle.server.utils.state import get_server_state, ServerStateProxy
+from twinkle.utils.logger import get_logger
 from .common.serialize import deserialize_object
 from .common.io_utils import (
     CreateModelRequest,
@@ -22,6 +21,8 @@ from .common.io_utils import (
     create_training_run_manager,
     create_checkpoint_manager,
 )
+
+logger = get_logger()
 
 
 class CreateRequest(BaseModel):
@@ -138,6 +139,7 @@ def build_model_app(model_id: str,
                     device_mesh: Dict[str, Any],
                     deploy_options: Dict[str, Any],
                     use_megatron: bool = False,
+                    adapter_config: Dict[str, Any] = None,
                     **kwargs):
     app = FastAPI()
 
@@ -147,15 +149,14 @@ def build_model_app(model_id: str,
 
     @serve.deployment(name="ModelManagement")
     @serve.ingress(app)
-    class ModelManagement:
-
-        COUNT_DOWN = 60 * 30
+    class ModelManagement(AdapterManagerMixin):
 
         def __init__(self, nproc_per_node: int, device_group: Dict[str, Any], device_mesh: Dict[str, Any]):
             self.device_group = DeviceGroup(**device_group)
             twinkle.initialize(mode='ray', nproc_per_node=nproc_per_node, groups=[self.device_group], lazy_collect=False)
             self.device_mesh = DeviceMesh(**device_mesh)
             if use_megatron:
+                from twinkle.model import MultiLoraMegatronModel
                 self.model = MultiLoraMegatronModel(
                     model_id=model_id,
                     device_mesh=self.device_mesh,
@@ -170,52 +171,17 @@ def build_model_app(model_id: str,
                     remote_group=self.device_group.name,
                     **kwargs
                 )
-            self.adapter_records: Dict[str, int] = {}
-            self.hb_thread = threading.Thread(target=self.countdown, daemon=True)
-            self.hb_thread.start()
-            self.adapter_lock = threading.Lock()
+            
+            # Initialize state before adapter manager (mixin needs self.state)
             self.state: ServerStateProxy = get_server_state()
-            self.per_token_model_limit = int(os.environ.get("TWINKLE_PER_USER_MODEL_LIMIT", 3))
-            self.key_token_dict = {}
 
-        def countdown(self):
-            while True:
-                time.sleep(1)
-                for key in list(self.adapter_records.keys()):
-                    self.adapter_records[key] += 1
-                    if self.adapter_records[key] > self.COUNT_DOWN:
-                        with self.adapter_lock:
-                            self.model.remove_adapter(key)
-                        self.adapter_records.pop(key, None)
-                        token = self.key_token_dict.pop(key, None)
-                        if token:
-                            self.handle_adapter_count(token, False)
-
-        def handle_adapter_count(self, token: str, add: bool):
-            user_key = token + '_' + 'model_adapter'
-            cur_count = self.state.get_config(user_key) or 0
-            if add:
-                if cur_count < self.per_token_model_limit:
-                    self.state.add_config(user_key, cur_count + 1)
-                else:
-                    raise RuntimeError(f'Model adapter count limitation reached: {self.per_token_model_limit}')
-            else:
-                if cur_count > 0:
-                    cur_count -= 1
-                    self.state.add_config(user_key, cur_count)
-                if cur_count <= 0:
-                    self.state.pop_config(user_key)
+            # Initialize adapter manager from mixin
+            self._init_adapter_manager(**adapter_config)
+            self.start_adapter_countdown()
 
         @app.post("/create")
         def create(self, request: Request, body: CreateRequest):
             return {'status': 'ok'}
-
-        def assert_adapter_exists(self, adapter_name: str):
-            assert adapter_name and adapter_name in self.adapter_records, f"Adapter {adapter_name} not found"
-
-        def assert_adapter_valid(self, adapter_name: Optional[str]):
-            assert adapter_name is None or adapter_name == '' or adapter_name in self.adapter_records, \
-                f"Adapter {adapter_name} is invalid"
 
         @staticmethod
         def get_adapter_name(request: Request, adapter_name: Optional[str]) -> Optional[str]:
@@ -433,24 +399,15 @@ def build_model_app(model_id: str,
             # Use resolve_load_path to handle path resolution
             resolved = checkpoint_manager.resolve_load_path(body.name)
             
-            if resolved.is_twinkle_path:
-                # Load from twinkle checkpoint directory
-                ret = self.model.load(
-                    name=resolved.checkpoint_name,
-                    output_dir=resolved.checkpoint_dir,
-                    adapter_name=adapter_name, 
-                    load_optimizer=body.load_optimizer, 
-                    **extra_kwargs
-                )
-            else:
-                # Load from hub (checkpoint_dir is None)
-                ret = self.model.load(
-                    name=resolved.checkpoint_name,
-                    adapter_name=adapter_name, 
-                    load_optimizer=body.load_optimizer, 
-                    token=token,
-                    **extra_kwargs
-                )
+            # Load from twinkle checkpoint directory
+            ret = self.model.load(
+                name=resolved.checkpoint_name,
+                output_dir=resolved.checkpoint_dir,
+                adapter_name=adapter_name, 
+                load_optimizer=body.load_optimizer,
+                token=token,
+                **extra_kwargs
+            )
             
             return {'result': ret}
 
@@ -536,12 +493,16 @@ def build_model_app(model_id: str,
             token = request.state.token
             training_run_manager = create_training_run_manager(token)
             
-            with self.adapter_lock:
+            with self._adapter_lock:
                 self.model.add_adapter_to_model(adapter_name, config, **extra_kwargs)
             
-            self.adapter_records[adapter_name] = 0
-            self.key_token_dict[adapter_name] = token
-            self.handle_adapter_count(token, True)
+            # Register adapter for lifecycle tracking
+            self.register_adapter(adapter_name, token)
+            
+            # Check adapter limit (raises if exceeded)
+            allowed, reason = self.check_adapter_limit(token, True)
+            if not allowed:
+                raise RuntimeError(reason)
             
             # Save training run metadata (similar to tinker's create_model)
             # Create a training run config from the adapter configuration
@@ -585,7 +546,7 @@ def build_model_app(model_id: str,
         def heartbeat(self, request: Request, body: HeartbeatRequest):
             adapter_name = self.get_adapter_name(request, adapter_name=body.adapter_name)
             self.assert_adapter_exists(adapter_name=adapter_name)
-            self.adapter_records[adapter_name] = 0
+            self.touch_adapter(adapter_name)
             return {'status': 'ok'}
 
         @app.post("/calculate_metric")

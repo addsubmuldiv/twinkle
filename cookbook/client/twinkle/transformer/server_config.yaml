@@ -26,6 +26,9 @@ applications:
     args:
       use_megatron: false
       model_id: "ms://Qwen/Qwen2.5-0.5B-Instruct"
+      adapter_config:
+        per_token_adapter_limit: 30
+        adapter_timeout: 1800
       nproc_per_node: 2
       device_group:
         name: model
