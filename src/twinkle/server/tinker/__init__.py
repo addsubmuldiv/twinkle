@@ -1,8 +1,8 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 
-from .model import build_model_app as _build_model_app
-from .sampler import build_sampler_app as _build_sampler_app
-from .server import build_server_app
+from .model import build_model_app as tinker_build_model_app
+from .sampler import build_sampler_app as tinker_build_sampler_app
+from .server import build_server_app as tinker_build_server_app
 from ..utils import wrap_builder_with_device_group_env
 
 

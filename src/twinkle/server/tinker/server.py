@@ -24,9 +24,9 @@ from tinker import types
 
 from twinkle.server.utils.validation import verify_request_token, get_token_from_request
 from twinkle.server.utils.state import get_server_state
+from twinkle.server.utils.task_queue import QueueState
 from twinkle.hub import HubOperation
 from .common.io_utils import create_training_run_manager, create_checkpoint_manager
-from .common.task_queue import QueueState
 
 logger = logging.getLogger(__name__)
 
