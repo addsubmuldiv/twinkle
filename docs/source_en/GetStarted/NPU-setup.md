@@ -60,7 +60,7 @@ pip install -e ".[transformers,ray]"
 
 If you need to use VLLMSampler for efficient inference, you can install vLLM and vLLM-Ascend.
 
-**Installation Steps** (Reference: [Swift Documentation](https://swift.readthedocs.io/zh-cn/latest/BestPractices/NPU-support.html)):
+**Installation Steps**:
 
 ```bash
 # Step 1: Install vLLM

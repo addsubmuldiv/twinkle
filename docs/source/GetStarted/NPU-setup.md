@@ -60,7 +60,7 @@ pip install -e ".[transformers,ray]"
 
 如果需要使用 VLLMSampler 进行高效推理，可以安装 vLLM 和 vLLM-Ascend。
 
-**安装步骤**（参考 [Swift 文档](https://swift.readthedocs.io/zh-cn/latest/BestPractices/NPU-support.html)）：
+**安装步骤**：
 
 ```bash
 # 第一步：安装 vLLM
