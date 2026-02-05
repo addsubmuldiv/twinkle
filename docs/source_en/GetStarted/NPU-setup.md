@@ -56,7 +56,21 @@ cd twinkle
 pip install -e ".[transformers,ray]"
 ```
 
-### 3. Verify Installation
+### 3. Install vLLM and vLLM-Ascend (Optional)
+
+If you need to use VLLMSampler for efficient inference, you can install vLLM and vLLM-Ascend:
+
+```bash
+# Install vLLM
+pip install vllm
+
+# Install vLLM-Ascend (Ascend adaptation version)
+# Please refer to the official documentation: https://github.com/vllm-project/vllm
+```
+
+**Note**: vLLM-Ascend installation may require specific CANN version compatibility. Please refer to the official vLLM-Ascend documentation for installation instructions.
+
+### 4. Verify Installation
 
 Create test script `verify_npu.py`:
 
@@ -220,7 +234,7 @@ Feature support matrix based on actual code verification:
 | QLoRA | ✅ | ❌ | - | Quantization operators not supported |
 | DPO | ✅ | 🚧 | - | Theoretically supported, to be verified |
 | Megatron TP/PP | ✅ | 🚧 | - | Under adaptation and verification |
-| VLLMSampler | ✅ | 🚧 | - | Requires vLLM-Ascend, to be verified |
+| VLLMSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | Verified and working |
 | Flash Attention | ✅ | ⚠️ | - | Some operators unsupported |
 
 **Legend**:

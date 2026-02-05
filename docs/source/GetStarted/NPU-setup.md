@@ -56,7 +56,21 @@ cd twinkle
 pip install -e ".[transformers,ray]"
 ```
 
-### 3. 验证安装
+### 3. 安装 vLLM 和 vLLM-Ascend（可选）
+
+如果需要使用 VLLMSampler 进行高效推理，可以安装 vLLM 和 vLLM-Ascend：
+
+```bash
+# 安装 vLLM
+pip install vllm
+
+# 安装 vLLM-Ascend（昇腾适配版本）
+# 请参考官方文档：https://github.com/vllm-project/vllm
+```
+
+**注意**：vLLM-Ascend 的安装可能需要特定的 CANN 版本配套，请参考 vLLM-Ascend 官方文档进行安装。
+
+### 4. 验证安装
 
 创建测试脚本 `verify_npu.py`：
 
@@ -220,7 +234,7 @@ pip install torch_npu-2.7.1-cp311-cp311-linux_aarch64.whl
 | QLoRA | ✅ | ❌ | - | 量化算子暂不支持 |
 | DPO | ✅ | 🚧 | - | 理论支持，待验证 |
 | Megatron TP/PP | ✅ | 🚧 | - | 待适配和验证 |
-| VLLMSampler | ✅ | 🚧 | - | 需 vLLM-Ascend，待验证 |
+| VLLMSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | 已验证可用 |
 | Flash Attention | ✅ | ⚠️ | - | 部分算子不支持 |
 
 **图例说明**：
