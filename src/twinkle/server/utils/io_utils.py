@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, TypeVar, Generic
 
 from pydantic import BaseModel
 
+from twinkle.hub import HubOperation
+
 
 TWINKLE_DEFAULT_SAVE_DIR = os.environ.get('TWINKLE_DEFAULT_SAVE_DIR', './outputs')
 CHECKPOINT_INFO_FILENAME = 'checkpoint_metadata.json'
@@ -37,6 +39,14 @@ class BaseCheckpoint(BaseModel):
     time: datetime
     size_bytes: int
     public: bool = False
+    # Training run info (stored for hub downloads)
+    base_model: Optional[str] = None
+    is_lora: bool = False
+    lora_rank: Optional[int] = None
+    train_unembed: Optional[bool] = None
+    train_mlp: Optional[bool] = None
+    train_attn: Optional[bool] = None
+    user_metadata: Optional[Dict[str, Any]] = None
 
 
 class BaseTrainingRun(BaseModel):
@@ -435,11 +445,32 @@ class BaseCheckpointManager(BaseFileManager, ABC):
     @abstractmethod
     def _create_checkpoint(
         self, checkpoint_id: str, checkpoint_type: str, 
-        path: str, size_bytes: int, public: bool
+        path: str, size_bytes: int, public: bool,
+        base_model: Optional[str] = None,
+        is_lora: bool = False,
+        lora_rank: Optional[int] = None,
+        train_unembed: Optional[bool] = None,
+        train_mlp: Optional[bool] = None,
+        train_attn: Optional[bool] = None,
+        user_metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Create checkpoint data.
         
+        Args:
+            checkpoint_id: The checkpoint identifier
+            checkpoint_type: Type of checkpoint ('training' or 'sampler')
+            path: The twinkle:// path to the checkpoint
+            size_bytes: Size of the checkpoint in bytes
+            public: Whether the checkpoint is public
+            base_model: The base model name/path
+            is_lora: Whether this is a LoRA checkpoint
+            lora_rank: The LoRA rank if applicable
+            train_unembed: Whether unembed layers are trained
+            train_mlp: Whether MLP layers are trained
+            train_attn: Whether attention layers are trained
+            user_metadata: User-provided metadata
+            
         Returns:
             Dictionary with checkpoint data
         """
@@ -594,12 +625,22 @@ class BaseCheckpointManager(BaseFileManager, ABC):
         path = f"{self.path_prefix}{model_id}/{checkpoint_id}"
         checkpoint_path = self.get_ckpt_dir(model_id, checkpoint_id)
         
+        # Read training run info to include in checkpoint metadata
+        run_info = self.training_run_manager._read_info(model_id)
+        
         ckpt_data = self._create_checkpoint(
             checkpoint_id=checkpoint_id,
             checkpoint_type=checkpoint_type,
             path=path,
             size_bytes=self.get_dir_size(checkpoint_path),
-            public=public
+            public=public,
+            base_model=run_info.get('base_model'),
+            is_lora=run_info.get('is_lora', False),
+            lora_rank=run_info.get('lora_rank'),
+            train_unembed=run_info.get('train_unembed'),
+            train_mlp=run_info.get('train_mlp'),
+            train_attn=run_info.get('train_attn'),
+            user_metadata=run_info.get('user_metadata')
         )
         self._write_ckpt_info(model_id, checkpoint_id, ckpt_data)
 
@@ -718,30 +759,64 @@ class BaseCheckpointManager(BaseFileManager, ABC):
         """
         Get weights info.
         
+        Supports both twinkle:// paths (local checkpoints) and hub model IDs.
+        For hub model IDs, downloads checkpoint_metadata.json from ModelScope.
+        
         Args:
-            checkpoint_path: The path
+            checkpoint_path: The twinkle:// path or hub model ID
             
         Returns:
             WeightsInfoResponse or None if not found
         """
-        parsed_path = self.parse_path(checkpoint_path)
-        if not parsed_path:
+        # Use resolve_load_path to determine if this is a twinkle path or hub path
+        try:
+            resolved = self.resolve_load_path(checkpoint_path, validate_exists=False)
+        except ValueError:
             return None
         
-        ckpt_info = self.get(parsed_path.training_run_id, parsed_path.checkpoint_id)
-        if not ckpt_info:
-            return None
+        if resolved.is_twinkle_path:
+            # Local twinkle:// path - read from local checkpoint metadata
+            ckpt_data = self._read_ckpt_info(resolved.training_run_id, resolved.checkpoint_id)
+            if not ckpt_data or not ckpt_data.get('base_model'):
+                return None
+            return self._create_weights_info(ckpt_data)
+        else:
+            # Hub model ID - download checkpoint_metadata.json from ModelScope
+            return self._get_weights_info_from_hub(checkpoint_path)
+    
+    def _get_weights_info_from_hub(self, hub_model_id: str) -> Optional[Any]:
+        """
+        Download and parse checkpoint_metadata.json from hub.
         
-        # Weight info is stored in the training run info
-        run_info = self.training_run_manager._read_info(parsed_path.training_run_id)
-        if not run_info:
+        Args:
+            hub_model_id: The hub model ID (e.g., 'user/model-name')
+            
+        Returns:
+            WeightsInfoResponse or None if not found or failed to download
+        """
+        try:
+            # Download only the checkpoint_metadata.json file from hub
+            local_dir = HubOperation.download_file(
+                repo_id=hub_model_id,
+                allow_patterns=[CHECKPOINT_INFO_FILENAME],
+                token=self.token
+            )
+            
+            # Read and parse the metadata
+            metadata_path = os.path.join(local_dir, CHECKPOINT_INFO_FILENAME)
+            if not os.path.exists(metadata_path):
+                return None
+                
+            with open(metadata_path, 'r') as f:
+                ckpt_data = json.load(f)
+            
+            if not ckpt_data.get('base_model'):
+                return None
+            
+            return self._create_weights_info(ckpt_data)
+            
+        except Exception:
             return None
-        
-        # Validate ownership
-        if not validate_ownership(self.token, run_info.get('model_owner', '')):
-            return None
-        
-        return self._create_weights_info(run_info)
 
     def resolve_load_path(self, path: str, validate_exists: bool = True) -> ResolvedLoadPath:
         """

@@ -22,6 +22,7 @@ from twinkle.server.utils.io_utils import (
     BaseWeightsInfoResponse,
     BaseTrainingRunManager,
     BaseCheckpointManager,
+    ResolvedLoadPath,
     validate_user_path,
     validate_ownership,
 )
@@ -146,7 +147,14 @@ class CheckpointManager(BaseCheckpointManager):
     
     def _create_checkpoint(
         self, checkpoint_id: str, checkpoint_type: str, 
-        path: str, size_bytes: int, public: bool
+        path: str, size_bytes: int, public: bool,
+        base_model: Optional[str] = None,
+        is_lora: bool = False,
+        lora_rank: Optional[int] = None,
+        train_unembed: Optional[bool] = None,
+        train_mlp: Optional[bool] = None,
+        train_attn: Optional[bool] = None,
+        user_metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Create checkpoint data."""
         checkpoint = Checkpoint(
@@ -155,7 +163,14 @@ class CheckpointManager(BaseCheckpointManager):
             time=datetime.now(),
             twinkle_path=path,
             size_bytes=size_bytes,
-            public=public
+            public=public,
+            base_model=base_model,
+            is_lora=is_lora,
+            lora_rank=lora_rank,
+            train_unembed=train_unembed,
+            train_mlp=train_mlp,
+            train_attn=train_attn,
+            user_metadata=user_metadata
         )
         return checkpoint.model_dump(mode='json')
     

@@ -11,10 +11,14 @@ from typing import Any, Dict, List, Optional
 from tinker import types
 
 from twinkle.server.utils.io_utils import (
+    TWINKLE_DEFAULT_SAVE_DIR,
     CHECKPOINT_INFO_FILENAME,
     TRAIN_RUN_INFO_FILENAME,
     BaseTrainingRunManager,
     BaseCheckpointManager,
+    ResolvedLoadPath,
+    validate_user_path,
+    validate_ownership,
 )
 
 
@@ -109,9 +113,17 @@ class CheckpointManager(BaseCheckpointManager):
     
     def _create_checkpoint(
         self, checkpoint_id: str, checkpoint_type: str, 
-        path: str, size_bytes: int, public: bool
+        path: str, size_bytes: int, public: bool,
+        base_model: Optional[str] = None,
+        is_lora: bool = False,
+        lora_rank: Optional[int] = None,
+        train_unembed: Optional[bool] = None,
+        train_mlp: Optional[bool] = None,
+        train_attn: Optional[bool] = None,
+        user_metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Create checkpoint data."""
+        # Create base checkpoint using tinker types
         checkpoint = types.Checkpoint(
             checkpoint_id=checkpoint_id,
             checkpoint_type=checkpoint_type,
@@ -120,7 +132,18 @@ class CheckpointManager(BaseCheckpointManager):
             size_bytes=size_bytes,
             public=public
         )
-        return checkpoint.model_dump(mode='json')
+        result = checkpoint.model_dump(mode='json')
+        
+        # Add training run info fields (may not be supported by external types.Checkpoint)
+        result['base_model'] = base_model
+        result['is_lora'] = is_lora
+        result['lora_rank'] = lora_rank
+        result['train_unembed'] = train_unembed
+        result['train_mlp'] = train_mlp
+        result['train_attn'] = train_attn
+        result['user_metadata'] = user_metadata
+        
+        return result
     
     def _parse_checkpoint(self, data: Dict[str, Any]) -> types.Checkpoint:
         """Parse checkpoint data into Checkpoint model."""
