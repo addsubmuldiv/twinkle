@@ -162,6 +162,8 @@ dataset = Dataset(..., remote_group='actor_group')
 dataset.map(...)
 ```
 
+Dataset组件的ray运行都是`first`方式，即只有一个worker进程运行和加载。
+
 > 整体数据集的使用流程是：
 > 1. 构造数据集，如果需要ray worker中运行则传入remote_group参数
 > 2. 设置template
