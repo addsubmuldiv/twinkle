@@ -12,19 +12,19 @@ from twinkle.model import TransformersModel
 logger = get_logger()
 
 MODEL_ID = os.environ.get(
-    "QWEN3_MODEL_ID", "ms://Qwen/Qwen3-30B-A3B-Instruct-2507"
+    "MODEL_ID", "ms://Qwen/Qwen3-30B-A3B-Instruct-2507"
 )
-DATASET_ID = os.environ.get("QWEN3_DATASET_ID", "/path/to/alpaca/dataset")
-TEMPLATE_ID = os.environ.get("QWEN3_TEMPLATE_ID", "Template")
-PROCESSOR_ID = os.environ.get("QWEN3_PROCESSOR_ID", "AlpacaProcessor")
+DATASET_ID = os.environ.get("DATASET_ID", "/path/to/alpaca/dataset")
+TEMPLATE_ID = os.environ.get("TEMPLATE_ID", "Template")
+STRATEGY = os.environ.get("TRAIN_STRATEGY", "native_fsdp")
 
-WORLD_SIZE = int(os.environ.get("QWEN3_WORLD_SIZE", "2"))
-NUM_LAYERS = int(os.environ.get("QWEN3_NUM_LAYERS", "4"))
-BATCH_SIZE = int(os.environ.get("QWEN3_BATCH_SIZE", "4"))
-GRAD_ACCUM_STEPS = int(os.environ.get("QWEN3_GRAD_ACCUM_STEPS", "4"))
-SAVE_INTERVAL = int(os.environ.get("QWEN3_SAVE_INTERVAL", "50"))
+WORLD_SIZE = int(os.environ.get("WORLD_SIZE", "2"))
+NUM_LAYERS = int(os.environ.get("NUM_LAYERS", "4"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "4"))
+GRAD_ACCUM_STEPS = int(os.environ.get("GRAD_ACCUM_STEPS", "4"))
+SAVE_INTERVAL = int(os.environ.get("SAVE_INTERVAL", "50"))
 
-# EP is disabled: mesh only has fsdp/dp, and fsdp_size = world_size.
+
 device_mesh = DeviceMesh.from_sizes(
     world_size=WORLD_SIZE,
     fsdp_size=WORLD_SIZE,
@@ -32,12 +32,7 @@ device_mesh = DeviceMesh.from_sizes(
     device_type=Platform.get_platform().device_prefix(),
 )
 
-os.environ.setdefault("RAY_DEDUP_LOGS", "0")
-if Platform.get_world_size() != WORLD_SIZE:
-    raise RuntimeError(
-        f"QWEN3_WORLD_SIZE={WORLD_SIZE} but distributed world size is "
-        f"{Platform.get_world_size()}. Use torchrun with matching nproc_per_node."
-    )
+
 twinkle.initialize(
     mode="local",
     global_device_mesh=device_mesh,
@@ -57,10 +52,7 @@ def train():
     except ValueError:
         dataset.set_template("Template", model_id=MODEL_ID)
 
-    processor = PROCESSOR_ID
-    if PROCESSOR_ID.lower() == "alpaca":
-        processor = "AlpacaProcessor"
-
+    processor = "AlpacaProcessor"
     dataset.map(processor)
     dataset.encode(batched=True)
     dataloader = DataLoader(
@@ -72,8 +64,11 @@ def train():
     model = TransformersModel(
         model_id=MODEL_ID,
         config=config,
-        strategy="native_fsdp",
+        strategy=STRATEGY,
         device_mesh=device_mesh,
+        fsdp_config={
+            "transformer_cls_names_to_wrap": ["Qwen3MoeSparseMoeBlock"],
+        },
     )
     model.set_optimizer("AdamW")
 
@@ -94,7 +89,7 @@ def train():
             logger.info(
                 f"Current is step {step // GRAD_ACCUM_STEPS}, metric: {metric}"
             )
-        if step % SAVE_INTERVAL == 0:
+        if step > 1 and step % SAVE_INTERVAL == 0:
             model.save("./output")
 
 
