@@ -667,7 +667,7 @@ def _run_worker_fsdp_sp_align(
 
 
 class TestFSDPSequenceParallelQwen3MoePretrained(unittest.TestCase):
-    def test_qwen3_moe_pretrained_fsdp_sp_alignment(self):
+    def test_qwen3_pretrained_fsdp_sp_alignment(self):
         if not dist.is_available():
             self.skipTest("torch.distributed is not available")
         if not torch.cuda.is_available():
@@ -675,7 +675,7 @@ class TestFSDPSequenceParallelQwen3MoePretrained(unittest.TestCase):
         world_size = 4
         if torch.cuda.device_count() < world_size:
             self.skipTest("Requires at least 4 GPUs for FSDP+SP alignment test.")
-        model_id = os.environ.get("QWEN3_MOE_MODEL_ID", "Qwen/Qwen3-30B-A3B-Instruct-2507")
+        model_id = os.environ.get("QWEN3_MOE_MODEL_ID", "Qwen/Qwen3-0.6B")
         local_files_only = os.environ.get("QWEN3_MOE_LOCAL_ONLY", "1") != "0"
         try:
             _load_qwen3_moe_config(model_id, local_files_only)
