@@ -22,6 +22,7 @@ from twinkle import get_logger
 
 logger = get_logger()
 
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -40,7 +41,7 @@ Examples:
   python -m twinkle.server -c config.yaml --no-wait
         """,
     )
-    
+
     # Config file option
     parser.add_argument(
         "-c", "--config",
@@ -49,7 +50,7 @@ Examples:
         metavar="PATH",
         help="Path to YAML configuration file (required)",
     )
-    
+
     # Server type
     parser.add_argument(
         "-t", "--server-type",
@@ -59,7 +60,7 @@ Examples:
         metavar="TYPE",
         help="Server type: 'tinker' or 'twinkle' (default: twinkle)",
     )
-    
+
     # Ray options
     parser.add_argument(
         "--namespace",
@@ -67,7 +68,7 @@ Examples:
         metavar="NS",
         help="Ray namespace (default: 'twinkle_cluster' for tinker, None for twinkle)",
     )
-    
+
     # Runtime options
     parser.add_argument(
         "--no-wait",
@@ -82,45 +83,41 @@ Examples:
         metavar="LEVEL",
         help="Logging level (default: INFO)",
     )
-    
+
     return parser
 
 
 def main(args: list[str] | None = None) -> int:
     """
     Main entry point for the CLI.
-    
+
     Args:
         args: Command line arguments (uses sys.argv if None)
-        
+
     Returns:
         Exit code (0 for success, non-zero for error)
     """
     parser = create_parser()
     parsed_args = parser.parse_args(args)
-    
-    # Setup logging
-    setup_logging(parsed_args.log_level)
-    
-    
+
     try:
         from twinkle.server.launcher import launch_server
-        
+
         # Config file mode
         config_path = Path(parsed_args.config)
         if not config_path.exists():
             logger.error(f"Config file not found: {config_path}")
             return 1
-        
+
         launch_server(
             config_path=config_path,
             server_type=parsed_args.server_type,
             ray_namespace=parsed_args.namespace,
             wait=not parsed_args.no_wait,
         )
-        
+
         return 0
-        
+
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
         return 0
