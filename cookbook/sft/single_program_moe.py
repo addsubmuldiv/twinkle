@@ -22,7 +22,7 @@ if Platform.get_rank() == 0:
     )
 
 
-device_mesh = DeviceMesh.from_sizes(dp_size=2, fsdp_size=2)
+device_mesh = DeviceMesh.from_sizes(dp_size=2, fsdp_size=4)
 twinkle.initialize(mode='local', global_device_mesh=device_mesh)
 
 logger = get_logger()
@@ -56,20 +56,20 @@ def train():
         lora_alpha=32,
         target_modules='all-linear'
     )
-
-    model.add_adapter_to_model('default', lora_config, gradient_accumulation_steps=1)
-    model.set_optimizer(optimizer_cls='AdamW', lr=1e-4, adapter_name='default')
-    model.set_lr_scheduler(scheduler_cls='CosineWarmupScheduler', num_warmup_steps=5, num_training_steps=len(dataloader), adapter_name='default')
+    model.apply_patch('ms://twinkle-kit/qwen3_moe_transformers4_patch')
+    # model.add_adapter_to_model('default', lora_config, gradient_accumulation_steps=1)
+    model.set_optimizer(optimizer_cls='AdamW', lr=1e-4)
+    model.set_lr_scheduler(scheduler_cls='CosineWarmupScheduler', num_warmup_steps=5, num_training_steps=len(dataloader))
     logger.info(get_device_placement())
-    logger.info(model.get_train_configs(adapter_name='default'))
+    logger.info(model.get_train_configs())
     logger.info(f'Total steps: {len(dataloader)}')
     loss_metric = 99.0
     for step, batch in enumerate(dataloader):
-        model.forward_backward(inputs=batch, adapter_name='default')
+        model.forward_backward(inputs=batch)
         # outputs = model.forward_only(inputs=batch, adapter_name='default')
-        model.clip_grad_and_step(adapter_name='default')
+        model.clip_grad_and_step()
         if step % 1 == 0:
-            metric = model.calculate_metric(is_training=True, adapter_name='default')
+            metric = model.calculate_metric(is_training=True)
             _metrics = {}
             for key, value in metric.items():
                 try:
@@ -87,9 +87,9 @@ def train():
         #    if loss_metric > float(metrics['loss']):
         #        model.save(f'checkpoint-{step}')
         #        loss_metric = float(metrics['loss'])
-    model.save(f'last-checkpoint', adapter_name='default')
+    model.save(f'last-checkpoint')
     time.sleep(3)
-    model.load(f'last-checkpoint', adapter_name='default')
+    model.load(f'last-checkpoint')
     # model.remove_adapter(adapter_name='default')
 
 
