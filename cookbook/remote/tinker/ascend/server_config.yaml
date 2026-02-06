@@ -1,3 +1,4 @@
+server_type: tinker
 proxy_location: EveryNode
 http_options:
   host: 0.0.0.0
@@ -6,7 +7,7 @@ http_options:
 applications:
   - name: server
     route_prefix: /api/v1
-    import_path: main:build_server_app
+    import_path: server
     args:
       supported_models:
         - model_name: "Qwen/Qwen3-0.6B"
@@ -25,7 +26,7 @@ applications:
   - name: models-Qwen2.5-7B-Instruct
     # route_prefix 需要是 HTTP 路径前缀；不要用本地文件路径
     route_prefix: /api/v1/model/Qwen/Qwen3-0.6B
-    import_path: main:model_qwen25_7B
+    import_path: model
     args:
       model_id: "/home/zyh/model/Qwen3-0.6B"
       nproc_per_node: 2
@@ -51,7 +52,7 @@ applications:
 
   - name: sampler-Qwen3-0.6B
     route_prefix: /api/v1/sampler/Qwen/Qwen3-0.6B
-    import_path: main:build_sampler_app
+    import_path: sampler
     args:
       model_id: "/home/zyh/model/Qwen3-0.6B"
       nproc_per_node: 1

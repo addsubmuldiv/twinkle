@@ -1,3 +1,4 @@
+server_type: twinkle
 proxy_location: EveryNode
 http_options:
   host: 0.0.0.0
@@ -6,7 +7,7 @@ http_options:
 applications:
   - name: server
     route_prefix: /server
-    import_path: main:build_server_app
+    import_path: server
     args:
 
     deployments:
@@ -22,7 +23,7 @@ applications:
 
   - name: models-Qwen2.5-7B-Instruct
     route_prefix: /models/Qwen/Qwen2.5-7B-Instruct
-    import_path: main:model_qwen25_7B
+    import_path: model
     args:
       use_megatron: false
       model_id: "ms://Qwen/Qwen2.5-0.5B-Instruct"
@@ -49,7 +50,7 @@ applications:
 
   - name: processor
     route_prefix: /processors
-    import_path: main:processor_app
+    import_path: processor
     args:
       nproc_per_node: 2
       ncpu_proc_per_node: 2

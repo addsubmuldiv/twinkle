@@ -18,8 +18,8 @@ future = rest_client.list_training_runs(limit=50)
 response = future.result()
 # Support resume from twinkle path or model id
 # resume_path = "twinkle://20260131_170251-Qwen_Qwen2_5-0_5B-Instruct-7275126c/weights/pig-latin-lora-epoch-1"
-resume_path = "AlexEz/20260205_163645-Qwen_Qwen2_5-7B-Instruct-385d5c17_pig-latin-lora-epoch-1"
-# resume_path = ""
+# resume_path = "AlexEz/20260205_163645-Qwen_Qwen2_5-7B-Instruct-385d5c17_pig-latin-lora-epoch-1"
+resume_path = ""
 print(f"Found {len(response.training_runs)} training runs")
 for tr in response.training_runs:
     print(tr.model_dump_json(indent=2))
@@ -30,7 +30,7 @@ for tr in response.training_runs:
         # resume_path = chpt.tinker_path  # Just get the last one for demo purposes
     
 #%%
-base_model = "Qwen/Qwen2.5-7B-Instruct"
+base_model = "Qwen/Qwen2.5-0.5B-Instruct"
 if not resume_path:
     training_client = service_client.create_lora_training_client(
         base_model=base_model

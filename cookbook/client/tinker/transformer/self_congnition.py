@@ -8,7 +8,7 @@ from twinkle.preprocessor import SelfCognitionProcessor
 from twinkle.server.tinker.common import input_feature_to_datum
 from modelscope import AutoTokenizer
 
-base_model = "Qwen/Qwen2.5-7B-Instruct"
+base_model = "Qwen/Qwen2.5-0.5B-Instruct"
 
 def train():
     # process data
