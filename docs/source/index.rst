@@ -28,6 +28,8 @@ Twinkle DOCUMENTATION
    Components/损失/index.rst
    Components/LRScheduler/index.rst
    Components/补丁/index.rst
+   Components/组件化/index.rst
+   Components/训练中间件/index.rst
 
 Indices and tables
 ==================

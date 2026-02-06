@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from itertools import product
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Type, Union
-import torch.distributed as dist
 import numpy as np
 
 
