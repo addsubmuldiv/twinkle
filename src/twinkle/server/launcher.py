@@ -229,13 +229,10 @@ class ServerLauncher:
         if deployments:
             deploy_config = deployments[0]
             if isinstance(deploy_config, dict):
-                if 'autoscaling_config' in deploy_config:
-                    deploy_options['autoscaling_config'] = dict(
-                        deploy_config['autoscaling_config'])
-                if 'ray_actor_options' in deploy_config:
-                    deploy_options['ray_actor_options'] = dict(
-                        deploy_config['ray_actor_options'])
+                # Copy all deployment options from the config, except 'name'.
+                deploy_options = {k: v for k, v in deploy_config.items() if k != 'name'}
 
+        
         # Build and deploy the application
         app = builder(
             deploy_options=deploy_options,
