@@ -200,6 +200,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         self.sp_strategy = None
         self._model_wrapped = False
         self.optimizer_group: Dict[str, OptimizerGroup] = {_default_adapter_name: self._construct_default_optimizer_group()}
+        self.active_group = _default_adapter_name
 
     def _decide_strategy(self, strategy: Literal['accelerate', 'native_fsdp']):
         self._expert_parallel_config = self._fsdp_config.pop("expert_parallel", None)
@@ -243,11 +244,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         """Get the only group has optimizer, else return the default one"""
         if len(self.optimizer_group) == 1:
             return next(iter(self.optimizer_group))
-        names = [name for name, og in self.optimizer_group.items() if og.optimizer is not None]
-        if names:
-            assert len(names) == 1, 'Only one group is supported.'
-            return names[0]
-        return _default_adapter_name
+        return self.active_group
 
     @staticmethod
     def _not_encoded(inputs):
@@ -905,6 +902,7 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
         _gas_default = kwargs.get('gradient_accumulation_steps', 1)
         self.optimizer_group[adapter_name].gradient_accumulation_steps = _gas_default
         self._default_tokenizer = self.optimizer_group[adapter_name].template.processor
+        self.active_group = adapter_name
 
     @remote_function()
     def add_adapter_to_model(self, adapter_name: str, config_or_dir: Union[PeftConfig, str], **kwargs):
