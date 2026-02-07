@@ -136,7 +136,7 @@ class VLLMSampler(Sampler):
             self._create_engine_async(VLLMEngine, model_id, engine_kwargs)
         )
         
-        VLLMLoraWeights().patch(self)
+        VLLMLoraWeights()(self)
     
     def _run_event_loop(self):
         """Run the event loop in background thread."""
