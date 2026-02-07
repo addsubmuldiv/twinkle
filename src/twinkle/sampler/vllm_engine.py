@@ -371,7 +371,7 @@ class VLLMEngine(BaseSamplerEngine):
         
         if user_id is None:
             user_id = 'default'
-        
+
         # Check if already loaded for this user
         if user_id in self._user_lora_ids:
             lora_int_id = self._user_lora_ids[user_id]
