@@ -1,6 +1,10 @@
 #%%
+import dotenv
+dotenv.load_dotenv('.env')
+
+import os
 from twinkle_client import init_tinker_compat_client
-service_client = init_tinker_compat_client(base_url='http://localhost:8000')
+service_client = init_tinker_compat_client(base_url='http://localhost:8000', api_key=os.environ.get('MODELSCOPE_SDK_TOKEN'))
 
 print("Available models:")
 for item in service_client.get_server_capabilities().supported_models:
@@ -12,7 +16,9 @@ rest_client = service_client.create_rest_client()
 
 future = rest_client.list_training_runs(limit=50)
 response = future.result()
+# Support resume from twinkle path or model id
 # resume_path = "twinkle://20260131_170251-Qwen_Qwen2_5-0_5B-Instruct-7275126c/weights/pig-latin-lora-epoch-1"
+# resume_path = "AlexEz/20260205_163645-Qwen_Qwen2_5-7B-Instruct-385d5c17_pig-latin-lora-epoch-1"
 resume_path = ""
 print(f"Found {len(response.training_runs)} training runs")
 for tr in response.training_runs:
@@ -24,12 +30,13 @@ for tr in response.training_runs:
         # resume_path = chpt.tinker_path  # Just get the last one for demo purposes
     
 #%%
-base_model = "Qwen/Qwen2.5-7B-Instruct"
+base_model = "Qwen/Qwen2.5-0.5B-Instruct"
 if not resume_path:
     training_client = service_client.create_lora_training_client(
         base_model=base_model
     )
 else:
+    print("Resuming from " + resume_path)
     training_client = service_client.create_training_client_from_state_with_optimizer(path=resume_path)
 
 #%%
@@ -106,9 +113,12 @@ for epoch in range(2):
         weights = np.concatenate([example.loss_fn_inputs['weights'].tolist() for example in processed_examples])
         print(f"Loss per token: {-np.dot(logprobs, weights) / weights.sum():.4f}")
 
+    # Save the model and optimizer state
     save_future = training_client.save_state(f"pig-latin-lora-epoch-{epoch}")
     save_result = save_future.result()
     print(f"Saved checkpoint for epoch {epoch} to {save_result.path}")
 
-# sampling_client = training_client.save_weights_and_get_sampling_client(name='pig-latin-model')
- 
+# NOTE: Need to set your modelscope token as api_key when initializing the service client
+# model name is {run_id}_{checkpoint_name}
+# rest_client.publish_checkpoint_from_tinker_path(save_result.path).result()
+# print("Published checkpoint")
