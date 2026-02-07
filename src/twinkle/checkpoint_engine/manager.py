@@ -86,32 +86,19 @@ class CheckpointEngineManager:
         )
         self.model.init_checkpoint_process_group(**model_kwargs)
         self.sampler.init_checkpoint_process_group(**sampler_kwargs)
+
         peft_config = None
         if self.base_sync_done and adapter_name:
             if self._peft_config is None:
                 self._peft_config = self.model.get_peft_config_dict(adapter_name)
             peft_config = self._peft_config
 
-        # ── Step 4: Send / Receive (parallel) ────────────────────────────
-        logger.debug("Step 4/5: send & receive weights")
-        send_refs = [
-            a.send_weights_via_checkpoint_engine.remote(
-                adapter_name=adapter_name,
-                base_sync_done=self.base_sync_done,
-            )
-            for a in model_actors
-        ]
-        recv_refs = [
-            a.receive_weights_via_checkpoint_engine.remote(
-                base_sync_done=self.base_sync_done,
-                peft_config=peft_config,
-            )
-            for a in sampler_actors
-        ]
-        ray.get(send_refs + recv_refs)
-
-        self.model.send_weights()
-        self.sampler.receive_weights()
+        model_result = self.model.send_weights(adapter_name=adapter_name,
+                base_sync_done=self.base_sync_done)
+        sampler_result = self.sampler.receive_weights(base_sync_done=self.base_sync_done,
+                peft_config=peft_config)
+        model_result()
+        sampler_result()
 
         self.model.finalize_checkpoint_engine()
         self.sampler.finalize_checkpoint_engine()

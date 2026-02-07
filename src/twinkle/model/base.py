@@ -110,12 +110,6 @@ class TwinkleModel(ABC):
         ...
 
     @abstractmethod
-    def send_weights(self,
-                    adapter_name: str = '',
-                    base_sync_done: bool = False,):
-        ...
-
-    @abstractmethod
     def get_train_configs(self, **kwargs) -> str:
         ...
 

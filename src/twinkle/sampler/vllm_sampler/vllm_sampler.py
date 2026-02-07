@@ -26,8 +26,9 @@ import threading
 from dataclasses import asdict
 from typing import List, Dict, Any, Union, Optional, Literal
 
+from twinkle.checkpoint_engine import CheckpointEngineMixin
 from twinkle.sampler.base import Sampler
-from twinkle.data_format.types import SamplingParams, SampleResponse, SampledSequence
+from twinkle.data_format import SamplingParams, SampleResponse, SampledSequence
 from twinkle import remote_function, remote_class, DeviceMesh, requires
 from twinkle.utils.platform import Platform
 from twinkle.data_format import InputFeature, Trajectory
@@ -61,7 +62,7 @@ def _collect_sample_responses(results: List[SampleResponse]) -> SampleResponse:
 
 
 @remote_class()
-class VLLMSampler(Sampler):
+class VLLMSampler(Sampler, CheckpointEngineMixin):
     """A vLLM-based sampler using VLLMEngine (AsyncLLM).
     
     This sampler automatically configures vLLM based on available GPUs.
@@ -481,8 +482,8 @@ class VLLMSampler(Sampler):
     # finalize_checkpoint_engine are inherited from CheckpointEngineMixin.
     # Only receive_weights_via_checkpoint_engine is sampler-specific.
 
-    @remote_function(dispatch='all')
-    def receive_weights_via_checkpoint_engine(
+    @remote_function(dispatch='all', lazy_collect=True)
+    def receive_weights(
         self,
         base_sync_done: bool = False,
         peft_config: dict = None,

@@ -144,7 +144,7 @@ DEFAULT_LEARNING_RATE = 1e-5
 DEFAULT_WEIGHT_DECAY = 0.01
 
 @remote_class()
-class TransformersModel(TwinkleModel, PreTrainedModel):
+class TransformersModel(TwinkleModel, PreTrainedModel, CheckpointEngineMixin):
     """The transformers model wrapper.
 
     Args:
@@ -1069,12 +1069,13 @@ class TransformersModel(TwinkleModel, PreTrainedModel):
     # finalize_checkpoint_engine are inherited from CheckpointEngineMixin.
     # Only send_weights_via_checkpoint_engine is model-specific.
 
-    @remote_function(dispatch='all')
+    @remote_function(dispatch='all', lazy_collect=True)
     def send_weights(
         self,
         adapter_name: str = '',
         base_sync_done: bool = False,
     ):
+        engine = self._get_or_create_checkpoint_engine()
         # Get state dict from unwrapped model
         model = self.strategy.unwrap_model(self.model)
 

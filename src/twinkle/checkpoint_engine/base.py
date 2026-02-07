@@ -1,13 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 # Adapted from https://github.com/volcengine/verl/blob/main/verl/checkpoint_engine/base.py
-"""Base classes for checkpoint engine.
-
-CheckpointEngine is an abstraction layer to synchronize weights between
-trainer and rollout. It provides unified APIs:
-- send_weights: Get named tensors from generator and send them in streaming manner.
-- receive_weights: Return a tensor generator that yields named tensors in streaming manner.
-"""
-
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Generator, TypedDict
 
