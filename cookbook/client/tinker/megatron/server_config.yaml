@@ -1,0 +1,58 @@
+# Twinkle Server Configuration - Tinker-Compatible Megatron Backend
+
+# Server protocol type: "tinker" enables the Tinker-compatible API
+server_type: tinker
+
+# proxy_location: determines where the HTTP proxy runs.
+# "EveryNode" means each Ray node runs its own proxy (good for multi-node).
+proxy_location: EveryNode
+
+# HTTP listener settings
+http_options:
+  host: 0.0.0.0        # Listen on all network interfaces
+  port: 8000            # Port number for the server
+
+# Applications: each entry defines a service component deployed on the server
+applications:
+
+  # 1. TinkerCompatServer - The central API server
+  #    Handles client connections, training run tracking, checkpoint listing.
+  - name: server
+    route_prefix: /api/v1          # API endpoint prefix (Tinker-compatible)
+    import_path: server            # Python module to import
+    args:
+
+    deployments:
+      - name: TinkerCompatServer
+        autoscaling_config:
+          min_replicas: 1                # Minimum number of replicas
+          max_replicas: 1                # Maximum number of replicas
+          target_ongoing_requests: 128   # Target concurrent requests per replica
+        ray_actor_options:
+          num_cpus: 0.1                  # CPU resources allocated to this actor
+
+  # 2. Model Service - Hosts the base model for training (Megatron backend)
+  #    This is the actual model worker that performs forward/backward passes.
+  - name: models-Qwen2.5-0.5B-Instruct
+    route_prefix: /api/v1/model/Qwen/Qwen2.5-0.5B-Instruct   # REST path for this model
+    import_path: model
+    args:
+      use_megatron: true                               # Use Megatron-LM backend (not HuggingFace)
+      model_id: "ms://Qwen/Qwen2.5-0.5B-Instruct"     # ModelScope model identifier to load
+      nproc_per_node: 2               # Number of GPU processes per node
+      device_group:                   # Logical device group for this model
+        name: model
+        ranks: [0, 1]                 # GPU rank indices to use
+        device_type: cuda
+      device_mesh:                    # Distributed training mesh configuration
+        device_type: cuda
+        mesh: [0, 1]                  # Device indices in the mesh
+        mesh_dim_names: ['dp']        # Mesh dimension names: 'dp' = data parallel
+    deployments:
+      - name: ModelManagement
+        autoscaling_config:
+          min_replicas: 1
+          max_replicas: 1
+          target_ongoing_requests: 16
+        ray_actor_options:
+          num_cpus: 0.1
