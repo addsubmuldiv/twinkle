@@ -16,9 +16,8 @@ import os
 import re
 import time
 import numpy as np
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Tuple
 from dataclasses import dataclass, field
-from contextlib import contextmanager
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
@@ -26,16 +25,15 @@ from peft import LoraConfig
 import torch
 
 import twinkle
-from twinkle import DeviceMesh, DeviceGroup, Platform, get_device_placement, get_logger
-from twinkle import remote_class, remote_function
+from twinkle import DeviceMesh, DeviceGroup, get_device_placement, get_logger
 from twinkle.data_format import Trajectory, Message, InputFeature
 from twinkle.dataloader import DataLoader
 from twinkle.dataset import Dataset, DatasetMeta
 from twinkle.model import TransformersModel
 from twinkle.processor import InputProcessor
 from twinkle.sampler import VLLMSampler
-from twinkle.sampler.types import SamplingParams, SampleResponse
-from twinkle.rl import GRPOAdvantage
+from twinkle.data_format.types import SamplingParams, SampleResponse
+from twinkle.advantage import GRPOAdvantage
 from twinkle.checkpoint_engine import CheckpointEngineManager
 from twinkle.template import Template
 

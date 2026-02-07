@@ -18,7 +18,6 @@ against NCCL 2.25) and the runtime NCCL 2.27 loaded by PyTorch.
 """
 
 import asyncio
-import logging
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Generator, Union
@@ -27,6 +26,7 @@ import ray
 import torch
 import torch.distributed as dist
 import zmq
+from twinkle import get_logger
 
 from twinkle.utils.network import (
     find_free_port,
@@ -34,7 +34,7 @@ from twinkle.utils.network import (
 )
 from .base import CheckpointEngine, CheckpointEngineRegistry, TensorMeta
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 @dataclass

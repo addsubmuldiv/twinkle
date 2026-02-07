@@ -31,17 +31,16 @@ Usage:
     >>> manager.sync_weights()  # Call after each training step
 """
 
-import logging
 import time
 from typing import TYPE_CHECKING
-
+from twinkle import get_logger
 from .base import CheckpointEngineRegistry
 
 if TYPE_CHECKING:
     from twinkle.model.base import TwinkleModel
     from twinkle.sampler.vllm_sampler import VLLMSampler
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class CheckpointEngineManager:

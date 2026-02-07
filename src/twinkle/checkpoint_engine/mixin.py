@@ -10,15 +10,12 @@ Only activated when ``CheckpointEngineManager`` calls these methods via
 never created and has zero overhead.
 """
 
-import logging
-
 import torch
 
 from twinkle import remote_function
 
 from twinkle.checkpoint_engine.base import CheckpointEngine
 
-logger = logging.getLogger(__name__)
 
 
 class CheckpointEngineMixin:

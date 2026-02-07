@@ -8,13 +8,10 @@ trainer and rollout. It provides unified APIs:
 - receive_weights: Return a tensor generator that yields named tensors in streaming manner.
 """
 
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Generator, TypedDict
 
 import torch
-
-logger = logging.getLogger(__name__)
 
 
 class TensorMeta(TypedDict):

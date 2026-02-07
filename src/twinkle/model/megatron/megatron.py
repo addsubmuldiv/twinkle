@@ -1158,10 +1158,10 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
             base_sync_done: If True, only send LoRA adapter weights.
         """
         import asyncio
-        import logging
+        from twinkle import get_logger
         import threading
 
-        logger = logging.getLogger(__name__)
+        logger = get_logger()
         engine = self._get_or_create_checkpoint_engine()
 
         if base_sync_done and adapter_name:

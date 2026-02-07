@@ -10,7 +10,6 @@ across different processes/nodes. It supports:
 """
 
 import asyncio
-import logging
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Generator
@@ -25,8 +24,9 @@ from twinkle.utils.network import (
     stateless_init_process_group,
 )
 from .base import CheckpointEngine, CheckpointEngineRegistry, TensorMeta
+from twinkle import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 @dataclass

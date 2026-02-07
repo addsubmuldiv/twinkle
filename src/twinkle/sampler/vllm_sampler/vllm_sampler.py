@@ -21,23 +21,20 @@ Data Flow:
 """
 import asyncio
 import atexit
-import logging
 import os
 import threading
 from dataclasses import asdict
 from typing import List, Dict, Any, Union, Optional, Literal
 
-import torch
-
-from .base import Sampler
-from .types import SamplingParams, SampleResponse, SampledSequence
+from twinkle.sampler.base import Sampler
+from twinkle.data_format.types import SamplingParams, SampleResponse, SampledSequence
 from twinkle import remote_function, remote_class, DeviceMesh, requires
-from twinkle.checkpoint_engine.mixin import CheckpointEngineMixin
 from twinkle.utils.platform import Platform
 from twinkle.data_format import InputFeature, Trajectory
+from twinkle import get_logger
 from twinkle.patch.vllm_lora_weights import VLLMLoraWeights, TensorLoRARequest
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 def _collect_sample_responses(results: List[SampleResponse]) -> SampleResponse:
@@ -64,7 +61,7 @@ def _collect_sample_responses(results: List[SampleResponse]) -> SampleResponse:
 
 
 @remote_class()
-class VLLMSampler(Sampler, CheckpointEngineMixin):
+class VLLMSampler(Sampler):
     """A vLLM-based sampler using VLLMEngine (AsyncLLM).
     
     This sampler automatically configures vLLM based on available GPUs.
@@ -265,7 +262,7 @@ class VLLMSampler(Sampler, CheckpointEngineMixin):
         lora_request = None
         if not adapter_path and self._ckpt_lora_loaded:
             from vllm.lora.request import LoRARequest
-            from twinkle.sampler.vllm_worker_extension import (
+            from twinkle.sampler.vllm_sampler.vllm_worker_extension import (
                 VLLM_LORA_INT_ID, VLLM_LORA_NAME, VLLM_LORA_PATH,
             )
             lora_request = LoRARequest(
