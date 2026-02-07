@@ -32,7 +32,7 @@ logger = get_logger()
 def eval(model):
     # 100 Samples
     dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition', data_slice=range(100)))
-    dataset.set_template('Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
+    dataset.set_template('Template', model_id='ms://Qwen/Qwen3-30B-A3B-Instruct-2507')
     dataset.map(SelfCognitionProcessor('twinkle大模型', 'ModelScope社区'))
     dataset.encode()
     dataloader = DataLoader(dataset=dataset, batch_size=4)
@@ -47,16 +47,17 @@ def train():
     # 1000 samples
     dataset = Dataset(dataset_meta=DatasetMeta('ms://swift/self-cognition', data_slice=range(1000)))
     # Set template to prepare encoding
-    dataset.set_template('Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
+    dataset.set_template('Template', model_id='ms://Qwen/Qwen3-30B-A3B-Instruct-2507')
     # Preprocess the dataset to standard format
     dataset.map(SelfCognitionProcessor('twinkle大模型', 'ModelScope社区'))
     # Encode dataset
     dataset.encode()
     # Global batch size = 4, for GPUs, so 1 sample per GPU
     dataloader = DataLoader(dataset=dataset, batch_size=8)
-    # Use a TransformersModel
-    model = TransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
-
+    # Use a TransformersModel, transformer_cls_names_to_wrap=Qwen3MoeSparseMoeBlock to avoid hang of fsdp2
+    model = TransformersModel(model_id='ms://Qwen/Qwen3-30B-A3B-Instruct-2507', fsdp_config={'transformer_cls_names_to_wrap':["Qwen3MoeSparseMoeBlock"]})
+    # Patch MoE model to fix the hang bug, support transformers==4.*
+    model.apply_patch('ms://twinkle-kit/qwen3_moe_transformers4_patch')
     lora_config = LoraConfig(
         r=8,
         lora_alpha=32,
@@ -75,8 +76,7 @@ def train():
     logger.info(model.get_train_configs())
     logger.info(f'Total steps: {len(dataloader)}')
     loss_metric = 99.0
-    # lora: 18G * 4
-    # full: 50G * 4
+    # lora: 34G * 8
     for step, batch in enumerate(dataloader):
         # Do forward and backward
         model.forward_backward(inputs=batch)
