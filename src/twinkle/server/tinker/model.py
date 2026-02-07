@@ -24,9 +24,8 @@ from twinkle.server.utils.validation import verify_request_token
 from twinkle.server.utils.state import get_server_state, ServerStateProxy
 from twinkle.utils.logger import get_logger
 
-from .common import TwinkleCompatTransformersModel
-from .common.task_queue import TaskQueueMixin, TaskQueueConfig
-from .common.adapter_manager import AdapterManagerMixin
+from twinkle.server.utils.task_queue import TaskQueueMixin, TaskQueueConfig
+from twinkle.server.utils.adapter_manager import AdapterManagerMixin
 from .common.io_utils import create_training_run_manager, create_checkpoint_manager
 
 logger = get_logger()
@@ -113,6 +112,7 @@ def build_model_app(model_id: str,
                     **kwargs
                 )
             else:
+                from .common.transformers_model import TwinkleCompatTransformersModel
                 self.model = TwinkleCompatTransformersModel(
                     model_id=model_id,
                     device_mesh=self.device_mesh,

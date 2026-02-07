@@ -1,3 +1,4 @@
+server_type: tinker
 proxy_location: EveryNode
 http_options:
   host: 0.0.0.0
@@ -6,7 +7,7 @@ http_options:
 applications:
   - name: server
     route_prefix: /api/v1
-    import_path: main:build_server_app
+    import_path: server
     args:
 
     deployments:
@@ -22,7 +23,7 @@ applications:
 
   - name: models-Qwen2.5-0.5B-Instruct
     route_prefix: /api/v1/model/Qwen/Qwen2.5-0.5B-Instruct
-    import_path: main:build_model_app
+    import_path: model
     args:
       model_id: "ms://Qwen/Qwen2.5-0.5B-Instruct"
       nproc_per_node: 2
