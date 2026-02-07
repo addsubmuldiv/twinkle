@@ -8,7 +8,7 @@ from twinkle import DeviceMesh, Platform
 from twinkle import get_device_placement, get_logger
 from twinkle.dataloader import DataLoader
 from twinkle.dataset import Dataset, DatasetMeta
-from twinkle.model import TransformersModel
+from twinkle.model import MegatronModel
 from twinkle.preprocessor import SelfCognitionProcessor
 
 if Platform.get_rank() == 0:
@@ -21,8 +21,8 @@ if Platform.get_rank() == 0:
     )
 
 
-# Construct a device_mesh, fsdp=2, dp=2
-device_mesh = DeviceMesh.from_sizes(dp_size=2, fsdp_size=2)
+# Construct a device_mesh, tp=pp=cp=2, dp=1
+device_mesh = DeviceMesh.from_sizes(dp_size=1, tp_size=2, pp_size=2, cp_size=2)
 # use torchrun mode
 twinkle.initialize(mode='local', global_device_mesh=device_mesh)
 
@@ -35,7 +35,7 @@ def eval(model):
     dataset.set_template('Template', model_id='ms://Qwen/Qwen2.5-7B-Instruct')
     dataset.map(SelfCognitionProcessor('twinkle大模型', 'ModelScope社区'))
     dataset.encode()
-    dataloader = DataLoader(dataset=dataset, batch_size=4)
+    dataloader = DataLoader(dataset=dataset, batch_size=1)
     for step, batch in tqdm(enumerate(dataloader)):
         model.forward_only(inputs=batch)
         model.calculate_loss()
@@ -52,10 +52,10 @@ def train():
     dataset.map(SelfCognitionProcessor('twinkle大模型', 'ModelScope社区'))
     # Encode dataset
     dataset.encode()
-    # Global batch size = 4, for GPUs, so 1 sample per GPU
-    dataloader = DataLoader(dataset=dataset, batch_size=4)
-    # Use a TransformersModel
-    model = TransformersModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
+    # Global batch size = 1, dp_size = 1
+    dataloader = DataLoader(dataset=dataset, batch_size=1)
+    # Use a MegatronModel
+    model = MegatronModel(model_id='ms://Qwen/Qwen2.5-7B-Instruct')
 
     lora_config = LoraConfig(
         r=8,
@@ -64,11 +64,11 @@ def train():
     )
 
     # Add a lora to model, with name `default`
-    model.add_adapter_to_model('default', lora_config, gradient_accumulation_steps=4)
+    model.add_adapter_to_model('default', lora_config, gradient_accumulation_steps=16)
     # Add Optimizer for lora `default`
-    model.set_optimizer(optimizer_cls='AdamW', lr=1e-4)
+    model.set_optimizer(optimizer_cls='default', lr=1e-4)
     # Add LRScheduler for lora `default`
-    model.set_lr_scheduler(scheduler_cls='CosineWarmupScheduler', num_warmup_steps=5, num_training_steps=len(dataloader))
+    model.set_lr_scheduler(scheduler_cls='default', num_warmup_steps=5, num_training_steps=len(dataloader))
     logger.info(get_device_placement())
     # Print the training config
     logger.info(model.get_train_configs())

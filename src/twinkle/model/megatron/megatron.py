@@ -185,8 +185,8 @@ class MegatronModel(TwinkleModel, nn.Module):
         self._model_wrapped = False
         # This correctly handles vocab sharding in Tensor Parallelism
         self.optimizer_group: Dict[str, MegatronOptimizerGroup] = {_default_adapter_name: self._construct_default_optimizer_group()}
-        MegatronPeft().patch()
-
+        self.active_group = _default_adapter_name
+        MegatronPeft().__call__()
 
     def _construct_default_optimizer_group(self):
         return MegatronOptimizerGroup(
@@ -229,6 +229,12 @@ class MegatronModel(TwinkleModel, nn.Module):
         if not self._model_wrapped:
             self.model = self.strategy.wrap_model(self.model)
             self._model_wrapped = True
+
+    def _get_default_group(self):
+        """Get the only group has optimizer, else return the default one"""
+        if len(self.optimizer_group) == 1:
+            return next(iter(self.optimizer_group))
+        return self.active_group
 
     @staticmethod
     def _not_encoded(inputs):
@@ -299,7 +305,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         from megatron.core.pipeline_parallel import get_forward_backward_func
         from megatron.core import parallel_state as mpu
 
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         forward_only = kwargs.pop('forward_only', False)
         optimizer_config = self.optimizer_group[adapter_name]
         loss_instance = self.optimizer_group[adapter_name].loss_instance
@@ -465,7 +471,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         Args:
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
 
         if not optimizer_config.do_grad_sync(
@@ -503,7 +509,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         Args:
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
 
         # For DDP-wrapped models, ALWAYS zero the gradient buffer
@@ -528,7 +534,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         Args:
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
 
         if not optimizer_config.do_grad_sync(
@@ -557,7 +563,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             loss_cls: Loss class or string name (not used for Megatron).
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         optimizer_config.loss_instance = construct_class(loss_cls, Loss, twinkle.loss, **kwargs)
 
@@ -571,7 +577,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 adapter_name: Lora adapter name.
                 Any parameters needed to construct the metric_cls instance.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         kwargs['device_mesh'] = self.device_mesh
         kwargs['process_group'] = optimizer_config._dp_group
@@ -593,7 +599,7 @@ class MegatronModel(TwinkleModel, nn.Module):
                 - For standard optimizers: lr, weight_decay, etc.
                 - For MegatronDistributed: use_distributed_optimizer, clip_grad, etc.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if not self._model_wrapped:
             self.model = self.strategy.wrap_model(self.model)
@@ -611,7 +617,7 @@ class MegatronModel(TwinkleModel, nn.Module):
 
     @remote_function(collect='first', lazy_collect=False)
     def calculate_metric(self, is_training, **kwargs):
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         return optimizer_config.calculate_metrics(is_training)
 
@@ -715,7 +721,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             scheduler_cls: Scheduler class or string name.
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         optimizer = optimizer_config.optimizer
         if not scheduler_cls or scheduler_cls in ('OptimizerParamScheduler', 'default'):
@@ -738,7 +744,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             interval: Save each interval steps.
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         if optimizer_config.cur_step % interval != 0:
             return
@@ -772,7 +778,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             checkpoint_dir = HubOperation.download_model(name, token=token)
         else:
             checkpoint_dir = os.path.join(output_dir, name)
-        adapter_name = kwargs.get('adapter_name')
+        adapter_name = kwargs.get('adapter_name', self._get_default_group())
         bridge = self._bridge
         for _model in self.strategy.unwrap_model(self.model):
             bridge.load_weights(_model, checkpoint_dir, is_peft_format = (adapter_name != _default_adapter_name))
@@ -860,7 +866,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         Returns:
             State dict of trainable parameters.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         return self._get_trainable_parameters(adapter_name)
 
     def get_hf_state_dict(self, adapter_name: str = '') -> Generator[Tuple[str, torch.Tensor], None, None]:
@@ -988,7 +994,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             template_cls: Template class or string name.
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         optimizer_config.template = construct_class(template_cls, Template, twinkle.template, **kwargs)
 
@@ -1000,7 +1006,7 @@ class MegatronModel(TwinkleModel, nn.Module):
             processor_cls: Processor class or string name.
             **kwargs: Additional arguments.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
         kwargs['framework'] = 'megatron'
         optimizer_config.processor = construct_class(processor_cls, InputProcessor, twinkle.processor, **kwargs)
@@ -1015,7 +1021,7 @@ class MegatronModel(TwinkleModel, nn.Module):
         Returns:
             Configuration summary string.
         """
-        adapter_name = kwargs.pop('adapter_name', _default_adapter_name)
+        adapter_name = kwargs.pop('adapter_name', self._get_default_group())
         optimizer_config = self.optimizer_group[adapter_name]
 
         expr = f'Backend: Megatron-Core\n'
