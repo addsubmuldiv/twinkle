@@ -7,7 +7,6 @@ from typing import TypeVar
 
 import numpy as np
 
-import twinkle.dataloader
 from twinkle.utils import DeviceGroup, DeviceMesh, Platform
 from twinkle.utils import requires, framework_util, check_unsafe
 

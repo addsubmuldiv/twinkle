@@ -48,6 +48,7 @@ class DataLoader:
             assert batch_size >= device_mesh.data_world_size and batch_size % device_mesh.data_world_size == 0
         self.batch_size = batch_size
         self.dataloader_params = kwargs
+        self.dataloader_params['batch_size'] = batch_size
         self.device_mesh = device_mesh
         self.processor: Optional[InputProcessor] = None
         self._set_work_init_fn()
