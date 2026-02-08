@@ -45,9 +45,6 @@ def eval(model):
     dataset.encode()
     dataloader = DataLoader(dataset=dataset, batch_size=8, min_batch_size=8)
     for step, batch in tqdm(enumerate(dataloader)):
-        if len(batch) < 8:
-            # No device mesh in dataloader, manually skip the last batch
-            break
         model.forward_only(inputs=batch)
         model.calculate_loss()
     metrics = model.calculate_metric(is_training=False)
