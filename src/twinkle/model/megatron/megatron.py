@@ -1181,6 +1181,21 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
 
         is_peft_format = (adapter_name != _default_adapter_name)
 
+        # Megatron uses padded_vocab_size for TP alignment (rounded up to
+        # TP * 128).  vLLM creates its embedding / lm_head from the original
+        # HF vocab_size, so weight_loader asserts shape[0] == org_vocab_size.
+        # Trim any tensor whose dim-0 equals padded_vocab_size back to
+        # org_vocab_size — this is shape-based, not name-based, so it works
+        # regardless of the model architecture's naming convention.
+        args = get_args()
+        org_vocab_size = getattr(self.hf_config, 'vocab_size', args.padded_vocab_size)
+        _padded_vocab_size = args.padded_vocab_size
+
+        def _trim_vocab(name, tensor):
+            if _padded_vocab_size != org_vocab_size and tensor.shape[0] == _padded_vocab_size:
+                tensor = tensor[:org_vocab_size]
+            return name, tensor
+
         if base_sync_done and adapter_name:
             # ── LoRA-only mode ────────────────────────────────────────────
             # Export only LoRA adapter weights via the bridge.
@@ -1203,7 +1218,7 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
                     # Skip LoRA-specific weights for base model sync
                     if 'lora_A' in name or 'lora_B' in name or 'lora_embedding' in name:
                         continue
-                    yield name, tensor
+                    yield _trim_vocab(name, tensor)
 
             def weight_generator():
                 if is_peft_format:

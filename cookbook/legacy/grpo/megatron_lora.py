@@ -14,7 +14,7 @@ import numpy as np
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 from peft import LoraConfig
 import torch
@@ -40,9 +40,9 @@ logger = get_logger()
 
 # ========== Configuration ==========
 MODEL_ID = os.environ.get('MODEL_ID', 'ms://Qwen/Qwen2.5-3B-Instruct')
-NUM_GPUS = 4
-MODEL_GPUS = 2
+MODEL_GPUS = 4
 SAMPLER_GPUS = 2
+NUM_GPUS = MODEL_GPUS + SAMPLER_GPUS
 NUM_GENERATIONS = 4
 MAX_NEW_TOKENS = 1024
 LEARNING_RATE = 1e-5
@@ -223,7 +223,7 @@ def main():
     ]
     # MegatronModel: DP=2, TP=1, PP=1 for 2 GPUs
     model_mesh = DeviceMesh.from_sizes(
-        dp_size=MODEL_GPUS, tp_size=1, pp_size=1,
+        dp_size=MODEL_GPUS, tp_size=2, pp_size=2,
     )
     sampler_mesh = DeviceMesh.from_sizes(world_size=SAMPLER_GPUS, dp_size=SAMPLER_GPUS)
 

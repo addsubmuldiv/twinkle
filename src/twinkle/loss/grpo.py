@@ -414,7 +414,7 @@ class GRPOLoss(Loss):
         
         loss = self._aggregate_loss(per_token_loss, loss_mask, **kwargs)
         
-        return loss
+        return loss, loss_mask.sum()
 
     def compute_metrics(
         self,
