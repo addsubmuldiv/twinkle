@@ -193,12 +193,36 @@ twinkle的架构由client和server两部分构成，其中client端包含两个�
 
 ## 支持的组件
 
-|                                                            |                                                          |                                                              |                                                            |                                                                |
-| :--------------------------------------------------------: | :-------------------------------------------------------: | :----------------------------------------------------------: | :--------------------------------------------------------: | :-------------------------------------------------------------: |
-|  **Dataset**`<br><sub>`数据加载和预处理`</sub>`  |    **Template**`<br><sub>`编码和解码`</sub>`    | **DataLoader**`<br><sub>`数据分发和batch化`</sub>` |    **Preprocessor**`<br><sub>`数据ETL`</sub>`    | **InputProcessor**`<br><sub>`处理任务特定输入`</sub>` |
-| **Model**`<br><sub>`大模型，支持多种框架`</sub>` |      **Sampler**`<br><sub>`采样器`</sub>`      |          **Loss**`<br><sub>`残差`</sub>`          |    **Metric**`<br><sub>`训练指标集合`</sub>`    |         **Reward**`<br><sub>`奖励函数`</sub>`         |
-|     **Advantage**`<br><sub>`优势函数`</sub>`     | **CheckpointEngine**`<br><sub>`权重同步`</sub>` |   **Patch**`<br><sub>`补丁，用于模型修复`</sub>`   | **Module**`<br><sub>`组件，例如Optimizer`</sub>` |           **Kernel**`<br><sub>`算子`</sub>`           |
-|    **Server**`<br><sub>`开启后端集群`</sub>`    |     **Client**`<br><sub>`客户端代码`</sub>`     | **Infra**`<br><sub>`隔离ray和torchrun差异`</sub>` |    **Plugin**`<br><sub>`使用hub端组件`</sub>`    |       **Hub**`<br><sub>`对接HF/MS网络库`</sub>`       |
+<table>
+  <tr>
+    <td align="center"><b>Dataset</b><br><sub>数据加载和预处理</sub></td>
+    <td align="center"><b>Template</b><br><sub>编码和解码</sub></td>
+    <td align="center"><b>DataLoader</b><br><sub>数据分发和batch化</sub></td>
+    <td align="center"><b>Preprocessor</b><br><sub>数据ETL</sub></td>
+    <td align="center"><b>InputProcessor</b><br><sub>处理任务特定输入</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Model</b><br><sub>大模型，支持多种框架</sub></td>
+    <td align="center"><b>Sampler</b><br><sub>采样器</sub></td>
+    <td align="center"><b>Loss</b><br><sub>残差</sub></td>
+    <td align="center"><b>Metric</b><br><sub>训练指标集合</sub></td>
+    <td align="center"><b>Reward</b><br><sub>奖励函数</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Advantage</b><br><sub>优势函数</sub></td>
+    <td align="center"><b>CheckpointEngine</b><br><sub>权重同步</sub></td>
+    <td align="center"><b>Patch</b><br><sub>补丁，用于模型修复</sub></td>
+    <td align="center"><b>Module</b><br><sub>组件，例如Optimizer</sub></td>
+    <td align="center"><b>Kernel</b><br><sub>算子</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Server</b><br><sub>开启后端集群</sub></td>
+    <td align="center"><b>Client</b><br><sub>客户端代码</sub></td>
+    <td align="center"><b>Infra</b><br><sub>隔离ray和torchrun差异</sub></td>
+    <td align="center"><b>Plugin</b><br><sub>使用hub端组件</sub></td>
+    <td align="center"><b>Hub</b><br><sub>对接HF/MS网络库</sub></td>
+  </tr>
+</table>
 
 ## 社区组件
 
