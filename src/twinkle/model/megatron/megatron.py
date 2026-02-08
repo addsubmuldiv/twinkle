@@ -583,7 +583,7 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
 
         optimizer = optimizer_config.optimizer
         if optimizer is not None:
-            optimizer.zero_grad(**kwargs)
+            optimizer.zero_grad(set_to_none=True)
 
     @remote_function()
     def lr_step(self, **kwargs):
