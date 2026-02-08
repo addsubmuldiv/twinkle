@@ -58,7 +58,7 @@ pip install -e ".[transformers,ray]"
 
 ### 3. 安装 vLLM 和 vLLM-Ascend（可选）
 
-如果需要使用 VLLMSampler 进行高效推理，可以安装 vLLM 和 vLLM-Ascend。
+如果需要使用 vLLMSampler 进行高效推理，可以安装 vLLM 和 vLLM-Ascend。
 
 **安装步骤**：
 
@@ -152,7 +152,7 @@ python cookbook/grpo/lora_npu.py
 **示例特性**：
 - ✅ Actor-Critic 架构
 - ✅ 支持 Reference Model
-- ✅ 可选 TorchSampler 或 VLLMSampler
+- ✅ 可选 TorchSampler 或 vLLMSampler
 - ✅ 完整的 RL 训练流程
 
 ### 更多示例
@@ -235,7 +235,7 @@ pip install torch_npu-2.7.1-cp311-cp311-linux_aarch64.whl
 | FSDP 并行 | ✅ | ✅ | cookbook/sft/lora_npu.py | 已验证可用 |
 | Ray 分布式 | ✅ | ✅ | cookbook/sft/lora_npu.py | 已验证可用 |
 | TorchSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | 已验证可用 |
-| VLLMSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | 已验证可用 |
+| vLLMSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | 已验证可用 |
 | 全量微调 | ✅ | 🚧 | - | 理论支持，待验证 |
 | QLoRA | ✅ | ❌ | - | 量化算子暂不支持 |
 | DPO | ✅ | 🚧 | - | 理论支持，待验证 |
@@ -267,7 +267,7 @@ Twinkle 提供了以下经过验证的 NPU 训练示例：
 - **多卡 GRPO RL 训练**：[cookbook/grpo/lora_npu.py](https://github.com/modelscope/twinkle/blob/main/cookbook/grpo/lora_npu.py)
   - Actor-Critic 架构
   - 支持参考模型（Reference Model）
-  - 可选 TorchSampler 或 VLLMSampler
+  - 可选 TorchSampler 或 vLLMSampler
 
 ### 远程训练（Tinker 协议）
 - **服务端配置**：[cookbook/remote/tinker/ascend/](https://github.com/modelscope/twinkle/tree/main/cookbook/remote/tinker/ascend)

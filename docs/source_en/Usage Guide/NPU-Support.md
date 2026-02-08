@@ -58,7 +58,7 @@ pip install -e ".[transformers,ray]"
 
 ### 3. Install vLLM and vLLM-Ascend (Optional)
 
-If you need to use VLLMSampler for efficient inference, you can install vLLM and vLLM-Ascend.
+If you need to use vLLMSampler for efficient inference, you can install vLLM and vLLM-Ascend.
 
 **Installation Steps**:
 
@@ -152,7 +152,7 @@ python cookbook/grpo/lora_npu.py
 **Example Features**:
 - ✅ Actor-Critic architecture
 - ✅ Supports Reference Model
-- ✅ Optional TorchSampler or VLLMSampler
+- ✅ Optional TorchSampler or vLLMSampler
 - ✅ Complete RL training workflow
 
 ### More Examples
@@ -235,7 +235,7 @@ Feature support matrix based on actual code verification:
 | FSDP Parallelism | ✅ | ✅ | cookbook/sft/lora_npu.py | Verified available |
 | Ray Distributed | ✅ | ✅ | cookbook/sft/lora_npu.py | Verified available |
 | TorchSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | Verified available |
-| VLLMSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | Verified available |
+| vLLMSampler | ✅ | ✅ | cookbook/grpo/lora_npu.py | Verified available |
 | Full Fine-tuning | ✅ | 🚧 | - | Theoretically supported, to be verified |
 | QLoRA | ✅ | ❌ | - | Quantization operators not yet supported |
 | DPO | ✅ | 🚧 | - | Theoretically supported, to be verified |
@@ -267,7 +267,7 @@ Twinkle provides the following verified NPU training examples:
 - **Multi-card GRPO RL Training**: [cookbook/grpo/lora_npu.py](https://github.com/modelscope/twinkle/blob/main/cookbook/grpo/lora_npu.py)
   - Actor-Critic architecture
   - Supports Reference Model
-  - Optional TorchSampler or VLLMSampler
+  - Optional TorchSampler or vLLMSampler
 
 ### Remote Training (Tinker Protocol)
 - **Server Configuration**: [cookbook/remote/tinker/ascend/](https://github.com/modelscope/twinkle/tree/main/cookbook/remote/tinker/ascend)

@@ -12,7 +12,7 @@ from ray import serve
 import twinkle
 from twinkle import DeviceGroup, DeviceMesh
 from twinkle.data_format import Trajectory, InputFeature
-from twinkle.sampler import VLLMSampler
+from twinkle.sampler import vLLMSampler
 from twinkle.server.utils.validation import verify_request_token
 from twinkle.server.utils.state import get_server_state, ServerStateProxy
 from twinkle.data_format.sampling import SamplingParams, SampleResponse
@@ -42,7 +42,7 @@ def build_sampler_app(model_id: str,
         COUNT_DOWN = 60 * 30
 
         def __init__(self):
-            self.sampler = VLLMSampler(model_id=model_id,
+            self.sampler = vLLMSampler(model_id=model_id,
                                        device_mesh=device_mesh,
                                        remote_group=device_group.name,
                                        **kwargs)

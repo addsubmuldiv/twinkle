@@ -735,7 +735,7 @@ from twinkle.data_format import Trajectory, InputFeature
 import json
 
 
-class VLLMSampler(Sampler):
+class vLLMSampler(Sampler):
     """Client wrapper for Sampler that calls server HTTP endpoints.
     
     This client manages sampling operations and adapter synchronization with the sampler server.
@@ -850,7 +850,7 @@ class VLLMSampler(Sampler):
 
     # Create/overwrite __init__.py
     init_file = client_module_path / '__init__.py'
-    init_content = AUTO_GEN_WARNING + "from .vllm_sampler import VLLMSampler\n"
+    init_content = AUTO_GEN_WARNING + "from .vllm_sampler import vLLMSampler\n"
     print(f"Writing {init_file}...")
     with open(init_file, 'w', encoding='utf-8') as f:
         f.write(init_content)

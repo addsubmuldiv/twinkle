@@ -94,11 +94,11 @@ rewards = my_reward(generated, ground_truths)
 Typical workflow of reward functions in RLHF training:
 
 ```python
-from twinkle.sampler import VLLMSampler
+from twinkle.sampler import vLLMSampler
 from twinkle.reward import MathReward
 from twinkle.advantage import GRPOAdvantage
 
-sampler = VLLMSampler(model_id='Qwen/Qwen2.5-7B-Instruct')
+sampler = vLLMSampler(model_id='Qwen/Qwen2.5-7B-Instruct')
 reward_fn = MathReward()
 advantage_fn = GRPOAdvantage()
 
