@@ -39,11 +39,11 @@ from twinkle.metric import CompletionRewardMetric
 logger = get_logger()
 
 # ========== Configuration ==========
-MODEL_ID = os.environ.get('MODEL_ID', 'ms://Qwen/Qwen2.5-3B-Instruct')
+MODEL_ID = os.environ.get('MODEL_ID', 'ms://Qwen/Qwen3-30B-A3B-Instruct-2507')
 USE_MEGATRON = bool(int(os.environ.get('USE_MEGATRON', '1')))
 
 MODEL_GPUS = int(os.environ.get('MODEL_GPUS', 4))
-SAMPLER_GPUS = int(os.environ.get('SAMPLER_GPUS', 2))
+SAMPLER_GPUS = int(os.environ.get('SAMPLER_GPUS', 4))
 NUM_GPUS = MODEL_GPUS + SAMPLER_GPUS
 
 NUM_GENERATIONS = int(os.environ.get('NUM_GENERATIONS', 8))
@@ -242,14 +242,14 @@ def main():
     ]
     if USE_MEGATRON:
         model_mesh = DeviceMesh.from_sizes(
-            dp_size=MODEL_GPUS, tp_size=1, pp_size=1,
+            dp_size=1, tp_size=SAMPLER_GPUS, ep_size=SAMPLER_GPUS,
         )
     else:
         model_mesh = DeviceMesh.from_sizes(
             world_size=MODEL_GPUS, dp_size=MODEL_GPUS,
         )
     sampler_mesh = DeviceMesh.from_sizes(
-        world_size=SAMPLER_GPUS, dp_size=SAMPLER_GPUS,
+        world_size=SAMPLER_GPUS, dp_size=4
     )
     twinkle.initialize(
         mode='ray',
@@ -257,7 +257,6 @@ def main():
         groups=device_groups,
         lazy_collect=False,
     )
-    logger.info(get_device_placement())
 
     lora_config = LoraConfig(
         target_modules="all-linear",
@@ -316,8 +315,8 @@ def main():
         model_id=MODEL_ID,
         engine_args={
             'gpu_memory_utilization': 0.7,
-            'max_model_len': 4096,
-            'max_lora_rank': 64,
+            'max_model_len': 2048,
+            'max_lora_rank': 32,
             'enforce_eager': True,
             'enable_sleep_mode': False,
             'enable_lora': False,
@@ -351,6 +350,7 @@ def main():
 
     # ── Training loop ────────────────────────────────────────────────
     optim_step = 0
+    logger.info(get_device_placement())
 
     for batch in dataloader:
         if optim_step >= MAX_STEPS:
