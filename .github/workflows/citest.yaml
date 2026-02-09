@@ -73,13 +73,4 @@ jobs:
         shell: bash
         run: |
           set -e
-          mkdir -p ~/.cache
-          export MODELSCOPE_CACHE=~/.cache
-          export IMAGE_NAME=modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/modelscope
-          export IMAGE_VERSION=ci_image
-          export MODELSCOPE_HOME_CACHE=~/.cache
-          export CI_TEST=True
-          export MODELSCOPE_SDK_DEBUG=True
-          export CI_COMMAND='bash .dev_scripts/ci_container_test.sh pytest tests'
-          CODE_DIR=$PWD
           bash .dev_scripts/dockerci.sh
