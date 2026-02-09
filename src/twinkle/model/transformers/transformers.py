@@ -1081,10 +1081,12 @@ class TransformersModel(TwinkleModel, PreTrainedModel, CheckpointEngineMixin):
     @remote_function(dispatch='all', lazy_collect=True)
     def send_weights(
         self,
-        adapter_name: str = '',
+        adapter_name: str = None,
         base_sync_done: bool = False,
         merge_and_sync: bool = False,
     ):
+        if adapter_name is None:
+            adapter_name = self._get_default_group()
         engine = self._get_or_create_checkpoint_engine()
         # Get state dict from unwrapped model
         model = self.strategy.unwrap_model(self.model)

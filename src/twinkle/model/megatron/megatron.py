@@ -1165,10 +1165,12 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
     @remote_function(dispatch='all', lazy_collect=True)
     def send_weights(
         self,
-        adapter_name: str = '',
+        adapter_name: str = None,
         base_sync_done: bool = False,
         merge_and_sync: bool = False,
-    ):
+    ):  
+        if adapter_name is None:
+            adapter_name = self._get_default_group()
         engine = self._get_or_create_checkpoint_engine()
 
         is_peft_format = (adapter_name != _default_adapter_name)
@@ -1257,7 +1259,7 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
             raise result_container['error']
 
     @remote_function(collect='first')
-    def get_peft_config_dict(self, adapter_name: str = '') -> dict:
+    def get_peft_config_dict(self, adapter_name: str = None) -> dict:
         """Return the PEFT config as a dict for vLLM's PEFTHelper.
 
         Used by CheckpointEngineManager for LoRA-only weight sync.
@@ -1265,6 +1267,8 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
         Returns:
             PEFT config dict, or None if no LoRA adapter is present.
         """
+        if adapter_name is None:
+            adapter_name = self._get_default_group()
         optimizer_config = self.optimizer_group.get(adapter_name)
         if optimizer_config is None or optimizer_config.adapter_config is None:
             return None
