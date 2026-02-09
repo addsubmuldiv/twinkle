@@ -76,7 +76,7 @@ class CheckpointEngineManager:
         else:
             raise NotImplementedError
 
-    def sync_weights(self, adapter_name: str = ''):
+    def sync_weights(self, adapter_name: str = '', merge_and_sync=False):
         start_time = time.time()
         is_lora_only = self.base_sync_done and bool(adapter_name)
         model_metadata = self.model.prepare_checkpoint_engine([True] + [False]*(self.model.device_mesh.world_size -1))
@@ -99,7 +99,7 @@ class CheckpointEngineManager:
             peft_config = self._peft_config
 
         model_result = self.model.send_weights(adapter_name=adapter_name,
-                base_sync_done=self.base_sync_done)
+                base_sync_done=self.base_sync_done, merge_and_sync=merge_and_sync)
         sampler_result = self.sampler.receive_weights(base_sync_done=self.base_sync_done,
                 peft_config=peft_config)
         model_result()

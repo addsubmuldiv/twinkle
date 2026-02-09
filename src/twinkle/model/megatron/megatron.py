@@ -954,8 +954,8 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
             model,
             target_device=None,  # Keep on current device for IPC transfer
             only_last_rank=False,  # All ranks participate in weight sync
-            is_peft_format=False,
-            adapter_name=adapter_name if adapter_name else 'default',
+            is_peft_format=bool(adapter_name),
+            adapter_name=adapter_name if adapter_name else None,
             tqdm_desc='Weight sync: ',
         )
 
@@ -1167,6 +1167,7 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
         self,
         adapter_name: str = '',
         base_sync_done: bool = False,
+        merge_and_sync: bool = False,
     ):
         engine = self._get_or_create_checkpoint_engine()
 
@@ -1188,17 +1189,33 @@ class MegatronModel(TwinkleModel, nn.Module, CheckpointEngineMixin):
             return name, tensor
 
         if base_sync_done and adapter_name:
-            # ── LoRA-only mode ────────────────────────────────────────────
-            # Export only LoRA adapter weights via the bridge.
-            # The bridge may also yield non-LoRA weights (e.g. embed_tokens
-            # for modules_to_save), filter to only lora_A/lora_B tensors.
-            def weight_generator():
-                for name, tensor in self.get_hf_state_dict(adapter_name=adapter_name):
-                    if name is None or tensor is None:
-                        continue
-                    if 'lora' not in name:
-                        continue
-                    yield name, tensor
+            if merge_and_sync:
+                def weight_generator():
+                    for _model in self.strategy.unwrap_model(self.model):
+                        if isinstance(_model, PeftModel):
+                            _model.merge_adapter()
+                    for name, tensor in self.get_hf_state_dict(adapter_name=''):
+                        if name is None or tensor is None:
+                            continue
+                        # Skip LoRA-specific weights for base model sync
+                        if 'lora_A' in name or 'lora_B' in name or 'lora_embedding' in name:
+                            continue
+                        yield _trim_vocab(name, tensor)
+                    for _model in self.strategy.unwrap_model(self.model):
+                        if isinstance(_model, PeftModel):
+                            _model.unmerge_adapter()
+            else:
+                # ── LoRA-only mode ────────────────────────────────────────────
+                # Export only LoRA adapter weights via the bridge.
+                # The bridge may also yield non-LoRA weights (e.g. embed_tokens
+                # for modules_to_save), filter to only lora_A/lora_B tensors.
+                def weight_generator():
+                    for name, tensor in self.get_hf_state_dict(adapter_name=adapter_name):
+                        if name is None or tensor is None:
+                            continue
+                        if 'lora' not in name:
+                            continue
+                        yield name, tensor
 
         else:
             def _raw_weights():

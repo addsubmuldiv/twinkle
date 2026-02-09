@@ -1083,21 +1083,38 @@ class TransformersModel(TwinkleModel, PreTrainedModel, CheckpointEngineMixin):
         self,
         adapter_name: str = '',
         base_sync_done: bool = False,
+        merge_and_sync: bool = False,
     ):
         engine = self._get_or_create_checkpoint_engine()
         # Get state dict from unwrapped model
         model = self.strategy.unwrap_model(self.model)
 
         if base_sync_done and adapter_name:
-            # ── LoRA-only mode: send only adapter weights ────────────────
-            # Use PEFT's get_peft_model_state_dict for clean LoRA extraction
-            from peft.utils import get_peft_model_state_dict
-            lora_state_dict = get_peft_model_state_dict(model)
+            if merge_and_sync:
+                def weight_generator():
+                    if isinstance(model, PeftModel):
+                        model.merge_adapter()
+                    for name, tensor in model.state_dict().items():
+                        # Skip LoRA-specific weights for base model sync
+                        if 'lora_A' in name or 'lora_B' in name or 'lora_embedding' in name:
+                            continue
+                        tensor = Torch.to_local_tensor(tensor)
+                        # Keep original names (including .base_layer for PEFT models).
+                        # The sampler side will strip .base_layer based on whether
+                        # vLLM has enable_lora=True/False.
+                        yield name, tensor
+                    if isinstance(model, PeftModel):
+                        model.unmerge_adapter()
+            else:
+                # ── LoRA-only mode: send only adapter weights ────────────────
+                # Use PEFT's get_peft_model_state_dict for clean LoRA extraction
+                from peft.utils import get_peft_model_state_dict
+                lora_state_dict = get_peft_model_state_dict(model)
 
-            def weight_generator():
-                for name, tensor in lora_state_dict.items():
-                    tensor = Torch.to_local_tensor(tensor)
-                    yield name, tensor
+                def weight_generator():
+                    for name, tensor in lora_state_dict.items():
+                        tensor = Torch.to_local_tensor(tensor)
+                        yield name, tensor
 
         else:
             # ── Full model mode: send all weights (base model sync) ──────
