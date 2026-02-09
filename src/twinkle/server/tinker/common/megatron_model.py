@@ -1,12 +1,14 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import numpy as np
 import torch
+from typing import List, TYPE_CHECKING, Tuple, Optional, Any
 from tinker import types
-from typing import List, TYPE_CHECKING
+from twinkle.template import Template
 from twinkle import remote_class, remote_function
 from twinkle.utils import exists, requires
 from .datum import datum_to_input_feature
 from .io_utils import create_checkpoint_manager
+
 
 if TYPE_CHECKING:
     from twinkle.model.megatron import MultiLoraMegatronModel as _MegatronBase
@@ -80,8 +82,10 @@ class TwinkleCompatMegatronModel(_MegatronBase):
             Tuple of (outputs, loss) where outputs is a list of dicts with
             'logprobs' and 'elementwise_loss', and loss is a scalar.
         """
+        # Get template for input processing
+        template = self.get_template(**kwargs)
         # Convert Datum to InputFeature
-        input_features = [datum_to_input_feature(datum) for datum in inputs]
+        input_features = datum_to_input_feature(inputs, template)
         
         adapter_name = kwargs.get('adapter_name')
         # Megatron forward_backward returns loss directly
@@ -115,8 +119,10 @@ class TwinkleCompatMegatronModel(_MegatronBase):
     @remote_function(dispatch='slice_dp', collect='flatten')
     def forward_only(self, *, inputs: List[types.Datum], **kwargs):
         """Forward pass without gradient computation."""
+        # Get template for input processing
+        template = self.get_template(**kwargs)
         # Convert Datum to InputFeature
-        input_features = [datum_to_input_feature(datum) for datum in inputs]
+        input_features = datum_to_input_feature(inputs, template)
         
         outputs = super().forward_only(inputs=input_features, **kwargs)
         
@@ -191,6 +197,9 @@ class TwinkleCompatMegatronModel(_MegatronBase):
             # Load from hub
             return super().load(name=resolved.checkpoint_name, **kwargs)
 
+    def get_template(self, adapter_name: str) -> Template:
+        return self.optimizer_group[adapter_name].template
+    
     @staticmethod
     def _get_forward_output(inputs: List[types.Datum], logits: torch.Tensor) -> List[dict]:
         """Convert raw logits to the expected output format with logprobs and elementwise_loss."""
