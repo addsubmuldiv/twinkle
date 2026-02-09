@@ -94,7 +94,6 @@ class VLLMEngine(BaseSamplerEngine):
         
         # Tokenizer is lazy loaded via get_tokenizer()
         self._tokenizer = None
-        breakpoint()
     
     def _create_engine(self):
         """Create and return the vLLM engine."""
@@ -258,18 +257,20 @@ class VLLMEngine(BaseSamplerEngine):
         if lora_request is None and adapter_path and self.enable_lora:
             lora_request = await self._get_or_load_lora(adapter_path, adapter_user_id)
         
-        # Generate
-        if lora_request is None:
+        # Default: use the synced LoRA.
+        if lora_request is None and self.enable_lora:
             from vllm.lora.request import LoRARequest
             from twinkle.sampler.vllm_sampler.vllm_worker_extension import (
                 VLLM_LORA_INT_ID, VLLM_LORA_NAME, VLLM_LORA_PATH,
             )
-            lora_request = LoRARequest(
-                lora_name=VLLM_LORA_NAME,
-                lora_int_id=VLLM_LORA_INT_ID,
-                lora_path=VLLM_LORA_PATH,
-            )
-            
+            lora_loaded = VLLM_LORA_INT_ID in await self.engine.list_loras()
+            if lora_loaded:
+                lora_request = LoRARequest(
+                    lora_name=VLLM_LORA_NAME,
+                    lora_int_id=VLLM_LORA_INT_ID,
+                    lora_path=VLLM_LORA_PATH,
+                )
+
         generator = self.engine.generate(
             prompt=prompt,
             sampling_params=vllm_params,
