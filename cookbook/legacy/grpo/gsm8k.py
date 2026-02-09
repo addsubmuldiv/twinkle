@@ -62,7 +62,6 @@ DATA_NUM = int(os.environ.get('DATA_NUM', 7473))  # GSM8K train split has 7473 s
 # SwanLab experiment tracking
 USE_SWANLAB = bool(int(os.environ.get('USE_SWANLAB', '1')))
 if USE_SWANLAB:
-    os.environ['SWANLAB_API_KEY'] = '3hVJrk0veNB2NCm72UdJg'
     import swanlab
     swanlab.login(api_key=os.environ['SWANLAB_API_KEY'], save=True)
     swanlab.init(project="twinkle-gsm8k", config={
