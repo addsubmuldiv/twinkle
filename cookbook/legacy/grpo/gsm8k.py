@@ -237,7 +237,7 @@ def main():
             name='sampler',
             ranks=list(range(MODEL_GPUS, NUM_GPUS)),
             device_type='GPU',
-            gpus_per_worker=1,
+            gpus_per_worker=4,
         ),
     ]
     if USE_MEGATRON:
@@ -249,7 +249,7 @@ def main():
             world_size=MODEL_GPUS, dp_size=MODEL_GPUS,
         )
     sampler_mesh = DeviceMesh.from_sizes(
-        world_size=SAMPLER_GPUS, dp_size=4
+        world_size=SAMPLER_GPUS, tp_size=4
     )
     twinkle.initialize(
         mode='ray',
