@@ -6,7 +6,7 @@
     <br>
 <p>
 <p align="center">
-<a href="https://modelscope.cn/home">The Modelscope Community</a>
+by <a href="https://modelscope.cn/home">ModelScope</a>
 <br>
         English&nbsp ｜ &nbsp<a href="README_ZH.md">中文</a>&nbsp
 </p>

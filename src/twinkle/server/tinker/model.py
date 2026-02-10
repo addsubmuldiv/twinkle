@@ -100,7 +100,10 @@ def build_model_app(model_id: str,
                                nproc_per_node=nproc_per_node,
                                groups=[self.device_group],
                                lazy_collect=False)
-            self.device_mesh = DeviceMesh(**device_mesh)
+            if 'mesh_dim_names' in device_mesh:
+                self.device_mesh = DeviceMesh(**device_mesh)
+            else:
+                self.device_mesh = DeviceMesh.from_sizes(**device_mesh)
             self.use_megatron = use_megatron
             # Initialize model immediately - choose backend based on use_megatron
             if use_megatron:
@@ -172,6 +175,7 @@ def build_model_app(model_id: str,
                         self.register_adapter(
                             adapter_name, request.state.token)
 
+                        self.model.set_template('Template', adapter_name=adapter_name)
                         self.model.set_processor('InputProcessor',
                                                  adapter_name=adapter_name)
                         self.model.set_optimizer('Adam',
@@ -361,29 +365,19 @@ def build_model_app(model_id: str,
                     loss_fn_config = body.forward_backward_input.loss_fn_config or {}
 
                     if self.use_megatron:
-                        # Megatron uses combined forward_backward, no separate backward/calculate_loss
+                        # megatron do not need to set loss
                         output, loss = self.model.forward_backward(
                             inputs=datum_list,
                             adapter_name=adapter_name,
                             **loss_fn_config)
                     else:
-                        # Transformers uses separate forward, calculate_loss, backward
-                        # When use_megatron is True, we don't need to set the loss
-                        # Set loss first
-                        if loss_fn == 'cross_entropy':
-                            self.model.set_loss('CrossEntropyLoss',
-                                                adapter_name=adapter_name)
-                        else:
-                            raise ValueError(
-                                f'Unsupported loss function {loss_fn}')
-
-                        output = self.model.forward(inputs=datum_list,
-                                                    adapter_name=adapter_name)
-                        loss = self.model.calculate_loss(adapter_name=adapter_name,
-                                                         **loss_fn_config)
-                        self.model.backward(adapter_name=adapter_name)
+                        output, loss = self.model.forward_backward(inputs=datum_list,
+                                                                    adapter_name=adapter_name,
+                                                                    loss_fn=loss_fn,
+                                                                    **loss_fn_config)
+                    output_type = 'ImportanceSamplingLossReturn' if loss_fn == 'importance_sampling' else 'CrossEntropyLossReturn'
                     return types.ForwardBackwardOutput(
-                        loss_fn_output_type='CrossEntropyLossReturn',
+                        loss_fn_output_type=output_type,
                         loss_fn_outputs=output,
                         metrics={'loss:avg': loss},
                     )
@@ -563,7 +557,7 @@ def build_model_app(model_id: str,
                     sampling_session_id = self.state.create_sampling_session(payload)
 
                     return types.SaveWeightsForSamplerResponseInternal(
-                        path=tinker_path,
+                        path=None, # Disable path return for internal use
                         sampling_session_id=sampling_session_id
                     )
                 except Exception:
