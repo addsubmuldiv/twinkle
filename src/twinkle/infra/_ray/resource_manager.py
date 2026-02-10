@@ -177,7 +177,7 @@ class ResourceManager:
                         worker_ranks = normalized_ranks[start_idx:start_idx + gpus_per_worker]
 
                         # All GPUs for a worker should be on the same node
-                        node_ranks = [r // device_per_node for r in worker_ranks]
+                        node_ranks = [r // nproc_per_node for r in worker_ranks]
                         gpu_ranks_local = [r % device_per_node for r in worker_ranks]
 
                         if len(set(node_ranks)) > 1:
@@ -189,17 +189,15 @@ class ResourceManager:
                         node_rank = node_ranks[0]
                         local_device_groups.append(
                             dict(
-                                node_rank=node_rank,
                                 gpu_rank=gpu_ranks_local,
                                 placement_group=self.node2pg[node_rank],
                                 ray_address=ray_address))
                 else:
                     for alloc_rank in normalized_ranks:
-                        node_rank = alloc_rank // device_per_node
+                        node_rank = alloc_rank // nproc_per_node
                         gpu_rank = alloc_rank % device_per_node
                         local_device_groups.append(
                             dict(
-                                node_rank=node_rank,
                                 gpu_rank=[gpu_rank],
                                 placement_group=self.node2pg[node_rank],
                                 ray_address=ray_address))
