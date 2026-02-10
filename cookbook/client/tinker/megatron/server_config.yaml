@@ -48,6 +48,7 @@ applications:
         device_type: cuda
         dp_size: 2
         tp_size: 2
+        ep_size: 2
 
       queue_config:
         rps_limit: 100                             # Max requests per second
@@ -80,7 +81,7 @@ applications:
         enable_lora: true             # Allow loading LoRA adapters during inference
       device_group:                   # Logical device group for the sampler
         name: sampler
-        gpus_per_worker: 2
+        gpus_per_worker: 1
         ranks: [4,5,6,7]                    # GPU rank indices to use
         device_type: cuda
       device_mesh:
