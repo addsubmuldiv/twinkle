@@ -510,27 +510,37 @@ class vLLMSampler(Sampler, CheckpointEngineMixin):
         engine = self._get_or_create_checkpoint_engine()
 
         async def _receive_and_load():
-            # Collect weights with original names — name conversion is done
-            # in the vLLM worker subprocess (TwinkleWorkerExtension).
             weights = {}
+            total_count = 0
+            batch_size = 200
+
             async for name, tensor in engine.receive_weights():
                 weights[name] = tensor.clone()
 
-            if not weights:
+                if len(weights) >= batch_size:
+                    await self.engine.update_weights(
+                        weights,
+                        peft_config=peft_config,
+                        base_sync_done=base_sync_done,
+                    )
+                    total_count += len(weights)
+                    weights = {}
+
+            if weights:
+                await self.engine.update_weights(
+                    weights,
+                    peft_config=peft_config,
+                    base_sync_done=base_sync_done,
+                )
+                total_count += len(weights)
+
+            if total_count == 0:
                 return 0
 
-            await self.engine.update_weights(
-                weights,
-                peft_config=peft_config,
-                base_sync_done=base_sync_done,
-            )
-
-            # After LoRA sync, mark that the synced LoRA is loaded so
-            # sampling automatically uses it.
             if base_sync_done and peft_config:
                 self._ckpt_lora_loaded = True
 
-            return len(weights)
+            return total_count
 
         return self._run_in_loop(_receive_and_load())
 
