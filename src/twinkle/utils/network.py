@@ -43,6 +43,23 @@ def _ensure_hccl_socket_env(master_port: int, environ: Optional[dict] = None) ->
         env.setdefault(key, value)
 
 
+def should_enable_hccl_port_derive(environ: Optional[dict] = None) -> bool:
+    """Whether to enable HCCL port derivation for checkpoint process groups.
+
+    Priority:
+    1. Explicit env override via ``TWINKLE_ENABLE_HCCL_PORT_DERIVE``.
+    2. Auto-enable on NPU runtime by default.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get('TWINKLE_ENABLE_HCCL_PORT_DERIVE')
+    if raw is not None:
+        return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+    try:
+        return hasattr(torch, 'npu') and torch.npu.is_available()
+    except Exception:
+        return False
+
+
 def is_valid_ipv6_address(ip: str) -> bool:
     """Check if the given string is a valid IPv6 address."""
     try:
@@ -122,11 +139,9 @@ def stateless_init_process_group(
     from torch.distributed import TCPStore
     from vllm.distributed.utils import StatelessProcessGroup
     if backend == 'hccl':
-        # NOTE:
-        # Default-off: forcing global HCCL port envs may interfere with
-        # other HCCL communicators (e.g. vLLM TP comms) in the same process.
-        # Enable only when explicitly requested for collision debugging.
-        if os.environ.get('TWINKLE_ENABLE_HCCL_PORT_DERIVE', '0') == '1':
+        # Default: enable on NPU to avoid HCCL port collisions for checkpoint PG.
+        # Users can still override with TWINKLE_ENABLE_HCCL_PORT_DERIVE=0/1.
+        if should_enable_hccl_port_derive():
             _ensure_hccl_socket_env(master_port)
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as Communicator
     else:

@@ -142,10 +142,9 @@ class TwinkleModel(ABC):
             backend = Platform.device_backend()
             if backend == 'hccl':
                 # Keep behavior aligned with sampler-side HCCL init.
-                # Default-off: forcing port envs only on trainer side can cause
-                # trainer/sampler process-group mismatch and hangs.
-                if os.environ.get('TWINKLE_ENABLE_HCCL_PORT_DERIVE', '0') == '1':
-                    from twinkle.utils.network import _ensure_hccl_socket_env
+                # Default: auto-enable on NPU; still supports explicit env override.
+                from twinkle.utils.network import _ensure_hccl_socket_env, should_enable_hccl_port_derive
+                if should_enable_hccl_port_derive():
                     master_port = int(os.environ.get('MASTER_PORT', '29500'))
                     _ensure_hccl_socket_env(master_port)
             init_kwargs = {
