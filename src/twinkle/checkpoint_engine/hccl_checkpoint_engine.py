@@ -10,6 +10,7 @@ across different processes/nodes. It supports:
 """
 
 import asyncio
+import os
 import time
 import torch
 import zmq
@@ -134,6 +135,9 @@ class HCCLCheckpointEngine(CheckpointEngine):
         # Track whether resources are ready for reuse
         self._prepared = False
         self._group_initialized = False
+        self.slow_joiner_delay_s = float(
+            os.environ.get("TWINKLE_HCCL_ZMQ_SLOW_JOINER_DELAY_S", "0.2")
+        )
 
     # ── ZMQ helpers ──────────────────────────────────────────────────────
 
@@ -145,6 +149,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
 
         context = zmq.Context()
         self.socket = context.socket(zmq.PUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
         if is_valid_ipv6_address(self.ip):
             address = f'tcp://[{self.ip}]:{self.zmq_port}'
             self.socket.setsockopt(zmq.IPV6, 1)
@@ -158,6 +163,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
         """Connect to the ZMQ PUB server as a subscriber (receiver only)."""
         context = zmq.Context()
         self.socket = context.socket(zmq.SUB)
+        self.socket.setsockopt(zmq.LINGER, 0)
         if is_valid_ipv6_address(metadata.zmq_ip):
             address = f'tcp://[{metadata.zmq_ip}]:{metadata.zmq_port}'
             self.socket.setsockopt(zmq.IPV6, 1)
@@ -301,9 +307,13 @@ class HCCLCheckpointEngine(CheckpointEngine):
         if self.rank > 0 and self.socket is None:
             self._connect_zmq_client(master_metadata)
 
-        # Barrier using all_reduce
-        signal = torch.tensor([1], dtype=torch.int8, device=torch.npu.current_device())
-        self.pyhccl.all_reduce(signal)
+        # Barrier using all_reduce.
+        # Some Ascend runtimes can hang in init-time all_reduce even after
+        # communicator setup/heartbeat succeeded. Allow disabling this barrier
+        # for troubleshooting, default is disabled.
+        if os.environ.get("TWINKLE_HCCL_INIT_BARRIER", "0") == "1":
+            signal = torch.tensor([1], dtype=torch.int8, device=torch.npu.current_device())
+            self.pyhccl.all_reduce(signal)
 
         self._group_initialized = True
         logger.info(f'init_process_group: rank={self.rank}, world_size={self.world_size}')
@@ -365,6 +375,10 @@ class HCCLCheckpointEngine(CheckpointEngine):
         if broadcast_op is not None:
             await broadcast_op.wait_for_complete()
 
+        # Mitigate ZMQ PUB/SUB slow-joiner issue before publishing first metadata.
+        if self.slow_joiner_delay_s > 0:
+            await asyncio.sleep(self.slow_joiner_delay_s)
+
         broadcast_op = BroadcastOperation(
             rank=self.rank,
             process_group=self.pyhccl,
@@ -424,7 +438,10 @@ class HCCLCheckpointEngine(CheckpointEngine):
             total_bytes += self.bucket_size
             total_params += len(metadata['bucket_meta'])
 
-            torch.npu.synchronize()
+            # `wait_for_complete()` already waits for the broadcast thread.
+            # A full device synchronize here can hang on some Ascend stacks.
+            if os.environ.get("TWINKLE_HCCL_RECEIVE_SYNC", "0") == "1":
+                torch.npu.synchronize()
             send_buf, recv_buf = recv_buf, send_buf
 
         for name, meta in metadata['bucket_meta'].items():
