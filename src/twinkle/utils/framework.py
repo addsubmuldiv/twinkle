@@ -123,7 +123,7 @@ class Torch(Framework):
 
     @staticmethod
     @lru_cache
-    def get_device(local_rank) -> str:
+    def get_device(local_rank: Union[int, str] = None) -> str:
         if local_rank is None:
             local_rank = max(0, Platform.get_local_rank())
         local_rank = str(local_rank)

@@ -145,13 +145,13 @@ class TwinkleModel(ABC):
             torch_util.set_device()
             backend = Platform.device_backend()
             if backend == "hccl":
-                # fix: In multi-job NPU runs, HCCL default ports may collide (bind/listen failures).
-                # fix: Inject deterministic per-job port ranges before PG init to reduce cross-job conflicts.
-                # Keep training-side HCCL sockets on a per-job port layout to
-                # avoid collisions with other jobs on the same host.
-                from twinkle.utils.network import _ensure_hccl_socket_env
-                master_port = int(os.environ.get("MASTER_PORT", "29500"))
-                _ensure_hccl_socket_env(master_port)
+                # Keep behavior aligned with sampler-side HCCL init.
+                # Default-off: forcing port envs only on trainer side can cause
+                # trainer/sampler process-group mismatch and hangs.
+                if os.environ.get("TWINKLE_ENABLE_HCCL_PORT_DERIVE", "0") == "1":
+                    from twinkle.utils.network import _ensure_hccl_socket_env
+                    master_port = int(os.environ.get("MASTER_PORT", "29500"))
+                    _ensure_hccl_socket_env(master_port)
             init_kwargs = {
                 "backend": backend,
                 "init_method": "env://",

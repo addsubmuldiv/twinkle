@@ -161,15 +161,6 @@ class VLLMEngine(BaseSamplerEngine):
         logger.info(f"VLLMEngine initialized: model={self.model_id}")
         return engine
 
-    def shutdown(self):
-        """Shutdown the underlying vLLM AsyncLLM engine."""
-        if hasattr(self, 'engine') and self.engine is not None:
-            try:
-                self.engine.shutdown()
-                logger.info("VLLMEngine shutdown completed.")
-            except Exception as e:
-                logger.warning(f"VLLMEngine shutdown error: {e}")
-
     async def get_tokenizer(self):
         """Get the tokenizer asynchronously."""
         if self._tokenizer is None:
@@ -701,13 +692,18 @@ class VLLMEngine(BaseSamplerEngine):
         
         if self.engine is not None:
             try:
-                # vLLM v1 AsyncLLM has shutdown() method
+                # vLLM versions differ here: some expose async shutdown(),
+                # while others expose a sync method that returns None.
                 if hasattr(self.engine, 'shutdown'):
-                    await self.engine.shutdown()
+                    ret = self.engine.shutdown()
+                    if inspect.isawaitable(ret):
+                        await ret
                 elif hasattr(self.engine, 'engine_core'):
                     # For older versions, try to stop engine core
                     if hasattr(self.engine.engine_core, 'shutdown'):
-                        await self.engine.engine_core.shutdown()
+                        ret = self.engine.engine_core.shutdown()
+                        if inspect.isawaitable(ret):
+                            await ret
             except Exception as e:
                 logger.warning(f"Error during engine shutdown: {e}")
             finally:

@@ -125,8 +125,12 @@ def stateless_init_process_group(
     from vllm.distributed.utils import StatelessProcessGroup
     
     if backend == "hccl":
-        # fix: Stateless PG + HCCL path needs the same port policy, otherwise workers can still collide.
-        _ensure_hccl_socket_env(master_port)
+        # NOTE:
+        # Default-off: forcing global HCCL port envs may interfere with
+        # other HCCL communicators (e.g. vLLM TP comms) in the same process.
+        # Enable only when explicitly requested for collision debugging.
+        if os.environ.get("TWINKLE_ENABLE_HCCL_PORT_DERIVE", "0") == "1":
+            _ensure_hccl_socket_env(master_port)
         from vllm_ascend.distributed.device_communicators.pyhccl import (
             PyHcclCommunicator as Communicator,
         )

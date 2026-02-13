@@ -119,7 +119,6 @@ class TwinkleWorkerExtension:
         if self.device is None:
             # fix: In some worker paths, omitting local_rank can pick the wrong device / trigger get_device arg issues.
             # fix: Pass local_rank when available so each worker binds to the expected local device.
-            print(f"VLLM Worker local_rank: {getattr(self, 'local_rank', None)} <<<<<<<<<<<<< {Torch.get_device()}")
             self.device = torch.device(Torch.get_device(getattr(self, "local_rank", None)))
 
         if peft_config and base_sync_done:
