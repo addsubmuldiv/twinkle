@@ -3,6 +3,7 @@ import functools
 import inspect
 import numpy as np
 import os
+import warnings
 from typing import Any, Callable, List, Literal, Optional, TypeVar, Union
 
 from twinkle.utils import DeviceGroup, DeviceMesh, Platform, check_unsafe, framework_util, requires
@@ -25,6 +26,7 @@ _device_group: Optional[List[DeviceGroup]] = None
 _device_mesh = None
 
 _remote_components: dict = {}
+_slice_dp_padding_warnings: set[tuple[int, int]] = set()
 
 
 def initialize(mode: Literal['local', 'ray'] = 'local',
@@ -327,12 +329,41 @@ def _dispatch_args(workers, dispatch, execute, device_mesh: Optional[DeviceMesh]
         # Comment this because remote_class supports `first``
         # assert device_mesh.world_size == len(workers)
         length = len(workers)
+        dp_world_size = device_mesh.data_world_size if device_mesh is not None else length
 
         def dispatch_func(arg, n):
             if isinstance(arg, list):
+                # For DP/FSDP collectives, all ranks must participate in each step.
+                # When list length < data_world_size (or not divisible), some ranks
+                # can get empty slices and skip forward/backward, causing collective
+                # init timeout (e.g. HCCL ERR02200 in all_gather). Pad by repeating
+                # the last sample so every rank receives data.
+                if len(arg) > 0 and dp_world_size > 1:
+                    target_len = len(arg)
+                    if target_len < dp_world_size:
+                        target_len = dp_world_size
+                    if target_len % dp_world_size != 0:
+                        target_len = ((target_len + dp_world_size - 1) // dp_world_size) * dp_world_size
+                    if target_len != len(arg):
+                        padding = target_len - len(arg)
+                        arg = list(arg) + [arg[-1]] * padding
+                        warning_key = (len(arg), dp_world_size)
+                        if warning_key not in _slice_dp_padding_warnings:
+                            warnings.warn(
+                                f'slice_dp auto-padding list input to keep DP ranks in sync: '
+                                f'adjusted batch length to {len(arg)} for data_world_size={dp_world_size}.',
+                                RuntimeWarning,
+                                stacklevel=3,
+                            )
+                            _slice_dp_padding_warnings.add(warning_key)
                 _args = []
-                for i in range(n):
-                    _args.append(arg[device_mesh.get_slice(len(arg), device_mesh.get_data_rank_from_global_rank(i))])
+                if device_mesh is None:
+                    k, m = divmod(len(arg), n)
+                    for i in range(n):
+                        _args.append(arg[i * k + min(i, m):(i + 1) * k + min(i + 1, m)])
+                else:
+                    for i in range(n):
+                        _args.append(arg[device_mesh.get_slice(len(arg), device_mesh.get_data_rank_from_global_rank(i))])
                 return _args
             else:
                 return [arg] * n

@@ -84,6 +84,8 @@ class vLLMSampler(Sampler, CheckpointEngineMixin):
 
         self.model_id = model_id
         self.device_mesh = device_mesh
+        platform = Platform.get_platform()
+        is_npu = platform.device_prefix() == 'npu'
 
         # Create a dedicated background event loop for vLLM async operations.
         # This is necessary because:
@@ -99,6 +101,11 @@ class vLLMSampler(Sampler, CheckpointEngineMixin):
 
         from .vllm_engine import VLLMEngine
         engine_kwargs = engine_args.copy() if engine_args else {}
+
+        # Ascend stream resource can be exhausted during ACL graph capture
+        # when communication backend uses FFTS+. Prefer AIV by default on NPU.
+        if is_npu:
+            os.environ.setdefault('HCCL_OP_EXPANSION_MODE', 'AIV')
 
         # Auto-detect tensor_parallel_size from CUDA_VISIBLE_DEVICES
         if 'tensor_parallel_size' not in engine_kwargs:
@@ -121,12 +128,33 @@ class vLLMSampler(Sampler, CheckpointEngineMixin):
             engine_kwargs['seed'] = engine_seed
 
         # Create engine in the background event loop so all async operations
-        # (including vLLM's internal background tasks) run in the same loop
-        self.engine: VLLMEngine = self._run_in_loop(self._create_engine_async(VLLMEngine, model_id, engine_kwargs))
+        # (including vLLM's internal background tasks) run in the same loop.
+        # On NPU, ACL graph capture may fail due to stream/memory resource pressure.
+        # Retry once in eager mode to bypass capture and keep training alive.
+        try:
+            self.engine: VLLMEngine = self._run_in_loop(self._create_engine_async(VLLMEngine, model_id, engine_kwargs))
+        except Exception as e:
+            err_msg = str(e)
+            can_retry_eager = is_npu and not bool(engine_kwargs.get('enforce_eager', False))
+            capture_resource_error = (
+                'capture_begin' in err_msg
+                or 'Engine core initialization failed' in err_msg
+                or 'Insufficient_Resources' in err_msg
+                or 'resource alloc fail' in err_msg
+                or 'AclmdlRICaptureBegin' in err_msg
+            )
+            if can_retry_eager and capture_resource_error:
+                logger.warning('vLLM engine init failed during NPU graph capture, retrying with enforce_eager=True. '
+                               f'original_error={err_msg}')
+                retry_kwargs = engine_kwargs.copy()
+                retry_kwargs['enforce_eager'] = True
+                self.engine = self._run_in_loop(self._create_engine_async(VLLMEngine, model_id, retry_kwargs))
+            else:
+                raise
         # fix: On NPU, monkey_patch_model can trigger Triton compatibility errors and abort sampler init.
         # fix: Explicitly skip this patch on NPU and keep it for non-NPU paths only.
         # NPU platform may trigger triton errors with monkey_patch_model
-        if Platform.get_platform().device_prefix() != 'npu':
+        if not is_npu:
             self._run_in_loop(self.engine.engine.collective_rpc('monkey_patch_model'))
 
         VLLMLoraWeights()(self)

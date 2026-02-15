@@ -67,15 +67,40 @@ class ResourceManager:
             self.min_node_idx = 0
             self.nnodes = math.ceil(cpu_proc_count / ncpu_proc_per_node)
 
-        self.nodes = []
-        for node in ray.nodes():
-            # get available nodes
-            resource = node['Resources']
-            node_device_num = int(resource.get(device_type, 0))
-            if device_type != 'CPU' and node_device_num >= nproc_per_node:
-                self.nodes.append(node)
-            if device_type == 'CPU' and int(node['Resources']['CPU']) // 4 >= ncpu_proc_per_node:
-                self.nodes.append(node)
+        cluster_nodes = ray.nodes()
+        if device_type != 'CPU':
+            self.nodes = []
+            for node in cluster_nodes:
+                resource = node['Resources']
+                node_device_num = int(resource.get(device_type, 0))
+                if node_device_num >= nproc_per_node:
+                    self.nodes.append(node)
+
+            # Framework-level fallback:
+            # if user scripts hardcode GPU but runtime only exposes NPU (or vice versa),
+            # auto-correct to the detected platform resource key so initialization can proceed.
+            if not self.nodes:
+                detected_device_type = Platform.get_platform().__name__
+                if detected_device_type != device_type:
+                    detected_nodes = []
+                    for node in cluster_nodes:
+                        resource = node['Resources']
+                        node_device_num = int(resource.get(detected_device_type, 0))
+                        if node_device_num >= nproc_per_node:
+                            detected_nodes.append(node)
+                    if detected_nodes:
+                        logger.warning(f"Requested device type '{device_type}' has no available Ray nodes; "
+                                       f"falling back to detected platform '{detected_device_type}'.")
+                        device_type = detected_device_type
+                        self.nodes = detected_nodes
+                        for group in groups:
+                            if str(group.device_type).upper() != 'CPU':
+                                group.device_type = detected_device_type
+        else:
+            self.nodes = []
+            for node in cluster_nodes:
+                if int(node['Resources']['CPU']) // 4 >= ncpu_proc_per_node:
+                    self.nodes.append(node)
 
         assert self.nnodes <= len(
             self.nodes), f'Not enough resources, required nodes: {self.nnodes}, available: {len(self.nodes)}'
