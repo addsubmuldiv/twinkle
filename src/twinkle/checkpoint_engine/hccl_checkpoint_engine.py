@@ -29,12 +29,13 @@ class MasterMetadata:
     """Metadata from the master for process group initialization."""
     zmq_ip: str
     zmq_port: int
+    zmq_sync_port: int
     dist_ip: str
     dist_port: int
 
 
 class BroadcastOperation:
-    """Async broadcast operation with HCCL in separate thread.
+    """Async broadcast operation with HCCL or ZMQ fallback in separate thread.
 
     Args:
         rank: The rank of the current process.
@@ -43,6 +44,7 @@ class BroadcastOperation:
         metadata: The metadata of tensors in the bucket.
         socket: The ZMQ socket for metadata communication.
         topic: The ZMQ topic for pub/sub.
+        use_zmq_data: If True, use ZMQ for tensor data transfer instead of HCCL.
     """
 
     def __init__(
@@ -53,6 +55,7 @@ class BroadcastOperation:
         metadata: dict[str, TensorMeta],
         socket: zmq.Socket,
         topic: str,
+        use_zmq_data: bool = False,
     ) -> None:
         self.rank = rank
         self.pyhccl = process_group
@@ -60,9 +63,18 @@ class BroadcastOperation:
         self.metadata = metadata
         self.socket = socket
         self.topic = topic
+        self.use_zmq_data = use_zmq_data
 
         loop = asyncio.get_running_loop()
         self._task = loop.run_in_executor(None, self._run)
+
+    def _compute_data_end(self, metadata: dict) -> int:
+        """Compute the end offset of used data in the bucket from metadata."""
+        data_end = 0
+        for meta in metadata.get('bucket_meta', {}).values():
+            end = meta['offset'] + meta['dtype'].itemsize * meta['shape'].numel()
+            data_end = max(data_end, end)
+        return data_end
 
     def _run(self):
         """Execute the broadcast operation in a thread."""
@@ -71,11 +83,33 @@ class BroadcastOperation:
             self.socket.send_string(self.topic, flags=zmq.SNDMORE)
             self.socket.send_pyobj(self.metadata)
         else:
-            self.socket.recv_string()
-            self.metadata = self.socket.recv_pyobj()
+            try:
+                self.socket.recv_string()
+                self.metadata = self.socket.recv_pyobj()
+            except zmq.error.Again as e:
+                raise RuntimeError(
+                    'Timed out waiting for checkpoint metadata over ZMQ; '
+                    'possible rank desync or subscriber slow-join.'
+                ) from e
 
-        # Broadcast tensor data via HCCL
-        self.pyhccl.broadcast(self.bucket, src=0)
+        if self.use_zmq_data:
+            # ZMQ-based data transfer: avoids HCCL device-plane sockets that
+            # can fail on certain NPU chip topologies.
+            data_end = self._compute_data_end(self.metadata)
+            if data_end == 0:
+                return
+            if self.rank == 0:
+                cpu_data = self.bucket[:data_end].cpu().numpy().tobytes()
+                self.socket.send_string(self.topic, flags=zmq.SNDMORE)
+                self.socket.send(cpu_data, copy=False)
+            else:
+                self.socket.recv_string()
+                data = self.socket.recv()
+                cpu_tensor = torch.frombuffer(bytearray(data), dtype=torch.uint8)
+                self.bucket[:data_end].copy_(cpu_tensor.to(self.bucket.device))
+        else:
+            # Broadcast tensor data via HCCL
+            self.pyhccl.broadcast(self.bucket, src=0)
 
     async def wait_for_complete(self) -> dict[str, TensorMeta]:
         """Wait for the broadcast operation to complete.
@@ -131,13 +165,36 @@ class HCCLCheckpointEngine(CheckpointEngine):
         self.send_buf = None
         self.recv_buf = None
         self.socket = None
+        self.sync_socket = None
+        self._zmq_context = None
 
         # Track whether resources are ready for reuse
         self._prepared = False
         self._group_initialized = False
         self.slow_joiner_delay_s = float(
-            os.environ.get("TWINKLE_HCCL_ZMQ_SLOW_JOINER_DELAY_S", "0.2")
+            os.environ.get("TWINKLE_HCCL_ZMQ_SLOW_JOINER_DELAY_S", "0")
         )
+        self.zmq_recv_timeout_ms = int(
+            float(os.environ.get("TWINKLE_HCCL_ZMQ_RECV_TIMEOUT_S", "180")) * 1000
+        )
+        self.zmq_handshake_timeout_ms = int(
+            float(os.environ.get("TWINKLE_HCCL_ZMQ_HANDSHAKE_TIMEOUT_S", "60")) * 1000
+        )
+        # When HCCL device-plane sockets fail (e.g. cross-module NPU links),
+        # fall back to ZMQ host-side TCP for tensor data transfer.
+        #
+        # Default policy:
+        # - If TWINKLE_HCCL_USE_ZMQ_DATA is explicitly set, honor it.
+        # - Otherwise, auto-enable on NPU to avoid known HCCL Broadcast hangs
+        #   ("wait socket establish timeout" / "Alloc transports failed").
+        raw_use_zmq = os.environ.get("TWINKLE_HCCL_USE_ZMQ_DATA")
+        if raw_use_zmq is None:
+            try:
+                self.use_zmq_data = hasattr(torch, 'npu') and torch.npu.is_available()
+            except Exception:
+                self.use_zmq_data = False
+        else:
+            self.use_zmq_data = raw_use_zmq.lower() in {'1', 'true', 'yes'}
 
     # ── ZMQ helpers ──────────────────────────────────────────────────────
 
@@ -145,34 +202,85 @@ class HCCLCheckpointEngine(CheckpointEngine):
         """Start ZMQ PUB server for metadata broadcast (master only)."""
         self.ip = find_node_ip()
         self.zmq_port = find_free_port()
+        self.zmq_sync_port = find_free_port()
         self.dist_port = find_free_port()
 
-        context = zmq.Context()
-        self.socket = context.socket(zmq.PUB)
+        self._zmq_context = zmq.Context()
+        self.socket = self._zmq_context.socket(zmq.PUB)
         self.socket.setsockopt(zmq.LINGER, 0)
+        self.sync_socket = self._zmq_context.socket(zmq.REP)
+        self.sync_socket.setsockopt(zmq.LINGER, 0)
+        self.sync_socket.setsockopt(zmq.RCVTIMEO, self.zmq_handshake_timeout_ms)
         if is_valid_ipv6_address(self.ip):
             address = f'tcp://[{self.ip}]:{self.zmq_port}'
+            sync_address = f'tcp://[{self.ip}]:{self.zmq_sync_port}'
             self.socket.setsockopt(zmq.IPV6, 1)
+            self.sync_socket.setsockopt(zmq.IPV6, 1)
         else:
             address = f'tcp://{self.ip}:{self.zmq_port}'
+            sync_address = f'tcp://{self.ip}:{self.zmq_sync_port}'
 
         self.socket.bind(address)
-        logger.debug(f'ZMQ PUB server started at {address}')
+        self.sync_socket.bind(sync_address)
+        logger.debug(f'ZMQ PUB server started at {address}, sync REP at {sync_address}')
 
     def _connect_zmq_client(self, metadata: MasterMetadata):
         """Connect to the ZMQ PUB server as a subscriber (receiver only)."""
-        context = zmq.Context()
-        self.socket = context.socket(zmq.SUB)
+        self._zmq_context = zmq.Context()
+        self.socket = self._zmq_context.socket(zmq.SUB)
         self.socket.setsockopt(zmq.LINGER, 0)
+        self.socket.setsockopt(zmq.RCVTIMEO, self.zmq_recv_timeout_ms)
+        self.sync_socket = self._zmq_context.socket(zmq.REQ)
+        self.sync_socket.setsockopt(zmq.LINGER, 0)
+        self.sync_socket.setsockopt(zmq.SNDTIMEO, self.zmq_handshake_timeout_ms)
+        self.sync_socket.setsockopt(zmq.RCVTIMEO, self.zmq_handshake_timeout_ms)
         if is_valid_ipv6_address(metadata.zmq_ip):
             address = f'tcp://[{metadata.zmq_ip}]:{metadata.zmq_port}'
+            sync_address = f'tcp://[{metadata.zmq_ip}]:{metadata.zmq_sync_port}'
             self.socket.setsockopt(zmq.IPV6, 1)
+            self.sync_socket.setsockopt(zmq.IPV6, 1)
         else:
             address = f'tcp://{metadata.zmq_ip}:{metadata.zmq_port}'
+            sync_address = f'tcp://{metadata.zmq_ip}:{metadata.zmq_sync_port}'
 
         self.socket.connect(address)
         self.socket.setsockopt_string(zmq.SUBSCRIBE, self.topic)
-        logger.debug(f'ZMQ SUB client connected to {address}')
+        self.sync_socket.connect(sync_address)
+        logger.debug(f'ZMQ SUB client connected to {address}, sync REQ to {sync_address}')
+
+    def _sync_subscribers(self):
+        """Synchronize rank-0 publisher and subscriber readiness.
+
+        ZMQ PUB/SUB can drop the first message when subscribers are still
+        connecting (slow-joiner). We use a REQ/REP handshake to ensure all
+        subscribers are ready before rank-0 sends the first metadata frame.
+        """
+        if self.rank is None or self.rank < 0 or self.world_size is None or self.world_size <= 1:
+            return
+
+        if self.rank == 0:
+            expected = self.world_size - 1
+            ready_ranks: list[int] = []
+            for _ in range(expected):
+                try:
+                    msg = self.sync_socket.recv_pyobj()
+                except zmq.error.Again as e:
+                    raise RuntimeError(
+                        f'ZMQ subscriber handshake timeout on rank-0: '
+                        f'received {len(ready_ranks)}/{expected} ready messages.'
+                    ) from e
+                ready_rank = int(msg.get('rank', -1))
+                ready_ranks.append(ready_rank)
+                self.sync_socket.send_string('ok')
+            logger.debug(f'ZMQ subscriber handshake complete, ready_ranks={sorted(ready_ranks)}')
+        else:
+            try:
+                self.sync_socket.send_pyobj({'rank': self.rank})
+                self.sync_socket.recv_string()
+            except zmq.error.Again as e:
+                raise RuntimeError(
+                    f'ZMQ subscriber handshake timeout on rank {self.rank}.'
+                ) from e
 
     # ── Core lifecycle ───────────────────────────────────────────────────
 
@@ -189,6 +297,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
                 return MasterMetadata(
                     zmq_ip=self.ip,
                     zmq_port=self.zmq_port,
+                    zmq_sync_port=self.zmq_sync_port,
                     dist_ip=self.ip,
                     dist_port=self.dist_port,
                 )
@@ -203,6 +312,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
             return MasterMetadata(
                 zmq_ip=self.ip,
                 zmq_port=self.zmq_port,
+                zmq_sync_port=self.zmq_sync_port,
                 dist_ip=self.ip,
                 dist_port=self.dist_port,
             )
@@ -222,6 +332,18 @@ class HCCLCheckpointEngine(CheckpointEngine):
                 except Exception as e:
                     logger.warning(f'Error closing ZMQ socket: {e}')
                 self.socket = None
+            if self.sync_socket is not None:
+                try:
+                    self.sync_socket.close()
+                except Exception as e:
+                    logger.warning(f'Error closing ZMQ sync socket: {e}')
+                self.sync_socket = None
+            if self._zmq_context is not None:
+                try:
+                    self._zmq_context.term()
+                except Exception as e:
+                    logger.warning(f'Error terminating ZMQ context: {e}')
+                self._zmq_context = None
 
             if self.rank is not None and self.rank >= 0 and self.pyhccl is not None:
                 try:
@@ -289,14 +411,19 @@ class HCCLCheckpointEngine(CheckpointEngine):
             return
 
         if self.rebuild_group or self.pyhccl is None:
-            self.pyhccl = stateless_init_process_group(
-                master_address=master_metadata.dist_ip,
-                master_port=master_metadata.dist_port,
-                rank=rank,
-                world_size=world_size,
-                device=self.device,
-                backend='hccl',
-            )
+            if self.use_zmq_data:
+                # Skip HCCL communicator creation: hcclCommInitRank can hang
+                # on NPU topologies with broken device-plane sockets.
+                self.pyhccl = None
+            else:
+                self.pyhccl = stateless_init_process_group(
+                    master_address=master_metadata.dist_ip,
+                    master_port=master_metadata.dist_port,
+                    rank=rank,
+                    world_size=world_size,
+                    device=self.device,
+                    backend='hccl',
+                )
             self.rank = rank
             self.world_size = world_size
         else:
@@ -306,17 +433,22 @@ class HCCLCheckpointEngine(CheckpointEngine):
         # Receivers connect to master's ZMQ PUB server
         if self.rank > 0 and self.socket is None:
             self._connect_zmq_client(master_metadata)
+        # Ensure all subscribers are connected before first PUB metadata send.
+        self._sync_subscribers()
 
         # Barrier using all_reduce.
         # Some Ascend runtimes can hang in init-time all_reduce even after
         # communicator setup/heartbeat succeeded. Allow disabling this barrier
         # for troubleshooting, default is disabled.
-        if os.environ.get("TWINKLE_HCCL_INIT_BARRIER", "0") == "1":
+        if os.environ.get("TWINKLE_HCCL_INIT_BARRIER", "0") == "1" and self.pyhccl is not None:
             signal = torch.tensor([1], dtype=torch.int8, device=torch.npu.current_device())
             self.pyhccl.all_reduce(signal)
 
         self._group_initialized = True
-        logger.info(f'init_process_group: rank={self.rank}, world_size={self.world_size}')
+        logger.info(
+            f'init_process_group: rank={self.rank}, world_size={self.world_size}'
+            f'{", zmq_data=True" if self.use_zmq_data else ""}'
+        )
 
     # ── Send / Receive ───────────────────────────────────────────────────
 
@@ -332,6 +464,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
 
         send_buf, recv_buf = self.send_buf, self.recv_buf
         broadcast_op = None
+        first_publish = True
 
         start_time = time.time()
         bucket_meta: dict[str, TensorMeta] = {}
@@ -344,6 +477,9 @@ class HCCLCheckpointEngine(CheckpointEngine):
                 if broadcast_op is not None:
                     await broadcast_op.wait_for_complete()
 
+                if first_publish and self.slow_joiner_delay_s > 0:
+                    await asyncio.sleep(self.slow_joiner_delay_s)
+                    first_publish = False
                 broadcast_op = BroadcastOperation(
                     rank=self.rank,
                     process_group=self.pyhccl,
@@ -354,6 +490,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
                     },
                     socket=self.socket,
                     topic=self.topic,
+                    use_zmq_data=self.use_zmq_data,
                 )
 
                 send_buf, recv_buf = recv_buf, send_buf
@@ -375,9 +512,10 @@ class HCCLCheckpointEngine(CheckpointEngine):
         if broadcast_op is not None:
             await broadcast_op.wait_for_complete()
 
-        # Mitigate ZMQ PUB/SUB slow-joiner issue before publishing first metadata.
-        if self.slow_joiner_delay_s > 0:
+        # Optional extra delay for debugging unstable runtimes.
+        if first_publish and self.slow_joiner_delay_s > 0:
             await asyncio.sleep(self.slow_joiner_delay_s)
+            first_publish = False
 
         broadcast_op = BroadcastOperation(
             rank=self.rank,
@@ -389,6 +527,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
             },
             socket=self.socket,
             topic=self.topic,
+            use_zmq_data=self.use_zmq_data,
         )
         await broadcast_op.wait_for_complete()
 
@@ -411,6 +550,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
             metadata=None,
             socket=self.socket,
             topic=self.topic,
+            use_zmq_data=self.use_zmq_data,
         )
         metadata = await broadcast_op.wait_for_complete()
         total_bytes += self.bucket_size
@@ -426,6 +566,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
                 metadata=None,
                 socket=self.socket,
                 topic=self.topic,
+                use_zmq_data=self.use_zmq_data,
             )
 
             for name, meta in metadata['bucket_meta'].items():

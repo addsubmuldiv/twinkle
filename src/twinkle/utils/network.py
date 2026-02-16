@@ -1,6 +1,9 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
 import os
+import re
 import socket
+import subprocess
+import logging
 import torch
 from datetime import timedelta
 from typing import Optional
@@ -12,17 +15,51 @@ _HCCL_IF_BASE_PORT_ENV = 'HCCL_IF_BASE_PORT'
 _HCCL_HOST_SOCKET_PORT_RANGE_ENV = 'HCCL_HOST_SOCKET_PORT_RANGE'
 # NPU-side socket port pool used by HCCL for device communication channels.
 _HCCL_NPU_SOCKET_PORT_RANGE_ENV = 'HCCL_NPU_SOCKET_PORT_RANGE'
+_HCCL_IF_IP_ENV = 'HCCL_IF_IP'
+_HCCL_SOCKET_IFNAME_ENV = 'HCCL_SOCKET_IFNAME'
+_HCCL_SOCKET_FAMILY_ENV = 'HCCL_SOCKET_FAMILY'
+
+logger = logging.getLogger(__name__)
 
 
 def _derive_hccl_socket_env_defaults(master_port: int) -> dict:
     """Derive deterministic default HCCL socket env values from master_port."""
     # Keep values stable per job and spread jobs across non-overlapping ranges.
-    host_offset = master_port % 8000
-    return {
+    # A 512-port pool is too tight under multi-process NPU jobs (model + sampler
+    # + other communicators) and can lead to partial link-establish timeouts.
+    # Use a wider default pool while still keeping deterministic derivation.
+    host_offset = master_port % 7000
+    range_width = int(os.environ.get('TWINKLE_HCCL_PORT_RANGE_WIDTH', '4096'))
+    range_width = max(512, min(range_width, 8192))
+    host_start = 38000 + host_offset
+    host_end = host_start + range_width - 1
+
+    # Keep the ranges within valid TCP port bounds.
+    if host_end > 65000:
+        shift = host_end - 65000
+        host_start -= shift
+        host_end -= shift
+
+    defaults = {
         _HCCL_IF_BASE_PORT_ENV: str(20000 + ((master_port + 997) % 20000)),
-        _HCCL_HOST_SOCKET_PORT_RANGE_ENV: f'{40000 + host_offset}-{40000 + host_offset + 511}',
-        _HCCL_NPU_SOCKET_PORT_RANGE_ENV: f'{50000 + host_offset}-{50000 + host_offset + 511}',
+        _HCCL_HOST_SOCKET_PORT_RANGE_ENV: f'{host_start}-{host_end}',
     }
+
+    # Only derive HCCL_NPU_SOCKET_PORT_RANGE when explicitly requested.
+    # Forcing NPU-side socket ports can cause link-establish timeouts when
+    # certain chip-to-chip NPU network paths are unavailable (observed as
+    # "wait socket establish timeout" in HCCL plog). Leaving it unset lets
+    # HCCL use its own port selection and transport fallback logic.
+    if os.environ.get('TWINKLE_HCCL_SET_NPU_PORT_RANGE', '0').lower() in {'1', 'true', 'yes'}:
+        npu_start = 50000 + host_offset
+        npu_end = npu_start + range_width - 1
+        if npu_end > 65000:
+            shift = npu_end - 65000
+            npu_start -= shift
+            npu_end -= shift
+        defaults[_HCCL_NPU_SOCKET_PORT_RANGE_ENV] = f'{npu_start}-{npu_end}'
+
+    return defaults
 
 
 def _ensure_hccl_socket_env(master_port: int, environ: Optional[dict] = None) -> None:
@@ -36,11 +73,128 @@ def _ensure_hccl_socket_env(master_port: int, environ: Optional[dict] = None) ->
     same values while reducing cross-job conflicts. Explicit user settings are
     preserved and never overwritten.
     """
-    # fix: We hit `ra_hdc_socket_listen_start ... ret(-98)` due to HCCL port collisions.
-    # fix: Derive stable ranges from master_port and preserve explicit user overrides.
     env = os.environ if environ is None else environ
     for key, value in _derive_hccl_socket_env_defaults(master_port).items():
         env.setdefault(key, value)
+
+    # Increase HCCL link-establish timeout for large checkpoint groups.
+    # Default 120s can be insufficient when many ranks establish links
+    # concurrently, leading to partial timeouts and broadcast hangs.
+    env.setdefault('HCCL_CONNECT_TIMEOUT', os.environ.get(
+        'TWINKLE_HCCL_CONNECT_TIMEOUT', '600'
+    ))
+    env.setdefault('HCCL_EXEC_TIMEOUT', os.environ.get(
+        'TWINKLE_HCCL_EXEC_TIMEOUT', '1800'
+    ))
+
+
+def _get_default_route_ip_and_ifname() -> tuple[Optional[str], Optional[str]]:
+    """Get (src_ip, ifname) from the system default IPv4 route."""
+    try:
+        output = subprocess.check_output(
+            ['ip', '-o', '-4', 'route', 'show', 'to', 'default'],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=3,
+        )
+    except Exception:
+        return None, None
+
+    # Typical line:
+    # default via 195.27.0.1 dev enp196s0f0 proto static metric 100 src 195.27.1.3
+    for line in output.splitlines():
+        m_if = re.search(r'\bdev\s+(\S+)', line)
+        m_ip = re.search(r'\bsrc\s+((?:\d{1,3}\.){3}\d{1,3})', line)
+        if m_if and m_ip:
+            return m_ip.group(1), m_if.group(1)
+        if m_if:
+            # Some systems omit "src" in default route output.
+            # Resolve IPv4 from the default route interface.
+            ifname = m_if.group(1)
+            ip = _get_ipv4_by_ifname(ifname)
+            if ip:
+                return ip, ifname
+    return None, None
+
+
+def _get_ipv4_by_ifname(ifname: str) -> Optional[str]:
+    """Resolve first IPv4 address of a network interface by name."""
+    try:
+        output = subprocess.check_output(
+            ['ip', '-o', '-4', 'addr', 'show', 'dev', ifname],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=3,
+        )
+    except Exception:
+        return None
+
+    for line in output.splitlines():
+        m_ip = re.search(r'\binet\s+((?:\d{1,3}\.){3}\d{1,3})/\d+', line)
+        if m_ip:
+            return m_ip.group(1)
+    return None
+
+
+def _get_ifname_by_ip(ip: str) -> Optional[str]:
+    """Resolve interface name by local IPv4 address."""
+    try:
+        import psutil
+    except Exception:
+        return None
+
+    for name, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family == socket.AF_INET and addr.address == ip:
+                return name
+    return None
+
+
+def _is_local_ipv4(ip: str) -> bool:
+    if not ip or is_valid_ipv6_address(ip):
+        return False
+    return _get_ifname_by_ip(ip) is not None
+
+
+def _ensure_hccl_iface_env(master_address: str, environ: Optional[dict] = None) -> None:
+    """Set deterministic HCCL host networking env for link setup.
+
+    Why this is needed:
+    - HCCL chooses host NIC by priority:
+      HCCL_IF_IP > HCCL_SOCKET_IFNAME > auto-pick by interface name order.
+    - In mixed NIC environments, auto-pick can select virtual links and cause
+      `wait socket establish timeout` or `not found specific resource`.
+    """
+    env = os.environ if environ is None else environ
+
+    # 1) Prefer explicit HCCL_IF_IP (highest priority in HCCL).
+    hccl_if_ip = env.get(_HCCL_IF_IP_ENV)
+    if not hccl_if_ip:
+        if master_address and _is_local_ipv4(master_address):
+            hccl_if_ip = master_address
+        if not hccl_if_ip:
+            default_ip, _ = _get_default_route_ip_and_ifname()
+            if default_ip and not default_ip.startswith('127.'):
+                hccl_if_ip = default_ip
+        if hccl_if_ip:
+            env.setdefault(_HCCL_IF_IP_ENV, hccl_if_ip)
+
+    # 2) Set exact-match IFNAME based on selected IP when user did not specify.
+    if not env.get(_HCCL_SOCKET_IFNAME_ENV):
+        ifname = _get_ifname_by_ip(env.get(_HCCL_IF_IP_ENV, ''))
+        if ifname is None and master_address and not is_valid_ipv6_address(master_address):
+            ifname = _get_ifname_by_ip(master_address)
+        if ifname is None:
+            _, ifname = _get_default_route_ip_and_ifname()
+        if ifname:
+            # Exact-match mode, per CANN docs:
+            # HCCL_SOCKET_IFNAME==eth0
+            env.setdefault(_HCCL_SOCKET_IFNAME_ENV, f'=={ifname}')
+
+    # 3) Pin IPv4 family for IPv4 host links to avoid address-family mismatch.
+    selected_ip = env.get(_HCCL_IF_IP_ENV, '')
+    if selected_ip and not is_valid_ipv6_address(selected_ip):
+        env.setdefault(_HCCL_SOCKET_FAMILY_ENV, 'AF_INET')
 
 
 def should_enable_hccl_port_derive(environ: Optional[dict] = None) -> bool:
@@ -70,6 +224,20 @@ def is_valid_ipv6_address(ip: str) -> bool:
 
 
 def find_node_ip() -> Optional[str]:
+    # Explicit override for special routing setups.
+    if os.environ.get('TWINKLE_NODE_IP'):
+        return os.environ['TWINKLE_NODE_IP']
+
+    # Prefer default-route source IP to avoid selecting virtual links
+    # (e.g., NodeBabyLink) as the checkpoint master address.
+    prefer_default = os.environ.get('TWINKLE_PREFER_DEFAULT_ROUTE_IP', '1').lower() in {
+        '1', 'true', 'yes', 'on'
+    }
+    if prefer_default:
+        default_ip, _ = _get_default_route_ip_and_ifname()
+        if default_ip and not default_ip.startswith('127.'):
+            return default_ip
+
     import psutil
     main_ip, virtual_ip = None, None
     for name, addrs in sorted(psutil.net_if_addrs().items()):
@@ -143,6 +311,7 @@ def stateless_init_process_group(
         # Users can still override with TWINKLE_ENABLE_HCCL_PORT_DERIVE=0/1.
         if should_enable_hccl_port_derive():
             _ensure_hccl_socket_env(master_port)
+        _ensure_hccl_iface_env(master_address)
         from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as Communicator
     else:
         from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator as Communicator
@@ -183,6 +352,18 @@ def stateless_init_process_group(
         socket=listen_socket,
         data_expiration_seconds=3600,
     )
+
+    if backend == 'hccl':
+        logger.info(
+            f'HCCL checkpoint PG env (rank {rank}): '
+            f"{_HCCL_IF_BASE_PORT_ENV}={os.environ.get(_HCCL_IF_BASE_PORT_ENV)}, "
+            f"{_HCCL_HOST_SOCKET_PORT_RANGE_ENV}={os.environ.get(_HCCL_HOST_SOCKET_PORT_RANGE_ENV)}, "
+            f"{_HCCL_NPU_SOCKET_PORT_RANGE_ENV}={os.environ.get(_HCCL_NPU_SOCKET_PORT_RANGE_ENV, 'not set')}, "
+            f"{_HCCL_IF_IP_ENV}={os.environ.get(_HCCL_IF_IP_ENV)}, "
+            f"{_HCCL_SOCKET_FAMILY_ENV}={os.environ.get(_HCCL_SOCKET_FAMILY_ENV)}, "
+            f"{_HCCL_SOCKET_IFNAME_ENV}={os.environ.get(_HCCL_SOCKET_IFNAME_ENV)}, "
+            f"HCCL_CONNECT_TIMEOUT={os.environ.get('HCCL_CONNECT_TIMEOUT', 'not set')}"
+        )
 
     communicator = Communicator(pg, device=device)
     return communicator

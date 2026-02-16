@@ -3,9 +3,11 @@ import os
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union
 
 from twinkle import DeviceGroup, Platform, find_free_port, find_node_ip, requires
+from twinkle.utils import get_logger
 from .resource_manager import ResourceManager
 
 T = TypeVar('T')
+logger = get_logger()
 
 
 class RayHelper:
@@ -71,7 +73,21 @@ class RayHelper:
         import ray
         RayHelper.device_groups = device_groups
         if not RayHelper.ray_inited():
-            ray.init(ignore_reinit_error=True)
+            ray_init_kwargs = {'ignore_reinit_error': True}
+            # Ray defaults num_cpus to host CPU count, and raylet prestarts the
+            # same number of python workers. On high-core NPU nodes (e.g. 640 CPU),
+            # this can create hundreds of idle workers and destabilize raylet.
+            # Cap local num_cpus by default on NPU while allowing explicit override.
+            if 'TWINKLE_RAY_NUM_CPUS' in os.environ:
+                ray_init_kwargs['num_cpus'] = int(os.environ['TWINKLE_RAY_NUM_CPUS'])
+            elif Platform.get_platform().__name__ == 'NPU':
+                host_cpus = os.cpu_count() or nproc_per_node
+                cap = int(os.environ.get('TWINKLE_RAY_NPU_CPU_CAP', '64'))
+                floor = max(nproc_per_node * 4, 16)
+                ray_init_kwargs['num_cpus'] = max(floor, min(host_cpus, cap))
+            ray.init(**ray_init_kwargs)
+            if 'num_cpus' in ray_init_kwargs:
+                logger.info(f"ray.init num_cpus={ray_init_kwargs['num_cpus']}")
 
         if RayHelper.resource_manager is None:
             # Resource manager initializes only once in the pipeline process.
