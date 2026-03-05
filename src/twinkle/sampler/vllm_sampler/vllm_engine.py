@@ -567,9 +567,7 @@ class VLLMEngine(BaseSamplerEngine):
                 socket.send_pyobj(payload)
                 return socket.recv()
             except zmq.error.Again as e:
-                raise RuntimeError(
-                    f'IPC timeout ({zmq_timeout_s}s) during {where} on {zmq_handle}'
-                ) from e
+                raise RuntimeError(f'IPC timeout ({zmq_timeout_s}s) during {where} on {zmq_handle}') from e
 
         # Launch worker side concurrently
         worker_task = asyncio.ensure_future(
