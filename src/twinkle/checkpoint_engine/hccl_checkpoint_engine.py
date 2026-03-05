@@ -17,6 +17,7 @@ from typing import Any, AsyncGenerator, Generator
 
 from twinkle import get_logger
 from twinkle.utils import find_free_port, find_node_ip, is_valid_ipv6_address, stateless_init_process_group
+from twinkle.utils.zmq_utils import configure_zmq_socket
 from .base import CheckpointEngine
 
 logger = get_logger()
@@ -75,9 +76,7 @@ class HCCLCheckpointEngine(CheckpointEngine):
     def _new_socket(self, socket_type: int) -> zmq.Socket:
         assert self._zmq_ctx is not None
         socket = self._zmq_ctx.socket(socket_type)
-        socket.setsockopt(zmq.RCVTIMEO, self.meta_timeout_ms)
-        socket.setsockopt(zmq.SNDTIMEO, self.meta_timeout_ms)
-        socket.setsockopt(zmq.LINGER, 0)
+        configure_zmq_socket(socket, timeout_ms=self.meta_timeout_ms, linger=0)
         return socket
 
     def _recv_pyobj(self, where: str) -> Any:

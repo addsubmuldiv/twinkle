@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from twinkle import get_logger
 from twinkle.utils import Platform
 from twinkle.utils.framework import Torch
+from twinkle.utils.zmq_utils import configure_zmq_socket, get_timeout_s_from_env
 
 logger = get_logger()
 
@@ -115,7 +116,7 @@ class TwinkleWorkerExtension:
             peft_config: If provided with base_sync_done, loads as LoRA.
             base_sync_done: If True and peft_config, replaces existing LoRA.
             use_shm: If True, use shared memory instead of CUDA IPC.
-            zmq_handle: Optional ZMQ IPC endpoint for per-bucket handshake/control messages. If None, falls back to _get_zmq_handle().
+            zmq_handle: Optional ZMQ IPC endpoint. If None, uses _get_zmq_handle().
         """
         import torch.distributed as dist
         import zmq
@@ -159,15 +160,13 @@ class TwinkleWorkerExtension:
 
         # ── Step 1: Establish ZMQ connection (driver only) ──
         socket = None
-        zmq_timeout_s = int(os.environ.get('TWINKLE_VLLM_IPC_TIMEOUT_S', '300'))
+        zmq_timeout_s = get_timeout_s_from_env('TWINKLE_VLLM_IPC_TIMEOUT_S', 300)
         endpoint = zmq_handle or self._get_zmq_handle()
         if is_driver:
             if not hasattr(self, '_zmq_ctx') or self._zmq_ctx is None:
                 self._zmq_ctx = zmq.Context()
             socket = self._zmq_ctx.socket(zmq.REP)
-            socket.setsockopt(zmq.RCVTIMEO, zmq_timeout_s * 1000)
-            socket.setsockopt(zmq.SNDTIMEO, zmq_timeout_s * 1000)
-            socket.setsockopt(zmq.LINGER, 0)
+            configure_zmq_socket(socket, timeout_ms=zmq_timeout_s * 1000, linger=0)
             socket.connect(endpoint)
 
         # ── Step 2: Receive and broadcast IPC/SHM handle ──

@@ -10,6 +10,7 @@ from twinkle.data_format.sampling import SampledSequence, SampleResponse, Sampli
 from twinkle.sampler.base_engine import BaseSamplerEngine
 from twinkle.utils import Platform
 from twinkle.utils.framework import Torch
+from twinkle.utils.zmq_utils import configure_zmq_socket, get_timeout_s_from_env
 
 logger = get_logger()
 
@@ -546,10 +547,8 @@ class VLLMEngine(BaseSamplerEngine):
         # Setup ZMQ socket FIRST (bind before worker connects)
         zmq_ctx = zmq.Context()
         socket = zmq_ctx.socket(zmq.REQ)
-        zmq_timeout_s = int(os.environ.get('TWINKLE_VLLM_IPC_TIMEOUT_S', '300'))
-        socket.setsockopt(zmq.RCVTIMEO, zmq_timeout_s * 1000)
-        socket.setsockopt(zmq.SNDTIMEO, zmq_timeout_s * 1000)
-        socket.setsockopt(zmq.LINGER, 0)
+        zmq_timeout_s = get_timeout_s_from_env('TWINKLE_VLLM_IPC_TIMEOUT_S', 300)
+        configure_zmq_socket(socket, timeout_ms=zmq_timeout_s * 1000, linger=0)
         socket.bind(zmq_handle)
 
         loop = asyncio.get_running_loop()
